@@ -2,14 +2,14 @@ use crate::operands;
 use crate::Instruction;
 use crate::Node;
 use nom::branch::*;
+use nom::bytes::complete::take_while;
 use nom::combinator::*;
-use nom::multi::*;
 use nom::error::FromExternalError;
 use nom::error::ParseError;
 use nom::error::VerboseError;
+use nom::multi::*;
 use nom::sequence::*;
 use nom::{character::complete::*, *};
-use nom::bytes::complete::take_while;
 
 fn parse_sint<'a, E>(i: &'a str) -> IResult<&str, i32, E>
 where
@@ -49,11 +49,8 @@ where
     E: ParseError<&'a str>,
 {
     map(
-        preceded(
-            char(';'),
-            take_while(|x| x != '\r' && x != '\n'),
-        ),
-        |x: &str| Node::Comment(x.into())
+        preceded(char(';'), take_while(|x| x != '\r' && x != '\n')),
+        |x: &str| Node::Comment(x.into()),
     )(i)
 }
 
@@ -61,12 +58,10 @@ fn parse_label_operand<'a, E>(i: &'a str) -> IResult<&str, operands::Label, E>
 where
     E: ParseError<&'a str>,
 {
-    map(
-        delimited(space0, alpha1, space0),
-        |x: &str| operands::Label(x.into()),
-    )(i)
+    map(delimited(space0, alpha1, space0), |x: &str| {
+        operands::Label(x.into())
+    })(i)
 }
-
 
 fn parse_instruction<'a, E>(i: &'a str) -> IResult<&str, Node, E>
 where
@@ -92,11 +87,25 @@ fn parse_nodes<'a, E>(i: &'a str) -> IResult<&str, Vec<Node>, E>
 where
     E: ParseError<&'a str>,
 {
-    many0(delimited(multispace0, alt((parse_label, parse_comment, parse_instruction)), multispace0))(i)
+    terminated(
+        many0(delimited(
+            multispace0,
+            alt((parse_label, parse_comment, parse_instruction)),
+            multispace0,
+        )),
+        pair(multispace0, eof),
+    )(i)
 }
 
-pub fn parse(asm: &str) -> Vec<Node> {
-    parse_nodes::<VerboseError<&str>>(asm).unwrap().1
+pub fn parse(asm: &str) -> Result<Vec<Node>, String> {
+    let x = parse_nodes::<VerboseError<&str>>(asm)
+        .map(|(_, y)| y)
+        .map_err(|x| match x {
+            Err::Error(e) | Err::Failure(e) => error::convert_error(asm, e),
+            _ => panic!(),
+        });
+
+    x
 }
 
 /*
@@ -173,27 +182,35 @@ mod tests {
     fn test_instruction() {
         assert_eq!(
             parse_instruction::<(_, ErrorKind)>("Jmp Loop"),
-            Ok(("", Node::Instruction(Instruction::Jmp(operands::Label("Loop".into())))))
+            Ok((
+                "",
+                Node::Instruction(Instruction::Jmp(operands::Label("Loop".into())))
+            ))
         );
     }
 
     #[test]
     fn test_nodes() {
         assert_eq!(
-            parse_nodes::<(_, ErrorKind)>(r#"
+            parse_nodes::<(_, ErrorKind)>(
+                r#"
 Jmp Finish
 ; Nice comment, yes!
 Jmp Nice
 Finish:
 End
-            "#),
-            Ok(("", vec![
-                Node::Instruction(Instruction::Jmp(operands::Label("Finish".into()))),
-                Node::Comment(" Nice comment, yes!".into()),
-                Node::Instruction(Instruction::Jmp(operands::Label("Nice".into()))),
-                Node::Label("Finish".into()),
-                Node::Instruction(Instruction::End),
-            ]))
+            "#
+            ),
+            Ok((
+                "",
+                vec![
+                    Node::Instruction(Instruction::Jmp(operands::Label("Finish".into()))),
+                    Node::Comment(" Nice comment, yes!".into()),
+                    Node::Instruction(Instruction::Jmp(operands::Label("Nice".into()))),
+                    Node::Label("Finish".into()),
+                    Node::Instruction(Instruction::End),
+                ]
+            ))
         );
     }
 }

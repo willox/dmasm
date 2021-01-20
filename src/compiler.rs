@@ -1,5 +1,5 @@
-use crate::Node;
 use crate::Instruction;
+use crate::Node;
 use std::collections::HashMap;
 
 pub fn compile(nodes: &[Node]) -> Vec<u32> {
@@ -15,21 +15,17 @@ pub fn compile(nodes: &[Node]) -> Vec<u32> {
 
             Node::Comment(_) => (),
 
-            Node::Instruction(ins) => {
-
-                match ins {
-                    Instruction::End => {
-                        bytecode.push(0x00);
-                    }
-
-                    Instruction::Jmp(dst) => {
-                        bytecode.push(0x0F);
-                        jump_sources.push((bytecode.len(), &dst.0));
-                        bytecode.push(0x00);
-                    }
+            Node::Instruction(ins) => match ins {
+                Instruction::End => {
+                    bytecode.push(0x00);
                 }
 
-            }
+                Instruction::Jmp(dst) => {
+                    bytecode.push(0x0F);
+                    jump_sources.push((bytecode.len(), &dst.0));
+                    bytecode.push(0x00);
+                }
+            },
         }
     }
 
