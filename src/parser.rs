@@ -6,6 +6,7 @@ use nom::combinator::*;
 use nom::multi::*;
 use nom::error::FromExternalError;
 use nom::error::ParseError;
+use nom::error::VerboseError;
 use nom::sequence::*;
 use nom::{character::complete::*, *};
 use nom::bytes::complete::take_while;
@@ -92,6 +93,10 @@ where
     E: ParseError<&'a str>,
 {
     many0(delimited(multispace0, alt((parse_label, parse_comment, parse_instruction)), multispace0))(i)
+}
+
+pub fn parse(asm: &str) -> Vec<Node> {
+    parse_nodes::<VerboseError<&str>>(asm).unwrap().1
 }
 
 /*
