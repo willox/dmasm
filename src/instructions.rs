@@ -4,4 +4,5 @@ use crate::operands::*;
 pub enum Instruction {
     End,
     Jmp(Label),
+    Output,
 }

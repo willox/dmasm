@@ -20,6 +20,10 @@ pub fn compile(nodes: &[Node]) -> Vec<u32> {
                     bytecode.push(0x00);
                 }
 
+                Instruction::Output => {
+                    bytecode.push(0x03);
+                }
+
                 Instruction::Jmp(dst) => {
                     bytecode.push(0x0F);
                     jump_sources.push((bytecode.len(), &dst.0));

@@ -71,6 +71,7 @@ where
 
     let (i, instruction) = match name {
         "End" => (i, Instruction::End),
+        "Output" => (i, Instruction::Output),
 
         "Jmp" => {
             let (i, label) = parse_label_operand(i)?;

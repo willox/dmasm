@@ -23,6 +23,7 @@ START:
 
 Jmp START
 SKIP:
+Output
 End
     "#,
     ) {
