@@ -150,6 +150,7 @@ impl<'a, E: Environment> State<'a, E> {
         Ok(Proc(string))
     }
 
+    // TODO
     fn read_variable_fields(&mut self) -> Result<Variable, DisassembleError> {
         // This is either a string-ref or an AccessModifier
         let param = self.peek_u32()
@@ -186,7 +187,7 @@ impl<'a, E: Environment> State<'a, E> {
                     fields.push(self.read_dm_string()?);
                 }
 
-                // Initial is always last (i think,) so just grab the last string and ret
+                // The other modifiers rest are always last, I think! So they return.
                 access_modifiers::Initial => {
                     fields.push(self.read_dm_string()?);
                     return Ok(Variable::Initial(lhs, fields));
