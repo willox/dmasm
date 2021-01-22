@@ -1,5 +1,57 @@
+use crate::{assembler::{AssembleEnv, Assembler}, disassembler::{Disassembler, DisassembleEnv, DisassembleError}};
+
+pub trait Operand: Sized {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>);
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError>;
+}
+
+//
+// u32
+//
+impl Operand for u32 {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        asm.emit(*self);
+    }
+
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+        dism.read_u32()
+    }
+}
+
+//
+// i32
+//
+impl Operand for i32 {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        asm.emit(unsafe { std::mem::transmute(*self) });
+    }
+
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+        dism.read_i32()
+    }
+}
+
+//
+// Label
+//
 #[derive(PartialEq, Debug)]
 pub struct Label(pub String);
+
+impl Operand for Label {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        asm.emit_label_operand(&self.0)
+    }
+
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+        let offset = dism.read_u32()?;
+
+        // TODO: Move to output
+        dism.reserve_destination(offset);
+
+        // TODO: This label naming scheme is duplicated into output stage
+        Ok(Self(format!("LAB_{:0>4X}", offset)))
+    }
+}
 
 impl std::fmt::Display for Label {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -7,8 +59,29 @@ impl std::fmt::Display for Label {
     }
 }
 
+//
+// Proc
+//
 #[derive(PartialEq, Debug)]
 pub struct Proc(pub String);
+
+impl Operand for Proc {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        panic!("TODO");
+    }
+
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+        let id = dism.read_u32()?;
+        let string = dism.env
+            .get_proc_name(id)
+            .ok_or(DisassembleError::InvalidProc {
+                offset: dism.current_offset - 1,
+                id,
+            })?;
+
+        Ok(Proc(string))
+    }
+}
 
 impl std::fmt::Display for Proc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -16,9 +89,32 @@ impl std::fmt::Display for Proc {
     }
 }
 
+//
+// DMStrnig
+//
 // TODO: String Formatting
 #[derive(PartialEq, Debug)]
 pub struct DMString(pub String);
+
+impl Operand for DMString {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        let index = asm.env.get_string_index(&self.0);
+        asm.emit(index);
+    }
+
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+        let id = dism.read_u32()?;
+        let string = dism
+            .env
+            .get_string(id)
+            .ok_or(DisassembleError::InvalidString {
+                offset: dism.current_offset - 1,
+                id,
+            })?;
+
+        Ok(DMString(string))
+    }
+}
 
 impl std::fmt::Display for DMString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -26,6 +122,9 @@ impl std::fmt::Display for DMString {
     }
 }
 
+//
+// Variable
+//
 #[derive(PartialEq, Debug)]
 pub enum Variable {
 	Null,
@@ -47,6 +146,122 @@ pub enum Variable {
     Initial(Box<Variable>, Vec<DMString>),
     StaticProcField(Box<Variable>, Vec<DMString>, Proc),
     RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
+}
+
+impl Operand for Variable {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        panic!("TODO")
+    }
+
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+        use crate::access_modifiers;
+
+        pub fn read_variable_name<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<DMString, DisassembleError> {
+            let id = dism.read_u32()?;
+            let string = dism
+                .env
+                .get_variable_name(id)
+                .ok_or(DisassembleError::InvalidVariableName {
+                    offset: dism.current_offset - 1,
+                    id,
+                })?;
+
+            Ok(DMString(string))
+        }
+
+        // Inner function used for when we encounter a field accessor
+        fn read_variable_fields<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Variable, DisassembleError> {
+            // This is either a string-ref or an AccessModifier
+            let param = dism.peek_u32()
+                .ok_or(DisassembleError::UnexpectedEnd)?;
+            let lhs;
+            let mut fields = vec![];
+
+            if access_modifiers::is_access_modifier(param) {
+                lhs = Box::new(Variable::disassemble(dism)?);
+            } else {
+                lhs = Box::new(Variable::Cache);
+                fields.push(DMString::disassemble(dism)?);
+            }
+
+            loop {
+                let param = dism.read_u32()?;
+
+                // The last value is a string
+                if !access_modifiers::is_access_modifier(param) {
+                    fields.push(DMString::disassemble(dism)?);
+                    return Ok(Variable::Field(lhs, fields));
+                }
+
+                match param {
+                    access_modifiers::Field => {
+                        // HACK: We need to rethink this whole fn
+                        let param = dism.peek_u32();
+                        if param == Some(access_modifiers::Global) {
+                            dism.read_u32()?;
+                            fields.push(read_variable_name(dism)?);
+                            continue;
+                        }
+
+                        fields.push(DMString::disassemble(dism)?);
+                    }
+
+                    // The other modifiers rest are always last, I think! So they return.
+                    access_modifiers::Initial => {
+                        fields.push(DMString::disassemble(dism)?);
+                        return Ok(Variable::Initial(lhs, fields));
+                    }
+
+                    access_modifiers::Proc | access_modifiers::Proc2 => {
+                        let proc = Proc::disassemble(dism)?;
+                        return Ok(Variable::StaticProcField(lhs, fields, proc))
+                    }
+
+                    access_modifiers::SrcProc | access_modifiers::SrcProc2 => {
+                        let proc = DMString::disassemble(dism)?;
+                        return Ok(Variable::RuntimeProcField(lhs, fields, proc))
+                    }
+
+                    other => return Err(DisassembleError::UnknownFieldAccessModifier {
+                        offset: dism.current_offset - 1,
+                        value: other,
+                    })
+                }
+            }
+        }
+
+        // This is either a string-ref or an AccessModifier
+        let param = dism.read_u32()?;
+
+        if !access_modifiers::is_access_modifier(param) {
+            let cache = Box::new(Variable::Cache);
+            let field = DMString::disassemble(dism)?;
+            return Ok(Variable::Field(cache, vec![field]));
+        }
+
+        let var = match param {
+            access_modifiers::Null => Variable::Null,
+            access_modifiers::World => Variable::World,
+            access_modifiers::Usr => Variable::Usr,
+            access_modifiers::Src => Variable::Src,
+            access_modifiers::Args => Variable::Args,
+            access_modifiers::Dot => Variable::Dot,
+            access_modifiers::Cache => Variable::Cache,
+            access_modifiers::Cache2 => Variable::Cache2,
+            access_modifiers::Cache3 => Variable::Cache3,
+            access_modifiers::Arg => Variable::Arg(dism.read_u32()?),
+            access_modifiers::Local => Variable::Local(dism.read_u32()?),
+            access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
+            access_modifiers::Field => read_variable_fields(dism)?,
+
+            other => return Err(DisassembleError::UnknownAccessModifier {
+                offset: dism.current_offset - 1,
+                value: other,
+            })
+        };
+
+        Ok(var)
+    }
 }
 
 impl std::fmt::Display for Variable {

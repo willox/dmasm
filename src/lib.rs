@@ -91,13 +91,13 @@ pub fn format<D>(nodes: &[Node<D>]) -> String {
 struct TestAssembleEnv;
 struct TestDisassembleEnv;
 
-impl assembler::Environment for TestAssembleEnv {
+impl assembler::AssembleEnv for TestAssembleEnv {
     fn get_string_index(&mut self, _string: &str) -> u32 {
         1337
     }
 }
 
-impl disassembler::Environment for TestDisassembleEnv {
+impl disassembler::DisassembleEnv for TestDisassembleEnv {
     fn get_string(&mut self, index: u32) -> Option<String> {
         Some(format!("(Test String for {})", index))
     }

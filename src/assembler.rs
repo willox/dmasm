@@ -1,77 +1,58 @@
-use crate::opcodes;
-use crate::Instruction;
 use crate::Node;
 use std::collections::HashMap;
 
-pub trait Environment {
+pub trait AssembleEnv {
     /// Converts a rust string into the correct string identifier for the destination context
     fn get_string_index(&mut self, string: &str) -> u32;
 }
 
-pub fn assemble<E: Environment>(nodes: &[Node], env: &mut E) -> Vec<u32> {
-    let mut bytecode = vec![];
-    let mut jump_destinations = HashMap::new();
-    let mut jump_sources = vec![];
+pub struct Assembler<'a, E: AssembleEnv> {
+    nodes: &'a [Node],
+    bytecode: Vec<u32>,
+    jump_destinations: HashMap<String, u32>,
+    jump_sources: Vec<(usize, String)>,
+    pub env: &'a mut E,
+}
+
+impl<'a, E: AssembleEnv> Assembler<'a, E> {
+    fn new(nodes: &'a [Node], env: &'a mut E) -> Self {
+        Assembler {
+            nodes,
+            bytecode: vec![],
+            jump_destinations: HashMap::new(),
+            jump_sources: vec![],
+            env
+        }
+    }
+
+    pub fn emit(&mut self, code: u32) {
+        self.bytecode.push(code);
+    }
+
+    pub fn emit_label_operand(&mut self, name: &String) {
+        self.jump_sources.push((self.bytecode.len(), name.clone()));
+        self.emit(0xC0C0C0C0);
+    }
+}
+
+pub fn assemble<E: AssembleEnv>(nodes: &[Node], env: &mut E) -> Vec<u32> {
+    let mut state = Assembler::new(nodes, env);
 
     for node in nodes {
         match node {
             Node::Label(identifier) => {
-                jump_destinations.insert(identifier, bytecode.len() as u32);
+                state.jump_destinations.insert(identifier.clone(), state.bytecode.len() as u32);
             }
 
             Node::Comment(_) => (),
 
-            Node::Instruction(ins, _) => match ins {
-                Instruction::End => {
-                    bytecode.push(opcodes::End);
-                }
-
-                Instruction::Format(string, arg_count) => {
-                    bytecode.push(opcodes::Format);
-                    bytecode.push(env.get_string_index(&string.0));
-                    bytecode.push(*arg_count);
-                }
-
-                Instruction::Output => {
-                    bytecode.push(opcodes::Output);
-                }
-
-                Instruction::Jmp(dst) => {
-                    bytecode.push(opcodes::Jmp);
-                    jump_sources.push((bytecode.len(), &dst.0));
-                    bytecode.push(0xC0C0C0C0);
-                }
-
-                Instruction::DbgFile(path) => {
-                    bytecode.push(opcodes::DbgFile);
-                    bytecode.push(env.get_string_index(&path.0));
-                }
-
-                Instruction::DbgLine(line) => {
-                    bytecode.push(opcodes::DbgLine);
-                    bytecode.push(*line);
-                }
-
-                Instruction::PushInt(val) => {
-                    bytecode.push(opcodes::PushInt);
-                    bytecode.push(unsafe { std::mem::transmute(*val) });
-                }
-
-                Instruction::Ret => {
-                    bytecode.push(opcodes::Ret);
-                }
-
-                Instruction::GetVar(_) => {
-                    bytecode.push(opcodes::GetVar);
-                    bytecode.push(0x00); // AAAAAAA
-                }
-            },
+            Node::Instruction(ins, _) => ins.assemble(&mut state),
         }
     }
 
-    for src in jump_sources {
-        bytecode[src.0] = jump_destinations[src.1];
+    for src in state.jump_sources {
+        state.bytecode[src.0] = state.jump_destinations[&src.1];
     }
 
-    bytecode
+    state.bytecode
 }
