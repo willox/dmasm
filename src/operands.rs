@@ -314,8 +314,16 @@ impl Operand for Variable {
             Variable::Unk1 => write!(f, "unk1"),
             Variable::Unk2 => write!(f, "unk2"),
             Variable::CurrentProc => write!(f, "dotdot"),
-            Variable::Arg(x) => write!(f, "arg({})", x),
-            Variable::Local(x) => write!(f, "local({})", x),
+            Variable::Arg(x) => {
+                write!(f, "arg(")?;
+                x.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::Local(x) => {
+                write!(f, "local(")?;
+                x.serialize(f)?;
+                write!(f, ")")
+            }
             Variable::Global(name) => {
                 write!(f, "global(")?;
                 name.serialize(f)?;

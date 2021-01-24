@@ -1,10 +1,8 @@
 use crate::operands::{OperandDeserialize, *};
-use nom::branch::*;
 use nom::bytes::complete::take_while;
 use nom::combinator::*;
 use nom::error::FromExternalError;
 use nom::error::ParseError;
-use nom::multi::*;
 use nom::sequence::*;
 use nom::{character::complete::*, *};
 use crate::parser;
