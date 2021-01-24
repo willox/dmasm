@@ -34,7 +34,7 @@ where
     })(i)
 }
 
-fn parse_label_identifier<'a, E>(i: &'a str) -> IResult<&str, &str, E>
+pub fn parse_identifier<'a, E>(i: &'a str) -> IResult<&str, &str, E>
 where
     E: ParseError<&'a str>,
 {
@@ -62,7 +62,7 @@ where
     map(
         delimited(
             space0,
-            parse_label_identifier,
+            parse_identifier,
             pair(char(':'), alt((line_ending, eof))),
         ),
         |x: &str| Node::Label(x.into()),
@@ -83,63 +83,27 @@ fn parse_label_operand<'a, E>(i: &'a str) -> IResult<&str, operands::Label, E>
 where
     E: ParseError<&'a str>,
 {
-    map(
-        delimited(space0, parse_label_identifier, space0),
-        |x: &str| operands::Label(x.into()),
-    )(i)
+    map(delimited(space0, parse_identifier, space0), |x: &str| {
+        operands::Label(x.into())
+    })(i)
 }
 
-fn parse_instruction<'a, E>(i: &'a str) -> IResult<&str, Node, E>
+pub fn whitespace<'a, F: 'a, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
+    F: Fn(&'a str) -> IResult<&'a str, O, E>,
 {
-    let (i, name) = delimited(space0, recognize(tuple((alpha1, alphanumeric0))), space0)(i)?;
-
-    let (i, instruction) = match name {
-        "End" => (i, Instruction::End),
-        "Output" => (i, Instruction::Output),
-        "Format" => {
-            let (i, format_string) = parse_dm_string_operand(i)?;
-            let (i, arg_count) = parse_uint(i)?;
-            (i, Instruction::Format(format_string, arg_count))
-        }
-
-        "Jmp" => {
-            let (i, label) = parse_label_operand(i)?;
-            (i, Instruction::Jmp(label))
-        }
-
-        "DbgFile" => {
-            let (i, name) = parse_dm_string_operand(i)?;
-            (i, Instruction::DbgFile(name))
-        }
-
-        "DbgLine" => {
-            let (i, line) = parse_uint(i)?;
-            (i, Instruction::DbgLine(line))
-        }
-
-        "PushInt" => {
-            let (i, value) = parse_sint(i)?;
-            (i, Instruction::PushInt(value))
-        }
-
-        "Ret" => (i, Instruction::Ret),
-
-        _ => return Err(Err::Error(error_position!(i, error::ErrorKind::TagBits))),
-    };
-
-    Ok((i, Node::Instruction(instruction, ())))
+    delimited(multispace0, inner, multispace0)
 }
 
-fn parse_nodes<'a, E>(i: &'a str) -> IResult<&str, Vec<Node>, E>
+fn parse_nodes<'a, E: 'a>(i: &'a str) -> IResult<&str, Vec<Node>, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
     terminated(
         many0(delimited(
             multispace0,
-            alt((parse_label, parse_comment, parse_instruction)),
+            alt((parse_label, parse_comment, map(Instruction::deserialize, |x| Node::Instruction(x, ())))),
             multispace0,
         )),
         pair(multispace0, eof),
@@ -224,17 +188,6 @@ mod tests {
         assert_eq!(
             parse_comment::<(_, ErrorKind)>(";lovely message"),
             Ok(("", Node::Comment("lovely message".into())))
-        );
-    }
-
-    #[test]
-    fn test_instruction() {
-        assert_eq!(
-            parse_instruction::<(_, ErrorKind)>("Jmp Loop"),
-            Ok((
-                "",
-                Node::Instruction(Instruction::Jmp(operands::Label("Loop".into())), ())
-            ))
         );
     }
 

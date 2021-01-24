@@ -21,7 +21,7 @@ impl<'a, E: AssembleEnv> Assembler<'a, E> {
             bytecode: vec![],
             jump_destinations: HashMap::new(),
             jump_sources: vec![],
-            env
+            env,
         }
     }
 
@@ -41,7 +41,9 @@ pub fn assemble<E: AssembleEnv>(nodes: &[Node], env: &mut E) -> Vec<u32> {
     for node in nodes {
         match node {
             Node::Label(identifier) => {
-                state.jump_destinations.insert(identifier.clone(), state.bytecode.len() as u32);
+                state
+                    .jump_destinations
+                    .insert(identifier.clone(), state.bytecode.len() as u32);
             }
 
             Node::Comment(_) => (),

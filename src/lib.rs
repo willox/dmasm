@@ -5,8 +5,8 @@ pub mod assembler;
 pub mod disassembler;
 // pub mod builder;
 mod instructions;
-mod opcodes;
 mod operands;
+mod operands_deserialize;
 pub mod parser;
 
 use instructions::Instruction;
@@ -27,7 +27,10 @@ impl<D> std::fmt::Display for Node<D> {
         match self {
             Self::Comment(text) => write!(f, ";{}", text),
             Self::Label(name) => write!(f, "{}:", name),
-            Self::Instruction(ins, _) => write!(f, "{}", ins),
+            Self::Instruction(ins, _) => {
+                ins.serialize(f)?;
+                write!(f, "\n")
+            }
         }
     }
 }

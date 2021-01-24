@@ -1,109 +1,125 @@
-use crate::{assembler::{AssembleEnv, Assembler}, disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler}, opcodes, operands::*};
 use crate::operands::Operand;
+use crate::parser;
+use crate::{
+    assembler::{AssembleEnv, Assembler},
+    disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
+    operands::*,
+};
+use std::fmt;
 
-#[derive(PartialEq, Debug)]
-pub enum Instruction {
-    End,
-    Format(DMString, u32),
-    Jmp(Label),
-    Output,
-    DbgFile(DMString),
-    DbgLine(u32),
-    PushInt(i32),
-    Ret,
-    GetVar(Variable),
-}
+#[allow(unused)]
+macro_rules! instructions {
+    ( $(
+        $opcode:literal = $name:ident
+        $( ( $(
+            $operand_name:ident: $operand_type:tt
+        ),* $(,)? ) )?
+    ),* $(,)? ) => {
+        #[derive(PartialEq, Debug)]
+        pub enum Instruction {
+            $(
+                $name$( ( $( $operand_type, )* ) )?,
+            )*
+        }
 
-impl Instruction {
-    pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) {
-        match self {
-            Instruction::End => {
-                asm.emit(opcodes::End);
+        impl Instruction {
+            pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) {
+                match self {
+                    $(
+                        Self::$name$( ( $( $operand_name, )* ) )? => {
+                            asm.emit($opcode);
+                            $( $( $operand_name.assemble(asm); )* )?
+                        }
+                    )*
+                }
             }
 
-            Instruction::Format(string, arg_count) => {
-                asm.emit(opcodes::Format);
-                string.assemble(asm);
-                arg_count.assemble(asm);
+            pub fn disassemble<'a, E: DisassembleEnv>(
+                dism: &mut Disassembler<'a, E>,
+            ) -> Result<(Self, DebugData<'a>), DisassembleError> {
+                let offset = dism.current_offset;
+
+                let ins = match dism.read_u32()? {
+                    $(
+                        $opcode => {
+                            Self::$name$( ( $( $operand_type::disassemble(dism)?, )* ) )?
+                        }
+                    )*
+
+                    opcode => return Err(DisassembleError::UnknownOpcode { offset, opcode }),
+                };
+
+                let range_start = offset as usize;
+                let range_end = dism.current_offset as usize;
+
+                Ok((
+                    ins,
+                    DebugData {
+                        offset,
+                        bytecode: &dism.bytecode[range_start..range_end],
+                    },
+                ))
             }
 
-            Instruction::Output => {
-                asm.emit(opcodes::Output);
+            pub fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $(
+                        Self::$name$( ( $( $operand_name, )* ) )? => {
+                            write!(f, stringify!($name))?;
+                            $( $(
+                                write!(f, " ")?;
+                                $operand_name.serialize(f)?;
+                            )* )?
+                        }
+                    )*
+                }
+
+                Ok(())
             }
 
-            Instruction::Jmp(dst) => {
-                asm.emit(opcodes::Jmp);
-                dst.assemble(asm);
-            }
+            pub fn deserialize<'b, E: 'b>(i: &'b str) -> nom::IResult<&str, Self, E>
+            where
+                E: nom::error::ParseError<&'b str>
+                    + nom::error::FromExternalError<&'b str, std::num::ParseIntError>,
+            {
+                let (i, name) = parser::whitespace(parser::parse_identifier)(i)?;
 
-            Instruction::DbgFile(path) => {
-                asm.emit(opcodes::DbgFile);
-                path.assemble(asm);
-            }
+                let (i, instruction) = match name {
+                    $(
+                        stringify!($name) => {
+                            $( $(
+                                let (i, $operand_name) = parser::whitespace($operand_type::deserialize)(i)?;
+                            )* )?
+                            (i, Self::$name$( ( $(
+                                $operand_name,
+                             )* ))? )
+                        },
+                    )*
 
-            Instruction::DbgLine(line) => {
-                asm.emit(opcodes::DbgLine);
-                line.assemble(asm);
-            }
+                    // TODO: Real error
+                    other => panic!("unknown instruction {}", other),
+                };
 
-            Instruction::PushInt(val) => {
-                asm.emit(opcodes::PushInt);
-                val.assemble(asm);
-            }
-
-            Instruction::Ret => {
-                asm.emit(opcodes::Ret);
-            }
-
-            Instruction::GetVar(var) => {
-                asm.emit(opcodes::GetVar);
-                var.assemble(asm);
+                Ok((i, instruction))
             }
         }
-    }
+    };
+}
 
-    pub fn disassemble<'a, E: DisassembleEnv>(dism: &mut Disassembler<'a, E>) -> Result<(Self, DebugData<'a>), DisassembleError> {
-        let offset = dism.current_offset;
-
-        let ins = match dism.read_u32()? {
-            opcodes::End => Instruction::End,
-            opcodes::Format => Instruction::Format(DMString::disassemble(dism)?, u32::disassemble(dism)?),
-            opcodes::Output => Instruction::Output,
-            opcodes::Jmp => Instruction::Jmp(Label::disassemble(dism)?),
-            opcodes::DbgFile => Instruction::DbgFile(DMString::disassemble(dism)?),
-            opcodes::DbgLine => Instruction::DbgLine(u32::disassemble(dism)?),
-            opcodes::PushInt => Instruction::PushInt(i32::disassemble(dism)?),
-            opcodes::Ret => Instruction::Ret,
-            opcodes::GetVar => Instruction::GetVar(Variable::disassemble(dism)?),
-
-            opcode => return Err(DisassembleError::UnknownOpcode { offset, opcode }),
-        };
-
-        let range_start = offset as usize;
-        let range_end = dism.current_offset as usize;
-
-        Ok((
-            ins,
-            DebugData {
-                offset,
-                bytecode: &dism.bytecode[range_start..range_end],
-            },
-        ))
-    }
+instructions! {
+    0x00 = End,
+    0x02 = Format(fmt: DMString, arg_count: u32),
+    0x0F = Jmp(dst: Label),
+    0x03 = Output,
+    0x84 = DbgFile(file: DMString),
+    0x85 = DbgLine(line: u32),
+    0x50 = PushInt(value: i32),
+    0x12 = Ret,
+    0x33 = GetVar(var: Variable),
 }
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::End => write!(f, "End"),
-            Self::Format(string, arg_count) => write!(f, "Format {} {}", string, arg_count),
-            Self::Jmp(label) => write!(f, "Jmp {}", label),
-            Self::Output => write!(f, "Output"),
-            Self::DbgFile(path) => write!(f, "DbgFile {}", path),
-            Self::DbgLine(line) => write!(f, "DbgLine {}", line),
-            Self::PushInt(v) => write!(f, "PushInt {}", v),
-            Self::Ret => write!(f, "Ret"),
-            Self::GetVar(var) => write!(f, "GetVar {}", var),
-        }
+        self.serialize(f)
     }
 }

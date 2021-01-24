@@ -1,8 +1,23 @@
-use crate::{assembler::{AssembleEnv, Assembler}, disassembler::{Disassembler, DisassembleEnv, DisassembleError}};
+use crate::{
+    assembler::{AssembleEnv, Assembler},
+    disassembler::{DisassembleEnv, DisassembleError, Disassembler},
+};
+use std::fmt;
 
 pub trait Operand: Sized {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>);
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError>;
+    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>)
+        -> Result<Self, DisassembleError>;
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+}
+
+// This is a separate trait just so that the large amount of nom code can live in operands_deserialize
+pub trait OperandDeserialize: Sized {
+    fn deserialize<'a, E>(i: &'a str) -> nom::IResult<&str, Self, E>
+    where
+        E: nom::error::ParseError<&'a str>
+            + nom::error::FromExternalError<&'a str, std::num::ParseIntError>;
 }
 
 //
@@ -13,8 +28,14 @@ impl Operand for u32 {
         asm.emit(*self);
     }
 
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
         dism.read_u32()
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", *self)
     }
 }
 
@@ -26,8 +47,14 @@ impl Operand for i32 {
         asm.emit(unsafe { std::mem::transmute(*self) });
     }
 
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
         dism.read_i32()
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", *self)
     }
 }
 
@@ -42,7 +69,9 @@ impl Operand for Label {
         asm.emit_label_operand(&self.0)
     }
 
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
         let offset = dism.read_u32()?;
 
         // TODO: Move to output
@@ -51,10 +80,8 @@ impl Operand for Label {
         // TODO: This label naming scheme is duplicated into output stage
         Ok(Self(format!("LAB_{:0>4X}", offset)))
     }
-}
 
-impl std::fmt::Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -70,9 +97,12 @@ impl Operand for Proc {
         panic!("TODO");
     }
 
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
         let id = dism.read_u32()?;
-        let string = dism.env
+        let string = dism
+            .env
             .get_proc_name(id)
             .ok_or(DisassembleError::InvalidProc {
                 offset: dism.current_offset - 1,
@@ -81,18 +111,15 @@ impl Operand for Proc {
 
         Ok(Proc(string))
     }
-}
 
-impl std::fmt::Display for Proc {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
 //
-// DMStrnig
+// DMString
 //
-// TODO: String Formatting
 #[derive(PartialEq, Debug)]
 pub struct DMString(pub String);
 
@@ -102,7 +129,9 @@ impl Operand for DMString {
         asm.emit(index);
     }
 
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
         let id = dism.read_u32()?;
         let string = dism
             .env
@@ -114,10 +143,9 @@ impl Operand for DMString {
 
         Ok(DMString(string))
     }
-}
 
-impl std::fmt::Display for DMString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    // TODO: Formatting
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0)
     }
 }
@@ -127,17 +155,17 @@ impl std::fmt::Display for DMString {
 //
 #[derive(PartialEq, Debug)]
 pub enum Variable {
-	Null,
-	World,
-	Usr,
-	Src,
-	Args,
-	Dot,
+    Null,
+    World,
+    Usr,
+    Src,
+    Args,
+    Dot,
     Cache,
     Cache2,
     Cache3,
-	Unk1,
-	Unk2,
+    Unk1,
+    Unk2,
     CurrentProc,
     Arg(u32),
     Local(u32),
@@ -153,27 +181,32 @@ impl Operand for Variable {
         panic!("TODO")
     }
 
-    fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Self, DisassembleError> {
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
         use crate::access_modifiers;
 
-        pub fn read_variable_name<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<DMString, DisassembleError> {
+        pub fn read_variable_name<E: DisassembleEnv>(
+            dism: &mut Disassembler<E>,
+        ) -> Result<DMString, DisassembleError> {
             let id = dism.read_u32()?;
-            let string = dism
-                .env
-                .get_variable_name(id)
-                .ok_or(DisassembleError::InvalidVariableName {
-                    offset: dism.current_offset - 1,
-                    id,
-                })?;
+            let string =
+                dism.env
+                    .get_variable_name(id)
+                    .ok_or(DisassembleError::InvalidVariableName {
+                        offset: dism.current_offset - 1,
+                        id,
+                    })?;
 
             Ok(DMString(string))
         }
 
         // Inner function used for when we encounter a field accessor
-        fn read_variable_fields<E: DisassembleEnv>(dism: &mut Disassembler<E>) -> Result<Variable, DisassembleError> {
+        fn read_variable_fields<E: DisassembleEnv>(
+            dism: &mut Disassembler<E>,
+        ) -> Result<Variable, DisassembleError> {
             // This is either a string-ref or an AccessModifier
-            let param = dism.peek_u32()
-                .ok_or(DisassembleError::UnexpectedEnd)?;
+            let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
             let lhs;
             let mut fields = vec![];
 
@@ -214,18 +247,20 @@ impl Operand for Variable {
 
                     access_modifiers::Proc | access_modifiers::Proc2 => {
                         let proc = Proc::disassemble(dism)?;
-                        return Ok(Variable::StaticProcField(lhs, fields, proc))
+                        return Ok(Variable::StaticProcField(lhs, fields, proc));
                     }
 
                     access_modifiers::SrcProc | access_modifiers::SrcProc2 => {
                         let proc = DMString::disassemble(dism)?;
-                        return Ok(Variable::RuntimeProcField(lhs, fields, proc))
+                        return Ok(Variable::RuntimeProcField(lhs, fields, proc));
                     }
 
-                    other => return Err(DisassembleError::UnknownFieldAccessModifier {
-                        offset: dism.current_offset - 1,
-                        value: other,
-                    })
+                    other => {
+                        return Err(DisassembleError::UnknownFieldAccessModifier {
+                            offset: dism.current_offset - 1,
+                            value: other,
+                        })
+                    }
                 }
             }
         }
@@ -254,18 +289,18 @@ impl Operand for Variable {
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
             access_modifiers::Field => read_variable_fields(dism)?,
 
-            other => return Err(DisassembleError::UnknownAccessModifier {
-                offset: dism.current_offset - 1,
-                value: other,
-            })
+            other => {
+                return Err(DisassembleError::UnknownAccessModifier {
+                    offset: dism.current_offset - 1,
+                    value: other,
+                })
+            }
         };
 
         Ok(var)
     }
-}
 
-impl std::fmt::Display for Variable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Variable::Null => write!(f, "null"),
             Variable::World => write!(f, "world"),
@@ -281,11 +316,53 @@ impl std::fmt::Display for Variable {
             Variable::CurrentProc => write!(f, "dotdot"),
             Variable::Arg(x) => write!(f, "arg({})", x),
             Variable::Local(x) => write!(f, "local({})", x),
-            Variable::Global(name) => write!(f, "global({})", name),
-            Variable::Field(var, fields) => write!(f, "field({} {})", **var, fields.iter().map(|x| x.0.clone()).collect::<Vec<String>>().join(" ")),
-            Variable::Initial(var, fields) => write!(f, "initial({} {})", **var, fields.iter().map(|x| x.0.clone()).collect::<Vec<String>>().join(" ")),
-            Variable::StaticProcField(var, fields, name) => write!(f, "static_proc({} {} {})", **var, fields.iter().map(|x| x.0.clone()).collect::<Vec<String>>().join(" "), name),
-            Variable::RuntimeProcField(var, fields, name) => write!(f, "runtime_proc({} {} {})", **var, fields.iter().map(|x| x.0.clone()).collect::<Vec<String>>().join(" "), name),
+            Variable::Global(name) => {
+                write!(f, "global(")?;
+                name.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::Field(var, fields) => write!(
+                f,
+                "field({:?} {:?})",
+                **var,
+                fields
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ),
+            Variable::Initial(var, fields) => write!(
+                f,
+                "initial({:?} {:?})",
+                **var,
+                fields
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ),
+            Variable::StaticProcField(var, fields, name) => write!(
+                f,
+                "static_proc({:?} {:?} {:?})",
+                **var,
+                fields
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect::<Vec<String>>()
+                    .join(" "),
+                name
+            ),
+            Variable::RuntimeProcField(var, fields, name) => write!(
+                f,
+                "runtime_proc({:?} {:?} {:?})",
+                **var,
+                fields
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect::<Vec<String>>()
+                    .join(" "),
+                name
+            ),
         }
     }
 }
