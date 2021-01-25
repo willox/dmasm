@@ -155,7 +155,7 @@ instructions! {
     0x2D = CallParentArgs(arg_count: u32),
     0x2E = CallSelf,
     0x2F = CallSelfArgs(arg_count: u32),
-    // 0x30 = CallGlob,
+    0x30 = CallGlob(arg_count: u32, proc: Proc),
     0x31 = Log10,
     0x32 = Log,
     0x33 = GetVar(var: Variable),
@@ -312,7 +312,7 @@ instructions! {
     0xCA = CallSelfArgList,
     0xCB = CallPathArgList,
     0xCC = CallNameArgList, // TODO: same as above but without a src?
-    // 0xCD = CallGlobalArgList,
+    0xCD = CallGlobalArgList(proc: Proc),
     // 0xCE = UnkCE,
     0xCF = NewArgList,
     0xD0 = MinList,
