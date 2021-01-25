@@ -59,6 +59,27 @@ impl Operand for i32 {
 }
 
 //
+// f32
+// Only a partial implementation because the type is only used for serialization/deserialization
+// TODO: Split the behaviour into two traits?
+//
+impl Operand for f32 {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        unimplemented!()
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        _dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        unimplemented!()
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.}", *self)
+    }
+}
+
+//
 // Label
 //
 #[derive(PartialEq, Debug)]
@@ -147,6 +168,128 @@ impl Operand for DMString {
     // TODO: Formatting
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0)
+    }
+}
+
+//
+// Value
+//
+#[derive(PartialEq, Debug)]
+pub enum Value {
+    Null,
+    Number(f32),
+    DMString(DMString),
+    Path(String),
+    Resource(String),
+    File,
+    /*/
+    DatumPath(DMString),
+    ClientPath,
+    ProcPath(DMString),
+    Resource(DMString),
+    TurfPath(DMString),
+    ObjPath(DMString),
+    File(DMString),
+    MobPath(DMString),
+    ImagePath(DMString),
+    */
+}
+
+impl Operand for Value {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        match self {
+            Self::Null => {
+                asm.emit(0x00);
+                asm.emit(0x00);
+            }
+            Self::DMString(value) => {
+                asm.emit(0x06);
+                value.assemble(asm);
+            }
+
+            Self::Number(value) => {
+                asm.emit(0x2A);
+                // Numbers store their data portion in the lower 16-bits of two operands
+                // TODO: test code
+                let bits = value.to_bits();
+                asm.emit((bits >> 16) & 0xFFFF);
+                asm.emit(bits & 0xFFFF);
+            }
+
+            Self::Path(..) | Self::Resource(..) | Self::File => {
+                // TODO: This _will_ bite me in the ass, implement assemble errors asap
+                asm.emit(0x00);
+                asm.emit(0x00);
+            }
+        }
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let offset = dism.current_offset;
+        let tag = dism.read_u32()?;
+
+        let value = match tag {
+            0x00 if dism.read_u32()? == 0 => {
+                Self::Null
+            }
+            0x06 => {
+                Self::DMString(DMString::disassemble(dism)?)
+            }
+
+            0x2A => {
+                // Numbers store their data portion in the lower 16-bits of two operands
+                let upper_bits = dism.read_u32()?;
+                let lower_bits = dism.read_u32()?;
+                Self::Number(f32::from_bits((upper_bits << 16) | lower_bits))
+            }
+
+            0x20 | 0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => {
+                let data = dism.read_u32()?;
+                Self::Path(dism.env.value_to_string(tag, data).ok_or(
+                    DisassembleError::UnknownValue {
+                        offset,
+                        tag,
+                    }
+                )?)
+            }
+
+            0x0C => {
+                let data = dism.read_u32()?;
+                Self::Resource(dism.env.value_to_string(tag, data).ok_or(
+                    DisassembleError::UnknownValue {
+                        offset,
+                        tag,
+                    }
+                )?)
+            }
+
+            0x27 if dism.read_u32()? == 0 => {
+                Self::File
+            }
+
+            _ => {
+                return Err(DisassembleError::UnknownValue {
+                    offset,
+                    tag,
+                });
+            }
+        };
+
+        Ok(value)
+    }
+
+    // TODO: Formatting
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => write!(f, "null"),
+            Value::Number(value) => value.serialize(f),
+            Value::DMString(value) => value.serialize(f),
+            Value::Path(value) => write!(f, "{}", value),
+            Value::Resource(value) => write!(f, "'{}'", value),
+            Value::File => write!(f, "/file"),
+        }
     }
 }
 

@@ -8,6 +8,7 @@ pub trait DisassembleEnv {
     fn get_string(&mut self, index: u32) -> Option<String>;
     fn get_variable_name(&mut self, index: u32) -> Option<String>;
     fn get_proc_name(&mut self, index: u32) -> Option<String>;
+    fn value_to_string(&mut self, tag: u32, data: u32) -> Option<String>;
 }
 
 #[derive(Debug, PartialEq)]
@@ -20,6 +21,7 @@ pub enum DisassembleError {
     InvalidProc { offset: u32, id: u32 },
     UnknownAccessModifier { offset: u32, value: u32 },
     UnknownFieldAccessModifier { offset: u32, value: u32 },
+    UnknownValue { offset: u32, tag: u32 },
     Todo,
 }
 

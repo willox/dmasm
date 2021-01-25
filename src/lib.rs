@@ -25,8 +25,8 @@ pub enum Node<D = ()> {
 impl<D> std::fmt::Display for Node<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Comment(text) => write!(f, ";{}", text),
-            Self::Label(name) => write!(f, "{}:", name),
+            Self::Comment(text) => writeln!(f, ";{}", text),
+            Self::Label(name) => writeln!(f, "{}:", name),
             Self::Instruction(ins, _) => {
                 ins.serialize(f)?;
                 write!(f, "\n")
@@ -111,6 +111,10 @@ impl disassembler::DisassembleEnv for TestDisassembleEnv {
 
     fn get_proc_name(&mut self, index: u32) -> Option<String> {
         Some(format!("/proc/func{}", index))
+    }
+
+    fn value_to_string(&mut self, tag: u32, data: u32) -> Option<String> {
+        Some(format!("/datum/type{}/data{}", tag, data))
     }
 }
 
