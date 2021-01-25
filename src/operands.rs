@@ -182,6 +182,7 @@ pub enum Value {
     Path(String),
     Resource(String),
     File,
+    Raw { tag: u8, data: u32 },
     /*/
     DatumPath(DMString),
     ClientPath,
@@ -197,10 +198,15 @@ pub enum Value {
 
 impl Operand for Value {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        // TODO: WRONG!
         match self {
             Self::Null => {
                 asm.emit(0x00);
                 asm.emit(0x00);
+            }
+            Self::Raw { tag, data } => {
+                asm.emit(*tag as u32);
+                asm.emit(*data);
             }
             Self::DMString(value) => {
                 asm.emit(0x06);
@@ -230,7 +236,7 @@ impl Operand for Value {
         let offset = dism.current_offset;
 
         let tag = dism.read_u32()?;
-        let data = (tag & 0xff00) << 8 | dism.read_u32()?;
+        let data = (tag & 0xFF00) << 8 | dism.read_u32()?;
         let tag = tag & 0xFF;
 
         // Number is a special snowflake
@@ -265,6 +271,10 @@ impl Operand for Value {
 
             0x27 if data == 0 => Self::File,
 
+            0x29 => {
+                Self::Raw { tag: tag as u8, data }
+            }
+
             _ => {
                 return Err(DisassembleError::UnknownValue { offset, tag });
             }
@@ -282,6 +292,7 @@ impl Operand for Value {
             Value::Path(value) => write!(f, "{}", value),
             Value::Resource(value) => write!(f, "'{}'", value),
             Value::File => write!(f, "/file"),
+            Value::Raw {tag, data} => write!(f, "ref({:X}{:08X})", tag, data)
         }
     }
 }
