@@ -436,6 +436,9 @@ impl Operand for Variable {
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
             access_modifiers::Field => read_variable_fields(dism)?,
 
+            access_modifiers::Proc | access_modifiers::Proc2 => Variable::StaticProcField(Box::new(Variable::Cache), vec![], Proc::disassemble(dism)?),
+            access_modifiers::SrcProc | access_modifiers::SrcProc2 => Variable::RuntimeProcField(Box::new(Variable::Cache), vec![], DMString::disassemble(dism)?),
+
             other => {
                 return Err(DisassembleError::UnknownAccessModifier {
                     offset: dism.current_offset - 1,
