@@ -1,11 +1,11 @@
 use crate::operands::{OperandDeserialize, *};
+use crate::parser;
 use nom::bytes::complete::take_while;
 use nom::combinator::*;
 use nom::error::FromExternalError;
 use nom::error::ParseError;
 use nom::sequence::*;
 use nom::{character::complete::*, *};
-use crate::parser;
 
 impl OperandDeserialize for u32 {
     fn deserialize<'a, E>(i: &'a str) -> IResult<&str, Self, E>
@@ -13,9 +13,7 @@ impl OperandDeserialize for u32 {
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
         // TODO: hex/binary literals
-        map_res(digit1, |x: &str| {
-            x.parse::<u32>()
-        })(i)
+        map_res(digit1, |x: &str| x.parse::<u32>())(i)
     }
 }
 
@@ -25,10 +23,9 @@ impl OperandDeserialize for i32 {
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
         // TODO: hex/binary literals
-        map_res(
-            recognize(tuple((opt(one_of("+-")), digit1))),
-            |x: &str| x.parse::<i32>(),
-        )(i)
+        map_res(recognize(tuple((opt(one_of("+-")), digit1))), |x: &str| {
+            x.parse::<i32>()
+        })(i)
     }
 }
 
@@ -37,10 +34,7 @@ impl OperandDeserialize for Label {
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
-        map(
-            parser::parse_identifier,
-            |x: &str| Label(x.into()),
-        )(i)
+        map(parser::parse_identifier, |x: &str| Label(x.into()))(i)
     }
 }
 

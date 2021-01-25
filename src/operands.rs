@@ -228,52 +228,45 @@ impl Operand for Value {
         dism: &mut Disassembler<E>,
     ) -> Result<Self, DisassembleError> {
         let offset = dism.current_offset;
-        let tag = dism.read_u32()?;
 
+        let tag = dism.read_u32()?;
+        let data = (tag & 0xff00) << 8 | dism.read_u32()?;
+        let tag = tag & 0xFF;
+
+        // Number is a special snowflake
         let value = match tag {
-            0x00 if dism.read_u32()? == 0 => {
-                Self::Null
-            }
-            0x06 => {
-                Self::DMString(DMString::disassemble(dism)?)
-            }
+            0x00 if data == 0 => Self::Null,
+
+            // This one's a bit dodgy. We can't use DMString::disassemble because our bytes are split apart
+            0x06 => Self::DMString(DMString(
+                dism.env
+                    .get_string(data)
+                    .ok_or(DisassembleError::InvalidString { offset, id: data })?,
+            )),
 
             0x2A => {
                 // Numbers store their data portion in the lower 16-bits of two operands
-                let upper_bits = dism.read_u32()?;
+                let upper_bits = data;
                 let lower_bits = dism.read_u32()?;
                 Self::Number(f32::from_bits((upper_bits << 16) | lower_bits))
             }
 
-            0x20 | 0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => {
-                let data = dism.read_u32()?;
-                Self::Path(dism.env.value_to_string(tag, data).ok_or(
-                    DisassembleError::UnknownValue {
-                        offset,
-                        tag,
-                    }
-                )?)
-            }
+            0x20 | 0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => Self::Path(
+                dism.env
+                    .value_to_string(tag, data)
+                    .ok_or(DisassembleError::UnknownValue { offset, tag })?,
+            ),
 
-            0x0C => {
-                let data = dism.read_u32()?;
-                Self::Resource(dism.env.value_to_string(tag, data).ok_or(
-                    DisassembleError::UnknownValue {
-                        offset,
-                        tag,
-                    }
-                )?)
-            }
+            0x0C => Self::Resource(
+                dism.env
+                    .value_to_string(tag, data)
+                    .ok_or(DisassembleError::UnknownValue { offset, tag })?,
+            ),
 
-            0x27 if dism.read_u32()? == 0 => {
-                Self::File
-            }
+            0x27 if data == 0 => Self::File,
 
             _ => {
-                return Err(DisassembleError::UnknownValue {
-                    offset,
-                    tag,
-                });
+                return Err(DisassembleError::UnknownValue { offset, tag });
             }
         };
 
@@ -361,15 +354,15 @@ impl Operand for Variable {
             }
 
             loop {
-                let param = dism.read_u32()?;
+                let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
 
-                // The last value is a string
+                // The last value is a variable
                 if !access_modifiers::is_access_modifier(param) {
                     fields.push(DMString::disassemble(dism)?);
                     return Ok(Variable::Field(lhs, fields));
                 }
 
-                match param {
+                match dism.read_u32()? {
                     access_modifiers::Field => {
                         // HACK: We need to rethink this whole fn
                         let param = dism.peek_u32();

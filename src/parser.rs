@@ -103,7 +103,11 @@ where
     terminated(
         many0(delimited(
             multispace0,
-            alt((parse_label, parse_comment, map(Instruction::deserialize, |x| Node::Instruction(x, ())))),
+            alt((
+                parse_label,
+                parse_comment,
+                map(Instruction::deserialize, |x| Node::Instruction(x, ())),
+            )),
             multispace0,
         )),
         pair(multispace0, eof),
