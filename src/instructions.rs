@@ -284,7 +284,7 @@ instructions! {
     // 0xAE = UnkAE,
     0xAF = Read,
     0xB0 = Index,
-    // 0xB1 = PickProb,
+    0xB1 = PickProb(params: PickProbParams),
     0xB2 = JmpOr(destination: Label),
     0xB3 = JmpAnd(destination: Label),
     0xB4 = FDel,

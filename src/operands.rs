@@ -415,6 +415,44 @@ impl Operand for SwitchRangeParams {
 }
 
 //
+// PickProbParams
+//
+#[derive(PartialEq, Debug)]
+pub struct PickProbParams {
+    pub cases: Vec<Label>,
+}
+
+impl Operand for PickProbParams {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        unimplemented!();
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let mut cases = vec![];
+
+        for _ in 0..dism.read_u32()? {
+            cases.push(
+                Label::disassemble(dism)?);
+        }
+
+        Ok(Self {
+            cases,
+        })
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for case in &self.cases {
+            case.serialize(f)?;
+            write!(f, ", ")?;
+        }
+
+        Ok(())
+    }
+}
+
+//
 // Value
 //
 #[derive(PartialEq, Debug)]

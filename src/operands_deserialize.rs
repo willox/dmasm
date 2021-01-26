@@ -106,6 +106,15 @@ impl OperandDeserialize for SwitchRangeParams {
     }
 }
 
+impl OperandDeserialize for PickProbParams {
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    where
+        E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
+    {
+        panic!("TODO");
+    }
+}
+
 impl OperandDeserialize for Value {
     fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
     where
