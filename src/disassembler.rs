@@ -4,7 +4,6 @@ use crate::Node;
 use std::collections::HashSet;
 
 pub trait DisassembleEnv {
-    /// Converts a dm string identifier into a rust string
     fn get_string(&mut self, index: u32) -> Option<String>;
     fn get_variable_name(&mut self, index: u32) -> Option<String>;
     fn get_proc_name(&mut self, index: u32) -> Option<String>;
@@ -21,6 +20,8 @@ pub enum DisassembleError {
     InvalidProc { offset: u32, id: u32 },
     UnknownAccessModifier { offset: u32, value: u32 },
     UnknownFieldAccessModifier { offset: u32, value: u32 },
+    UnknownRangeParams { offset: u32, value: u32 },
+    UnknownIsInOperand { offset: u32, value: u32 },
     UnknownValue { offset: u32, tag: u32 },
     Todo,
 }
@@ -34,14 +35,23 @@ pub struct DebugData<'a> {
 pub fn disassemble<'a, E: DisassembleEnv>(
     bytecode: &'a [u32],
     env: &'a mut E,
-) -> Result<Vec<Node<DebugData<'a>>>, DisassembleError> {
+) -> (Vec<Node<DebugData<'a>>>, Option<DisassembleError>) {
     let mut state = Disassembler::new(bytecode, env);
     let mut instructions = vec![];
+    let mut err = None;
 
     // TODO: Move me
     loop {
-        let (ins, dbg) = Instruction::disassemble(&mut state)?;
-        instructions.push((ins, dbg));
+        match Instruction::disassemble(&mut state) {
+            Ok((ins, dbg)) => {
+                instructions.push((ins, dbg));
+            },
+
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
 
         if state.finished() {
             break;
@@ -58,7 +68,7 @@ pub fn disassemble<'a, E: DisassembleEnv>(
         nodes.push(Node::Instruction(ins, dbg));
     }
 
-    Ok(nodes)
+    (nodes, err)
 }
 
 pub struct Disassembler<'a, E: DisassembleEnv> {

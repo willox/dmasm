@@ -172,6 +172,249 @@ impl Operand for DMString {
 }
 
 //
+// RangeParams
+// This one's a bit odd. Range and ORange seem to always be followed by 0xAE.
+// This might actually be a combination of two instructions - but it doesn't really matter for our purposes.
+// (TODO: Use the debugger to single-step over this and know for sure.)
+//
+#[derive(PartialEq, Debug)]
+pub struct RangeParams;
+
+impl Operand for RangeParams {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        asm.emit(0xAE);
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let param = dism.read_u32()?;
+
+        if param != 0xAE {
+            return Err(DisassembleError::UnknownRangeParams {
+                offset: dism.current_offset - 1,
+                value: param,
+            })
+        }
+
+        Ok(RangeParams)
+    }
+
+    fn serialize(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // It's nothing! This works, right?
+        Ok(())
+    }
+}
+
+//
+// IsInParams
+//
+#[derive(PartialEq, Debug)]
+pub enum IsInParams {
+    Range,
+    Value,
+}
+
+impl Operand for IsInParams {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        match self {
+            Self::Range => asm.emit(0x0B),
+            Self::Value => asm.emit(0x05),
+        }
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let param = dism.read_u32()?;
+
+        let res = match param {
+            0x0B => Self::Range,
+            0x05 => Self::Value,
+            other => return Err(DisassembleError::UnknownIsInOperand {
+                offset: dism.current_offset - 1,
+                value: other,
+            }),
+        };
+
+        Ok(res)
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Range => write!(f, "Range"),
+            Self::Value => write!(f, "Value"),
+        }
+    }
+}
+
+//
+// SwitchParams
+//
+#[derive(PartialEq, Debug)]
+pub struct SwitchParams {
+    pub default: Label,
+    pub cases: Vec<(Value, Label)>,
+}
+
+impl Operand for SwitchParams {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        unimplemented!();
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let mut cases = vec![];
+
+        for _ in 0..dism.read_u32()? {
+            cases.push((
+                Value::disassemble(dism)?,
+                Label::disassemble(dism)?,
+            ));
+        }
+
+        Ok(Self {
+            default: Label::disassemble(dism)?,
+            cases,
+        })
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "default => ")?;
+        self.default.serialize(f)?;
+        write!(f, ", ")?;
+
+        for case in &self.cases {
+            case.0.serialize(f)?;
+            write!(f, " => ")?;
+            case.1.serialize(f)?;
+            write!(f, ", ")?;
+        }
+
+        Ok(())
+    }
+}
+
+//
+// PickSwitchParams
+//
+#[derive(PartialEq, Debug)]
+pub struct PickSwitchParams {
+    pub default: Label,
+    pub cases: Vec<(u32, Label)>,
+}
+
+impl Operand for PickSwitchParams {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        unimplemented!();
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let mut cases = vec![];
+
+        for _ in 0..dism.read_u32()? {
+            cases.push((
+                u32::disassemble(dism)?,
+                Label::disassemble(dism)?,
+            ));
+        }
+
+        Ok(Self {
+            default: Label::disassemble(dism)?,
+            cases,
+        })
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: Could change our cases to the original DM prob() values
+        write!(f, "default => ")?;
+        self.default.serialize(f)?;
+        write!(f, ", ")?;
+
+        for case in &self.cases {
+            case.0.serialize(f)?;
+            write!(f, " => ")?;
+            case.1.serialize(f)?;
+            write!(f, ", ")?;
+        }
+
+        Ok(())
+    }
+}
+
+//
+// SwitchRangeParams
+//
+#[derive(PartialEq, Debug)]
+pub struct SwitchRangeParams {
+    pub default: Label,
+    pub cases: Vec<(Value, Label)>,
+    pub range_cases: Vec<(Value, Value, Label)>,
+}
+
+impl Operand for SwitchRangeParams {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+        unimplemented!();
+    }
+
+    fn disassemble<E: DisassembleEnv>(
+        dism: &mut Disassembler<E>,
+    ) -> Result<Self, DisassembleError> {
+        let mut range_cases = vec![];
+        let mut cases = vec![];
+
+        for _ in 0..dism.read_u32()? {
+            range_cases.push((
+                Value::disassemble(dism)?,
+                Value::disassemble(dism)?,
+                Label::disassemble(dism)?,
+            ));
+        }
+
+        for _ in 0..dism.read_u32()? {
+            cases.push((
+                Value::disassemble(dism)?,
+                Label::disassemble(dism)?,
+            ));
+        }
+
+        Ok(Self {
+            default: Label::disassemble(dism)?,
+            cases,
+            range_cases,
+        })
+    }
+
+    fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "default => ")?;
+        self.default.serialize(f)?;
+        write!(f, ", ")?;
+
+        for case in &self.cases {
+            case.0.serialize(f)?;
+            write!(f, " => ")?;
+            case.1.serialize(f)?;
+            write!(f, ", ")?;
+        }
+
+        for range_case in &self.range_cases {
+            write!(f, "(")?;
+            range_case.0.serialize(f)?;
+            write!(f, " to ")?;
+            range_case.1.serialize(f)?;
+            write!(f, ") => ")?;
+            range_case.2.serialize(f)?;
+            write!(f, ", ")?;
+        }
+
+        Ok(())
+    }
+}
+
+//
 // Value
 //
 #[derive(PartialEq, Debug)]
@@ -413,7 +656,7 @@ impl Operand for Variable {
         }
 
         // This is either a string-ref or an AccessModifier
-        let param = dism.read_u32()?;
+        let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
 
         if !access_modifiers::is_access_modifier(param) {
             let cache = Box::new(Variable::Cache);
@@ -421,7 +664,7 @@ impl Operand for Variable {
             return Ok(Variable::Field(cache, vec![field]));
         }
 
-        let var = match param {
+        let var = match dism.read_u32()? {
             access_modifiers::Null => Variable::Null,
             access_modifiers::World => Variable::World,
             access_modifiers::Usr => Variable::Usr,
@@ -435,6 +678,8 @@ impl Operand for Variable {
             access_modifiers::Local => Variable::Local(dism.read_u32()?),
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
             access_modifiers::Field => read_variable_fields(dism)?,
+
+            access_modifiers::Initial => Variable::Initial(Box::new(Variable::Cache), vec![DMString::disassemble(dism)?]),
 
             access_modifiers::Proc | access_modifiers::Proc2 => Variable::StaticProcField(Box::new(Variable::Cache), vec![], Proc::disassemble(dism)?),
             access_modifiers::SrcProc | access_modifiers::SrcProc2 => Variable::RuntimeProcField(Box::new(Variable::Cache), vec![], DMString::disassemble(dism)?),
