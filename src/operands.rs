@@ -598,10 +598,11 @@ pub enum Variable {
     Arg(u32),
     Local(u32),
     Global(DMString),
-    Field(Box<Variable>, Vec<DMString>),
-    Initial(Box<Variable>, Vec<DMString>),
-    StaticProcField(Box<Variable>, Vec<DMString>, Proc),
-    RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
+    Index(Box<Variable>, Box<Variable>),
+    Field(DMString),
+    //Initial(Box<Variable>, Vec<DMString>),
+    //StaticProcField(Box<Variable>, Vec<DMString>, Proc),
+    //RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
 }
 
 impl Operand for Variable {
@@ -629,6 +630,7 @@ impl Operand for Variable {
             Ok(DMString(string))
         }
 
+        /*
         // Inner function used for when we encounter a field accessor
         fn read_variable_fields<E: DisassembleEnv>(
             dism: &mut Disassembler<E>,
@@ -692,14 +694,13 @@ impl Operand for Variable {
                 }
             }
         }
+        */
 
         // This is either a string-ref or an AccessModifier
         let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
 
         if !access_modifiers::is_access_modifier(param) {
-            let cache = Box::new(Variable::Cache);
-            let field = DMString::disassemble(dism)?;
-            return Ok(Variable::Field(cache, vec![field]));
+            return Ok(Variable::Field(DMString::disassemble(dism)?))
         }
 
         let var = match dism.read_u32()? {
@@ -715,12 +716,12 @@ impl Operand for Variable {
             access_modifiers::Arg => Variable::Arg(dism.read_u32()?),
             access_modifiers::Local => Variable::Local(dism.read_u32()?),
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
-            access_modifiers::Field => read_variable_fields(dism)?,
+            access_modifiers::Index => Variable::Index(Box::new(Variable::disassemble(dism)?), Box::new(Variable::disassemble(dism)?)),
 
-            access_modifiers::Initial => Variable::Initial(Box::new(Variable::Cache), vec![DMString::disassemble(dism)?]),
+           //access_modifiers::Initial => Variable::Initial(Box::new(Variable::Cache), vec![DMString::disassemble(dism)?]),
 
-            access_modifiers::Proc | access_modifiers::Proc2 => Variable::StaticProcField(Box::new(Variable::Cache), vec![], Proc::disassemble(dism)?),
-            access_modifiers::SrcProc | access_modifiers::SrcProc2 => Variable::RuntimeProcField(Box::new(Variable::Cache), vec![], DMString::disassemble(dism)?),
+           //access_modifiers::Proc | access_modifiers::Proc2 => Variable::StaticProcField(Box::new(Variable::Cache), vec![], Proc::disassemble(dism)?),
+           //access_modifiers::SrcProc | access_modifiers::SrcProc2 => Variable::RuntimeProcField(Box::new(Variable::Cache), vec![], DMString::disassemble(dism)?),
 
             other => {
                 return Err(DisassembleError::UnknownAccessModifier {
@@ -762,16 +763,18 @@ impl Operand for Variable {
                 name.serialize(f)?;
                 write!(f, ")")
             }
-            Variable::Field(var, fields) => write!(
+            Variable::Field(name) => {
+                write!(f, "field(")?;
+                name.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::Index(var, var2) => write!(
                 f,
-                "field({:?} {:?})",
+                "index({:?} {:?})",
                 **var,
-                fields
-                    .iter()
-                    .map(|x| x.0.clone())
-                    .collect::<Vec<String>>()
-                    .join(" ")
+                **var2,
             ),
+            /*
             Variable::Initial(var, fields) => write!(
                 f,
                 "initial({:?} {:?})",
@@ -804,6 +807,7 @@ impl Operand for Variable {
                     .join(" "),
                 name
             ),
+            */
         }
     }
 }

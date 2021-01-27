@@ -23,7 +23,7 @@ access_modifiers! {
     Arg = 0xFFD9,
     Local = 0xFFDA,
     Global = 0xFFDB,
-    Field = 0xFFDC,
+    Index = 0xFFDC,
     SrcProc2 = 0xFFDD,
     SrcProc = 0xFFDE,
     Proc = 0xFFDF,
