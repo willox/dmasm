@@ -23,15 +23,20 @@ access_modifiers! {
     Arg = 0xFFD9,
     Local = 0xFFDA,
     Global = 0xFFDB,
-    Index = 0xFFDC,
-    SrcProc2 = 0xFFDD,
-    SrcProc = 0xFFDE,
-    Proc = 0xFFDF,
-    Proc2 = 0xFFE0,
+    SetCache = 0xFFDC,
+    DynamicProc = 0xFFDD,
+    DynamicVerb = 0xFFDE,
+    StaticProc = 0xFFDF,
+    StaticVerb = 0xFFE0,
     // UnkFFE1 = 0xFFE1,
     // UnkFFE2 = 0xFFE2,
-    Cache2 = 0xFFE3,
-    Cache3 = 0xFFE4,
+
+    // These are used for r-value list accessors
+    // Cache2 = list key
+    // Cache3 = reference to Cache[Cache2]
+    CacheKey = 0xFFE3,
+    CacheIndex = 0xFFE4,
+
     World = 0xFFE5,
     Null = 0xFFE6,
     Initial = 0xFFE7,

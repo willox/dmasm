@@ -590,18 +590,19 @@ pub enum Variable {
     Args,
     Dot,
     Cache,
-    Cache2,
-    Cache3,
-    Unk1,
-    Unk2,
-    CurrentProc,
+    CacheKey,
+    CacheIndex,
     Arg(u32),
     Local(u32),
     Global(DMString),
-    Index(Box<Variable>, Box<Variable>),
+    SetCache(Box<Variable>, Box<Variable>),
+    Initial(Box<Variable>),
     Field(DMString),
     //Initial(Box<Variable>, Vec<DMString>),
-    //StaticProcField(Box<Variable>, Vec<DMString>, Proc),
+    StaticVerb(Proc),
+    DynamicVerb(DMString),
+    StaticProc(Proc),
+    DynamicProc(DMString),
     //RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
 }
 
@@ -630,72 +631,6 @@ impl Operand for Variable {
             Ok(DMString(string))
         }
 
-        /*
-        // Inner function used for when we encounter a field accessor
-        fn read_variable_fields<E: DisassembleEnv>(
-            dism: &mut Disassembler<E>,
-        ) -> Result<Variable, DisassembleError> {
-            // This is either a string-ref or an AccessModifier
-            let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
-            let lhs;
-            let mut fields = vec![];
-
-            if access_modifiers::is_access_modifier(param) {
-                lhs = Box::new(Variable::disassemble(dism)?);
-            } else {
-                lhs = Box::new(Variable::Cache);
-                fields.push(DMString::disassemble(dism)?);
-            }
-
-            loop {
-                let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
-
-                // The last value is a variable
-                if !access_modifiers::is_access_modifier(param) {
-                    fields.push(DMString::disassemble(dism)?);
-                    return Ok(Variable::Field(lhs, fields));
-                }
-
-                match dism.read_u32()? {
-                    access_modifiers::Field => {
-                        // HACK: We need to rethink this whole fn
-                        let param = dism.peek_u32();
-                        if param == Some(access_modifiers::Global) {
-                            dism.read_u32()?;
-                            fields.push(read_variable_name(dism)?);
-                            continue;
-                        }
-
-                        fields.push(DMString::disassemble(dism)?);
-                    }
-
-                    // The other modifiers rest are always last, I think! So they return.
-                    access_modifiers::Initial => {
-                        fields.push(DMString::disassemble(dism)?);
-                        return Ok(Variable::Initial(lhs, fields));
-                    }
-
-                    access_modifiers::Proc | access_modifiers::Proc2 => {
-                        let proc = Proc::disassemble(dism)?;
-                        return Ok(Variable::StaticProcField(lhs, fields, proc));
-                    }
-
-                    access_modifiers::SrcProc | access_modifiers::SrcProc2 => {
-                        let proc = DMString::disassemble(dism)?;
-                        return Ok(Variable::RuntimeProcField(lhs, fields, proc));
-                    }
-
-                    other => {
-                        return Err(DisassembleError::UnknownFieldAccessModifier {
-                            offset: dism.current_offset - 1,
-                            value: other,
-                        })
-                    }
-                }
-            }
-        }
-        */
-
         // This is either a string-ref or an AccessModifier
         let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
 
@@ -711,16 +646,19 @@ impl Operand for Variable {
             access_modifiers::Args => Variable::Args,
             access_modifiers::Dot => Variable::Dot,
             access_modifiers::Cache => Variable::Cache,
-            access_modifiers::Cache2 => Variable::Cache2,
-            access_modifiers::Cache3 => Variable::Cache3,
+            access_modifiers::CacheKey => Variable::CacheKey,
+            access_modifiers::CacheIndex => Variable::CacheIndex,
             access_modifiers::Arg => Variable::Arg(dism.read_u32()?),
             access_modifiers::Local => Variable::Local(dism.read_u32()?),
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
-            access_modifiers::Index => Variable::Index(Box::new(Variable::disassemble(dism)?), Box::new(Variable::disassemble(dism)?)),
+            access_modifiers::SetCache => Variable::SetCache(Box::new(Variable::disassemble(dism)?), Box::new(Variable::disassemble(dism)?)),
+            access_modifiers::Initial => Variable::Initial(Box::new(Variable::disassemble(dism)?)),
 
-           //access_modifiers::Initial => Variable::Initial(Box::new(Variable::Cache), vec![DMString::disassemble(dism)?]),
+            access_modifiers::DynamicProc => Variable::DynamicProc(DMString::disassemble(dism)?),
+            access_modifiers::DynamicVerb => Variable::DynamicVerb(DMString::disassemble(dism)?),
+            access_modifiers::StaticProc => Variable::StaticProc(Proc::disassemble(dism)?),
+            access_modifiers::StaticVerb => Variable::StaticVerb(Proc::disassemble(dism)?),
 
-           //access_modifiers::Proc | access_modifiers::Proc2 => Variable::StaticProcField(Box::new(Variable::Cache), vec![], Proc::disassemble(dism)?),
            //access_modifiers::SrcProc | access_modifiers::SrcProc2 => Variable::RuntimeProcField(Box::new(Variable::Cache), vec![], DMString::disassemble(dism)?),
 
             other => {
@@ -743,11 +681,8 @@ impl Operand for Variable {
             Variable::Args => write!(f, "args"),
             Variable::Dot => write!(f, "dot"),
             Variable::Cache => write!(f, "cache"),
-            Variable::Cache2 => write!(f, "cache2"),
-            Variable::Cache3 => write!(f, "cache3"),
-            Variable::Unk1 => write!(f, "unk1"),
-            Variable::Unk2 => write!(f, "unk2"),
-            Variable::CurrentProc => write!(f, "dotdot"),
+            Variable::CacheKey => write!(f, "cache_key"),
+            Variable::CacheIndex => write!(f, "cache[cache_key]"),
             Variable::Arg(x) => {
                 write!(f, "arg(")?;
                 x.serialize(f)?;
@@ -764,50 +699,41 @@ impl Operand for Variable {
                 write!(f, ")")
             }
             Variable::Field(name) => {
-                write!(f, "field(")?;
+                write!(f, "cache[")?;
                 name.serialize(f)?;
+                write!(f, "]")
+            }
+            Variable::SetCache(var, var2) => {
+                write!(f, "cache = ")?;
+                var.serialize(f)?;
+                write!(f, "; ")?;
+                var2.serialize(f)
+            }
+            Variable::Initial(var) => {
+                write!(f, "initial(")?;
+                var.serialize(f)?;
                 write!(f, ")")
             }
-            Variable::Index(var, var2) => write!(
-                f,
-                "index({:?} {:?})",
-                **var,
-                **var2,
-            ),
-            /*
-            Variable::Initial(var, fields) => write!(
-                f,
-                "initial({:?} {:?})",
-                **var,
-                fields
-                    .iter()
-                    .map(|x| x.0.clone())
-                    .collect::<Vec<String>>()
-                    .join(" ")
-            ),
-            Variable::StaticProcField(var, fields, name) => write!(
-                f,
-                "static_proc({:?} {:?} {:?})",
-                **var,
-                fields
-                    .iter()
-                    .map(|x| x.0.clone())
-                    .collect::<Vec<String>>()
-                    .join(" "),
-                name
-            ),
-            Variable::RuntimeProcField(var, fields, name) => write!(
-                f,
-                "runtime_proc({:?} {:?} {:?})",
-                **var,
-                fields
-                    .iter()
-                    .map(|x| x.0.clone())
-                    .collect::<Vec<String>>()
-                    .join(" "),
-                name
-            ),
-            */
+            Variable::StaticVerb(proc) => {
+                write!(f, "static_verb(")?;
+                proc.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::DynamicVerb(proc) => {
+                write!(f, "dynamic_verb(")?;
+                proc.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::StaticProc(proc) => {
+                write!(f, "static_proc(")?;
+                proc.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::DynamicProc(proc) => {
+                write!(f, "dynamic_proc(")?;
+                proc.serialize(f)?;
+                write!(f, ")")
+            }
         }
     }
 }
