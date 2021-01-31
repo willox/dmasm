@@ -324,7 +324,11 @@ instructions! {
     // 0xD5 = UnkD5,
     // 0xD6 = UnkD6,
     0xD7 = FCopyRsc,
-    0xD8 = BadInstruction, // TODO: Is this just a ptr to the invalid instruction handler?
+
+    // This instruction must have been removed at some point
+    // It's identical to running an invalid opcode
+    0xD8 = BadInstruction,
+
     // 0xD9 = UnkD9,
     0xDA = RandSeed,
     0xDB = Text2Ascii,
@@ -356,9 +360,12 @@ instructions! {
     0xF5 = IsPath,
     0xF6 = IsSubPath,
     0xF7 = FExists,
-    0xF8 = Jmp2(destination: Label),
-    0xF9 = Jnz2(destination: Label),
-    0xFA = Jz2(destination: Label),
+
+    // These are the same as Jmp, Jnz, and Jz, except they try to detect infinite loops
+    0xF8 = JmpLoop(destination: Label),
+    0xF9 = JnzLoop(destination: Label),
+    0xFA = JzLoop(destination: Label),
+
     0xFB = PopN(count: u32),
     0xFC = Check2Numbers,
     0xFD = ForRange(exit: Label, var: Variable),
@@ -424,14 +431,29 @@ instructions! {
     0x139 = JsonDecode,
     0x13A = RegexNew(arg_count: u32),
     0x13B = FilterNewArgList,
-    0x13C = BeginListSetExpr,
+
+    // Pushes the value at the top of the stack (it clones it)
+    0x13C = PushTop,
+
+    // Pops the value _only_ if the jump is performed
     0x13D = JmpIfNull(destination: Label),
+
+    // Pops the value regardless of if the jump is performed
     0x13E = JmpIfNull2(destination: Label),
-    0x13F = NullCacheMaybe, // TODO
+
+    // This one's a bit of a beast. It seems that instructions such as AugAdd cause the offset of their variable operand to be cached
+    // This instruction then uses the operand at that offset to find what the "last" var was and push it.
+    // I haven't confirmed if anything but Aug* instructions set this value yet.
+    0x13F = PushEval,
+
     // 0x140 = Unk140,
     0x141 = TestNotEquiv,
-    0x142 = PushToCache,
-    0x143 = PopFromCache,
+
+    // These instructions interact with a separate stack than the other ones (although both stacks share the same memory allocation.)
+    // They push and pop the contents of the cache register
+    0x142 = PushCache,
+    0x143 = PopCache,
+
     0x144 = Tan,
     0x145 = ArcTan,
     0x146 = ArcTan2,
