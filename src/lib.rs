@@ -8,6 +8,7 @@ mod instructions;
 mod operands;
 mod operands_deserialize;
 pub mod parser;
+mod list_operands;
 
 use instructions::Instruction;
 

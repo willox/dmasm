@@ -23,6 +23,7 @@ pub enum DisassembleError {
     UnknownRangeParams { offset: u32, value: u32 },
     UnknownIsInOperand { offset: u32, value: u32 },
     UnknownValue { offset: u32, tag: u32 },
+    UnknownTypeFilter { offset: u32, value: u32 },
     Todo,
 }
 

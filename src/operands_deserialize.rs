@@ -1,4 +1,5 @@
 use crate::operands::{OperandDeserialize, *};
+use crate::list_operands::*;
 use crate::parser;
 use nom::bytes::complete::take_while;
 use nom::combinator::*;
@@ -125,6 +126,15 @@ impl OperandDeserialize for Value {
 }
 
 impl OperandDeserialize for Variable {
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    where
+        E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
+    {
+        panic!("TODO");
+    }
+}
+
+impl OperandDeserialize for TypeFilter {
     fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,

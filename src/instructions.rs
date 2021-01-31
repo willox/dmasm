@@ -4,6 +4,7 @@ use crate::{
     assembler::{AssembleEnv, Assembler},
     disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
     operands::*,
+    list_operands::*,
 };
 use std::fmt;
 
@@ -189,7 +190,7 @@ instructions! {
     // 0x4F = Unk4F,
     0x50 = PushInt(value: i32),
     0x51 = Pop,
-    0x52 = IterLoad(unk0: u32, unk1: u32),
+    0x52 = IterLoad(unk0: u32, types: TypeFilter),
     0x53 = IterNext,
     0x54 = IterPush,
     0x55 = IterPop,
