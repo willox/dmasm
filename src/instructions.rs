@@ -436,6 +436,7 @@ instructions! {
     0x13C = PushTop,
 
     // Pops the value _only_ if the jump is performed
+    // wait that might be backwards...
     0x13D = JmpIfNull(destination: Label),
 
     // Pops the value regardless of if the jump is performed
