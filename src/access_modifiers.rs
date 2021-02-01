@@ -40,7 +40,7 @@ access_modifiers! {
     World = 0xFFE5,
     Null = 0xFFE6,
     Initial = 0xFFE7,
-    // UnkFFE8 = 0xFFE8,
+    IsSaved = 0xFFE8,
     // UnkFFE9 = 0xFFE9,
     // UnkFFEA = 0xFFEA,
     // UnkFFEB = 0xFFEB,

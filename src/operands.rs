@@ -597,6 +597,7 @@ pub enum Variable {
     Global(DMString),
     SetCache(Box<Variable>, Box<Variable>),
     Initial(Box<Variable>),
+    IsSaved(Box<Variable>),
     Field(DMString),
     //Initial(Box<Variable>, Vec<DMString>),
     StaticVerb(Proc),
@@ -653,6 +654,7 @@ impl Operand for Variable {
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
             access_modifiers::SetCache => Variable::SetCache(Box::new(Variable::disassemble(dism)?), Box::new(Variable::disassemble(dism)?)),
             access_modifiers::Initial => Variable::Initial(Box::new(Variable::disassemble(dism)?)),
+            access_modifiers::IsSaved => Variable::IsSaved(Box::new(Variable::disassemble(dism)?)),
 
             access_modifiers::DynamicProc => Variable::DynamicProc(DMString::disassemble(dism)?),
             access_modifiers::DynamicVerb => Variable::DynamicVerb(DMString::disassemble(dism)?),
@@ -709,6 +711,11 @@ impl Operand for Variable {
             }
             Variable::Initial(var) => {
                 write!(f, "initial(")?;
+                var.serialize(f)?;
+                write!(f, ")")
+            }
+            Variable::IsSaved(var) => {
+                write!(f, "issaved(")?;
                 var.serialize(f)?;
                 write!(f, ")")
             }
