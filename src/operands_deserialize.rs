@@ -1,7 +1,6 @@
-use crate::operands::{OperandDeserialize, *};
 use crate::list_operands::*;
+use crate::operands::{OperandDeserialize, *};
 use crate::parser;
-use nom::bytes::complete::take_while;
 use nom::combinator::*;
 use nom::error::FromExternalError;
 use nom::error::ParseError;
@@ -49,15 +48,16 @@ impl OperandDeserialize for Proc {
 }
 
 impl OperandDeserialize for DMString {
-    fn deserialize<'a, E>(i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
         // TODO: String formatting
-        map(
-            delimited(char('"'), recognize(take_while(|x| x != '"')), char('"')),
-            |x: &str| DMString(x.into()),
-        )(i)
+        // map(
+        //     delimited(char('"'), recognize(take_while(|x| x != '"')), char('"')),
+        //     |x: &str| DMString(x.into()),
+        // )(i)
+        unimplemented!()
     }
 }
 

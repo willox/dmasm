@@ -4,10 +4,10 @@ use crate::Node;
 use std::collections::HashSet;
 
 pub trait DisassembleEnv {
-    fn get_string(&mut self, index: u32) -> Option<String>;
-    fn get_variable_name(&mut self, index: u32) -> Option<String>;
+    fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>>;
+    fn get_variable_name(&mut self, index: u32) -> Option<Vec<u8>>;
     fn get_proc_name(&mut self, index: u32) -> Option<String>;
-    fn value_to_string(&mut self, tag: u32, data: u32) -> Option<String>;
+    fn value_to_string_data(&mut self, tag: u32, data: u32) -> Option<Vec<u8>>;
 }
 
 #[derive(Debug, PartialEq)]
@@ -46,7 +46,7 @@ pub fn disassemble<'a, E: DisassembleEnv>(
         match Instruction::disassemble(&mut state) {
             Ok((ins, dbg)) => {
                 instructions.push((ins, dbg));
-            },
+            }
 
             Err(e) => {
                 err = Some(e);

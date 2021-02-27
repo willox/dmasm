@@ -3,8 +3,8 @@ use crate::parser;
 use crate::{
     assembler::{AssembleEnv, Assembler},
     disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
-    operands::*,
     list_operands::*,
+    operands::*,
 };
 use std::fmt;
 

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 pub trait AssembleEnv {
     /// Converts a rust string into the correct string identifier for the destination context
-    fn get_string_index(&mut self, string: &str) -> u32;
+    fn get_string_index(&mut self, string: &[u8]) -> u32;
 }
 
 pub struct Assembler<'a, E: AssembleEnv> {

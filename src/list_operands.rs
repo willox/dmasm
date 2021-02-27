@@ -14,7 +14,6 @@ pub enum Iterator {
     Block,
     View,
     OView,
-
 }
 
 pub static OVIEW: u32 = 0x08;
@@ -57,10 +56,12 @@ impl Operand for TypeFilter {
         let filter = match Self::from_bits(bits) {
             Some(filter) => filter,
 
-            None => return Err(DisassembleError::UnknownTypeFilter {
-                offset: dism.current_offset - 1,
-                value: bits,
-            }),
+            None => {
+                return Err(DisassembleError::UnknownTypeFilter {
+                    offset: dism.current_offset - 1,
+                    value: bits,
+                })
+            }
         };
 
         Ok(filter)

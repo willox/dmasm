@@ -142,7 +142,7 @@ impl Operand for Proc {
 // DMString
 //
 #[derive(PartialEq, Debug)]
-pub struct DMString(pub String);
+pub struct DMString(pub Vec<u8>);
 
 impl Operand for DMString {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
@@ -154,20 +154,98 @@ impl Operand for DMString {
         dism: &mut Disassembler<E>,
     ) -> Result<Self, DisassembleError> {
         let id = dism.read_u32()?;
-        let string = dism
+        let data = dism
             .env
-            .get_string(id)
+            .get_string_data(id)
             .ok_or(DisassembleError::InvalidString {
                 offset: dism.current_offset - 1,
                 id,
             })?;
 
-        Ok(DMString(string))
+        Ok(DMString(data))
     }
 
     // TODO: Formatting
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.0)
+        let mut format = vec![];
+        let mut iter = self.0.iter();
+
+        loop {
+            let byte = match iter.next() {
+                Some(x) => *x,
+                None => break,
+            };
+
+            if byte == 0xFF {
+                // NOTE: Doesn't hold state for formatting, so some strings relying on are a little off
+                format.extend_from_slice(match iter.next() {
+                    None => break,
+                    Some(1) | Some(2) | Some(3) | Some(4) => b"[]",
+                    Some(5) => b"[]\\th",
+                    Some(6) => b"\\a",
+                    Some(7) => b"\\A",
+                    Some(8) => b"\\the",
+                    Some(9) => b"\\The",
+                    Some(10) => b"\\he",
+                    Some(11) => b"\\He",
+                    Some(12) => b"\\his",
+                    Some(13) => b"\\His",
+                    Some(14) => b"\\hers",
+                    Some(15) => b"\\Hers",
+                    Some(16) => b"\\him ",
+                    Some(17) => b"\\himself",
+                    Some(18) => b"\\... ",
+                    Some(19) => b"\\n",
+                    Some(20) => b"\\s ",
+                    Some(21) => b"\\proper ",
+                    Some(22) => b"\\improper ",
+                    Some(23) => b"\\bold ",
+                    Some(24) => b"\\italic ",
+                    Some(25) => b"\\underline ",
+                    Some(26) => b"\\strike ",
+                    Some(27) => b"\\font",
+                    Some(28) => b"\\color",
+                    Some(29) => b"\\font",
+                    Some(30) => b"\\color",
+                    Some(31) => b"\\red ",
+                    Some(32) => b"\\green ",
+                    Some(33) => b"\\blue ",
+                    Some(34) => b"\\black ",
+                    Some(35) => b"\\white ",
+                    Some(36) => b"\\yellow ",
+                    Some(37) => b"\\cyan ",
+                    Some(38) => b"\\magenta ",
+                    Some(39) => b"\\beep ",
+                    Some(40) => b"\\link",
+                    Some(41) => b" \\link",
+                    Some(42) => b"\\ref[]",
+                    Some(43) => b"\\icon[]",
+                    Some(44) => b"\\roman[]",
+                    Some(45) => b"\\Roman[]",
+                    Some(_) => b"[UNKNONWN FORMAT SPECIFIER]",
+                });
+                continue;
+            }
+
+            if byte == b'\n' {
+                format.extend_from_slice(b"\\n");
+                continue;
+            }
+
+            if byte == b'\r' {
+                format.extend_from_slice(b"\\r");
+                continue;
+            }
+
+            // Escape \[]"" chars
+            if byte == b'\\' || byte == b'[' || byte == b']' || byte == b'"' {
+                format.push(b'\\');
+            }
+
+            format.push(byte);
+        }
+
+        write!(f, "\"{}\"", String::from_utf8_lossy(&format))
     }
 }
 
@@ -194,7 +272,7 @@ impl Operand for RangeParams {
             return Err(DisassembleError::UnknownRangeParams {
                 offset: dism.current_offset - 1,
                 value: param,
-            })
+            });
         }
 
         Ok(RangeParams)
@@ -231,10 +309,12 @@ impl Operand for IsInParams {
         let res = match param {
             0x0B => Self::Range,
             0x05 => Self::Value,
-            other => return Err(DisassembleError::UnknownIsInOperand {
-                offset: dism.current_offset - 1,
-                value: other,
-            }),
+            other => {
+                return Err(DisassembleError::UnknownIsInOperand {
+                    offset: dism.current_offset - 1,
+                    value: other,
+                })
+            }
         };
 
         Ok(res)
@@ -268,10 +348,7 @@ impl Operand for SwitchParams {
         let mut cases = vec![];
 
         for _ in 0..dism.read_u32()? {
-            cases.push((
-                Value::disassemble(dism)?,
-                Label::disassemble(dism)?,
-            ));
+            cases.push((Value::disassemble(dism)?, Label::disassemble(dism)?));
         }
 
         Ok(Self {
@@ -316,10 +393,7 @@ impl Operand for PickSwitchParams {
         let mut cases = vec![];
 
         for _ in 0..dism.read_u32()? {
-            cases.push((
-                u32::disassemble(dism)?,
-                Label::disassemble(dism)?,
-            ));
+            cases.push((u32::disassemble(dism)?, Label::disassemble(dism)?));
         }
 
         Ok(Self {
@@ -375,10 +449,7 @@ impl Operand for SwitchRangeParams {
         }
 
         for _ in 0..dism.read_u32()? {
-            cases.push((
-                Value::disassemble(dism)?,
-                Label::disassemble(dism)?,
-            ));
+            cases.push((Value::disassemble(dism)?, Label::disassemble(dism)?));
         }
 
         Ok(Self {
@@ -433,13 +504,10 @@ impl Operand for PickProbParams {
         let mut cases = vec![];
 
         for _ in 0..dism.read_u32()? {
-            cases.push(
-                Label::disassemble(dism)?);
+            cases.push(Label::disassemble(dism)?);
         }
 
-        Ok(Self {
-            cases,
-        })
+        Ok(Self { cases })
     }
 
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -527,7 +595,7 @@ impl Operand for Value {
             // This one's a bit dodgy. We can't use DMString::disassemble because our bytes are split apart
             0x06 => Self::DMString(DMString(
                 dism.env
-                    .get_string(data)
+                    .get_string_data(data)
                     .ok_or(DisassembleError::InvalidString { offset, id: data })?,
             )),
 
@@ -539,22 +607,29 @@ impl Operand for Value {
             }
 
             0x20 | 0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => Self::Path(
-                dism.env
-                    .value_to_string(tag, data)
-                    .ok_or(DisassembleError::UnknownValue { offset, tag })?,
+                String::from_utf8(
+                    dism.env
+                        .value_to_string_data(tag, data)
+                        .ok_or(DisassembleError::UnknownValue { offset, tag })?,
+                )
+                .map_err(|_| DisassembleError::UnknownValue { offset, tag })?,
             ),
 
             0x0C => Self::Resource(
-                dism.env
-                    .value_to_string(tag, data)
-                    .ok_or(DisassembleError::UnknownValue { offset, tag })?,
+                String::from_utf8(
+                    dism.env
+                        .value_to_string_data(tag, data)
+                        .ok_or(DisassembleError::UnknownValue { offset, tag })?,
+                )
+                .map_err(|_| DisassembleError::UnknownValue { offset, tag })?,
             ),
 
             0x27 if data == 0 => Self::File,
 
-            0x29 => {
-                Self::Raw { tag: tag as u8, data }
-            }
+            0x29 => Self::Raw {
+                tag: tag as u8,
+                data,
+            },
 
             _ => {
                 return Err(DisassembleError::UnknownValue { offset, tag });
@@ -573,7 +648,7 @@ impl Operand for Value {
             Value::Path(value) => write!(f, "{}", value),
             Value::Resource(value) => write!(f, "'{}'", value),
             Value::File => write!(f, "/file"),
-            Value::Raw {tag, data} => write!(f, "ref({:X}{:08X})", tag, data)
+            Value::Raw { tag, data } => write!(f, "ref({:X}{:08X})", tag, data),
         }
     }
 }
@@ -636,7 +711,7 @@ impl Operand for Variable {
         let param = dism.peek_u32().ok_or(DisassembleError::UnexpectedEnd)?;
 
         if !access_modifiers::is_access_modifier(param) {
-            return Ok(Variable::Field(DMString::disassemble(dism)?))
+            return Ok(Variable::Field(DMString::disassemble(dism)?));
         }
 
         let var = match dism.read_u32()? {
@@ -652,7 +727,10 @@ impl Operand for Variable {
             access_modifiers::Arg => Variable::Arg(dism.read_u32()?),
             access_modifiers::Local => Variable::Local(dism.read_u32()?),
             access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
-            access_modifiers::SetCache => Variable::SetCache(Box::new(Variable::disassemble(dism)?), Box::new(Variable::disassemble(dism)?)),
+            access_modifiers::SetCache => Variable::SetCache(
+                Box::new(Variable::disassemble(dism)?),
+                Box::new(Variable::disassemble(dism)?),
+            ),
             access_modifiers::Initial => Variable::Initial(Box::new(Variable::disassemble(dism)?)),
             access_modifiers::IsSaved => Variable::IsSaved(Box::new(Variable::disassemble(dism)?)),
 

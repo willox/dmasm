@@ -1,14 +1,14 @@
 #![allow(dead_code)]
 
 mod access_modifiers;
-pub mod assembler;
+mod assembler;
 pub mod disassembler;
 // pub mod builder;
 mod instructions;
+mod list_operands;
 mod operands;
 mod operands_deserialize;
-pub mod parser;
-mod list_operands;
+mod parser;
 
 use instructions::Instruction;
 
@@ -96,26 +96,26 @@ struct TestAssembleEnv;
 struct TestDisassembleEnv;
 
 impl assembler::AssembleEnv for TestAssembleEnv {
-    fn get_string_index(&mut self, _string: &str) -> u32 {
+    fn get_string_index(&mut self, _data: &[u8]) -> u32 {
         1337
     }
 }
 
 impl disassembler::DisassembleEnv for TestDisassembleEnv {
-    fn get_string(&mut self, index: u32) -> Option<String> {
-        Some(format!("(Test String for {})", index))
+    fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>> {
+        Some(format!("(Test String for {})", index).into_bytes())
     }
 
-    fn get_variable_name(&mut self, index: u32) -> Option<String> {
-        Some(format!("var_{}", index))
+    fn get_variable_name(&mut self, index: u32) -> Option<Vec<u8>> {
+        Some(format!("var_{}", index).into_bytes())
     }
 
     fn get_proc_name(&mut self, index: u32) -> Option<String> {
         Some(format!("/proc/func{}", index))
     }
 
-    fn value_to_string(&mut self, tag: u32, data: u32) -> Option<String> {
-        Some(format!("/datum/type{}/data{}", tag, data))
+    fn value_to_string_data(&mut self, tag: u32, data: u32) -> Option<Vec<u8>> {
+        Some(format!("/datum/type{}/data{}", tag, data).into_bytes())
     }
 }
 
@@ -135,7 +135,7 @@ End
     let bytecode = assembler::assemble(&nodes, &mut TestAssembleEnv);
 
     let mut env = TestDisassembleEnv;
-    let disassembled = disassembler::disassemble(&bytecode, &mut env).unwrap();
+    let (nodes, _error) = disassembler::disassemble(&bytecode, &mut env);
 
-    println!("{}", format_disassembly(&disassembled, Some(4)));
+    println!("{}", format_disassembly(&nodes, Some(4)));
 }
