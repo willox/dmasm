@@ -1,3 +1,5 @@
+(none of this is actually realised)
+
 # DMASM
 A fully documented assembly language that can be losslessly compiled to DM bytecode and back.
 
