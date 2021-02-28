@@ -477,6 +477,9 @@ instructions! {
     0x157 = SplitTextChar,
     0x158 = Text2NumRadix,
     0x159 = Num2TextRadix,
+
+    0x1337 = AuxtoolsDebugBreak,
+    0x1338 = AuxtoolsDebugBreakNop,
 }
 
 impl std::fmt::Display for Instruction {
