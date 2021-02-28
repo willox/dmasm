@@ -10,7 +10,8 @@ mod operands;
 mod operands_deserialize;
 mod parser;
 
-use instructions::Instruction;
+pub use instructions::Instruction;
+pub use disassembler::DebugData;
 
 use std::fmt::Write;
 
@@ -37,7 +38,7 @@ impl<D> std::fmt::Display for Node<D> {
 }
 
 /// Formats the output of the disassembler into a human readable format including offsets, bytecode, and assembly.
-pub fn format_disassembly(nodes: &[Node<disassembler::DebugData>], cursor: Option<u32>) -> String {
+pub fn format_disassembly(nodes: &[Node<DebugData>], cursor: Option<u32>) -> String {
     let mut buf = String::new();
 
     for node in nodes {
