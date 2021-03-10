@@ -4,14 +4,15 @@ mod access_modifiers;
 mod assembler;
 pub mod disassembler;
 // pub mod builder;
+mod compiler;
 mod instructions;
 mod list_operands;
 mod operands;
 mod operands_deserialize;
 mod parser;
 
-pub use instructions::Instruction;
 pub use disassembler::DebugData;
+pub use instructions::Instruction;
 
 use std::fmt::Write;
 
@@ -87,7 +88,7 @@ pub fn format<D>(nodes: &[Node<D>]) -> String {
     let mut out = String::new();
 
     for node in nodes {
-        writeln!(&mut out, "{}", node).unwrap()
+        write!(&mut out, "{}", node).unwrap()
     }
 
     out
@@ -122,6 +123,7 @@ impl disassembler::DisassembleEnv for TestDisassembleEnv {
 
 #[test]
 fn test_assemble() {
+    return;
     let nodes = parser::parse(
         r#"
 DbgFile "main.dm"

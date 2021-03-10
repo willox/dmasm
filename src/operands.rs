@@ -2,6 +2,7 @@ use crate::{
     assembler::{AssembleEnv, Assembler},
     disassembler::{DisassembleEnv, DisassembleError, Disassembler},
 };
+use std::borrow::Cow;
 use std::fmt;
 
 pub trait Operand: Sized {
