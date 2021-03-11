@@ -1,7 +1,7 @@
 use crate::operands::Operand;
 use crate::parser;
 use crate::{
-    assembler::{AssembleEnv, Assembler},
+    assembler::{AssembleEnv, AssembleError, Assembler},
     disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
     list_operands::*,
     operands::*,
@@ -24,15 +24,17 @@ macro_rules! instructions {
         }
 
         impl Instruction {
-            pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) {
+            pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) -> Result<(), AssembleError> {
                 match self {
                     $(
                         Self::$name$( ( $( $operand_name, )* ) )? => {
                             asm.emit($opcode);
-                            $( $( $operand_name.assemble(asm); )* )?
+                            $( $( $operand_name.assemble(asm)?; )* )?
                         }
                     )*
                 }
+
+                Ok(())
             }
 
             pub fn disassemble<'a, E: DisassembleEnv>(

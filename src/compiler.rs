@@ -126,10 +126,7 @@ impl<'a> Compiler<'a> {
 
     fn emit_find_var(&mut self, ident: dreammaker::ast::Ident) -> EvalKind {
         if let Some(index) = self.params.iter().rposition(|x| *x == ident) {
-            self.emit_ins(Instruction::GetVar(Variable::Arg(0)), None);
-            self.emit_ins(Instruction::PushInt(index as i32 + 1), None);
-            self.emit_ins(Instruction::ListGet, None);
-            return EvalKind::Stack;
+            return EvalKind::Var(Variable::Arg(index as u32));
         }
 
         EvalKind::Var(Variable::Global(DMString(ident.into())))
@@ -228,11 +225,14 @@ impl<'a> Compiler<'a> {
                             write!(&mut path, "{}{}", op, part).unwrap();
                         }
 
+                        /*
                         self.emit_ins(
                             Instruction::PushVal(Value::DMString(DMString(path.into()))),
                             Some(data),
                         );
                         self.emit_ins(Instruction::Text2Path, Some(data));
+                        */
+                        self.emit_ins(Instruction::PushVal(Value::Path(path)), Some(data));
                         EvalKind::Stack
                     }
 
@@ -244,72 +244,94 @@ impl<'a> Compiler<'a> {
                     return Ok(kind);
                 }
 
-                // To emit follow sub-expressions and unary operations we need
-                // a Variable reference to our value
-                let mut var = match kind {
-                    // Results on the stack are moved into the `Cache` register
-                    EvalKind::Stack => {
-                        self.emit_ins(Instruction::SetVar(Variable::Cache), Some(data));
-                        Variable::Cache
-                    }
-
-                    // Convert l-value field references to a normal variable chain
-                    EvalKind::Field(mut var, field) => {
-                        append_field(&mut var, DMString(field.into()));
-                        var
-                    }
-
-                    EvalKind::Var(var) => var,
-                };
-
-                let mut field_chain = vec![];
-
-                for sub_expr in follow {
-                    match sub_expr.elem {
-                        Follow::Field(index_kind, ident) => {
-                            match index_kind {
-                                // We just treat these as the same
-                                // TODO: Should we type check?
-                                IndexKind::Dot | IndexKind::Colon => {
-                                    field_chain.push(ident);
-                                }
-
-                                other => return Err(CompileError::UnsupportedIndexKind(other)),
-                            }
+                if !follow.is_empty() {
+                    // To emit follow sub-expressions we need a Variable reference to our value
+                    let mut var = match kind {
+                        // Results on the stack are moved into the `Cache` register
+                        EvalKind::Stack => {
+                            self.emit_ins(Instruction::SetVar(Variable::Cache), Some(data));
+                            Variable::Cache
                         }
 
-                        other => return Err(CompileError::UnsupportedSubExpr(other)),
+                        // Convert l-value field references to a normal variable chain
+                        EvalKind::Field(mut var, field) => {
+                            append_field(&mut var, DMString(field.into()));
+                            var
+                        }
+
+                        EvalKind::Var(var) => var,
+                    };
+
+                    let mut field_chain = vec![];
+
+                    for sub_expr in follow {
+                        match sub_expr.elem {
+                            Follow::Field(index_kind, ident) => {
+                                match index_kind {
+                                    // We just treat these as the same
+                                    // TODO: Should we type check?
+                                    IndexKind::Dot | IndexKind::Colon => {
+                                        field_chain.push(ident);
+                                    }
+
+                                    other => return Err(CompileError::UnsupportedIndexKind(other)),
+                                }
+                            }
+
+                            other => return Err(CompileError::UnsupportedSubExpr(other)),
+                        }
+                    }
+
+                    // BEGIN SUBEXPR BUILDER
+                    // TODO: Move into helper code
+                    var = match var {
+                        Variable::Cache => {
+                            // We're already in the cache so there's nothing to do here
+                            // This null gets replaced later
+                            Variable::Null
+                        }
+
+                        other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
+                    };
+
+                    if !field_chain.is_empty() {
+                        // We pull the last field out now so we can return an l-value reference later
+                        let last = field_chain.pop().unwrap();
+
+                        for field in field_chain {
+                            append_field(&mut var, DMString(field.into()));
+                        }
+
+                        // Early return if we have no unary ops
+                        // This is necessary so that we can return l-values
+                        if unary.is_empty() {
+                            return Ok(EvalKind::Field(var, last));
+                        }
+
+                        // If we didn't early exit, we still have some unary ops to do.
+                        // Move our value to the stack in preparation for that
+                        final_field(&mut var, DMString(last.into()));
+                        self.emit_ins(Instruction::GetVar(var), Some(data));
+                    }
+                } else {
+                    // Unary ops with no follows. This means we need our value on the stack
+                    match kind {
+                        // Results on the stack are already in the right place
+                        EvalKind::Stack => {},
+
+                        // Convert l-value field references to a normal variable chain
+                        EvalKind::Field(mut var, field) => {
+                            append_field(&mut var, DMString(field.into()));
+                            self.emit_ins(Instruction::GetVar(var), Some(data));
+                        }
+
+                        EvalKind::Var(var) => {
+                            self.emit_ins(Instruction::GetVar(var), Some(data));
+                        }
                     }
                 }
 
-                // BEGIN SUBEXPR BUILDER
-                // TODO: Move into helper code
-                var = match var {
-                    Variable::Cache => {
-                        // We're already in the cache so there's nothing to do here
-                        // This null gets replaced later
-                        Variable::Null
-                    }
 
-                    other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
-                };
-
-                // We pull the last field out now so we can return an l-value reference later
-                let last = field_chain.pop().unwrap();
-
-                for field in field_chain {
-                    append_field(&mut var, DMString(field.into()));
-                }
-
-                // Early return if we have no unary ops
-                // This is necessary so that we can return l-values
-                if unary.is_empty() {
-                    return Ok(EvalKind::Field(var, last));
-                }
-
-                // Before applying binary operations we have to move our value to the stack
-                final_field(&mut var, DMString(last.into()));
-                self.emit_ins(Instruction::GetVar(var), Some(data));
 
                 for op in unary.into_iter().rev() {
                     match op {
@@ -328,14 +350,14 @@ impl<'a> Compiler<'a> {
 
 #[test]
 fn compile_test() {
-    let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b.c".as_bytes());
-    //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
-    let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
-    context.assert_success();
-    println!("{:#?}\n\n\n", expr);
+    //let context: dreammaker::Context = Default::default();
+    //let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b.c".as_bytes());
+    ////let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
+    //let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
+    //context.assert_success();
+    //println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("\"a\".b.c.d", &["a"]);
+    let expr = compile_expr("(/mob).a", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

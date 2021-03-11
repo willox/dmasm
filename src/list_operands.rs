@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::{
-    assembler::{AssembleEnv, Assembler},
+    assembler::{AssembleEnv, AssembleError, Assembler},
     disassembler::{DisassembleEnv, DisassembleError, Disassembler},
 };
 
@@ -44,7 +44,7 @@ bitflags! {
 }
 
 impl Operand for TypeFilter {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         unimplemented!()
     }
 
