@@ -145,10 +145,16 @@ impl Operand for Proc {
 #[derive(PartialEq, Debug)]
 pub struct DMString(pub Vec<u8>);
 
+impl DMString {
+    fn get_string_index<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> u32 {
+        asm.env.get_string_index(&self.0)
+    }
+}
+
 impl Operand for DMString {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
-        let index = asm.env.get_string_index(&self.0);
-        asm.emit(index);
+        let idx = self.get_string_index(asm);
+        asm.emit(idx);
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -548,36 +554,27 @@ pub enum Value {
 
 impl Operand for Value {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
-        // TODO: WRONG!
-        match self {
-            Self::Null => {
-                asm.emit(0x00);
-                asm.emit(0x00);
-            }
-            Self::Raw { tag, data } => {
-                asm.emit(*tag as u32);
-                asm.emit(*data);
-            }
-            Self::DMString(value) => {
-                asm.emit(0x06);
-                value.assemble(asm);
-            }
+        let (tag, data): (u8, u32) = match self {
+            Self::Null => (0x00, 0x00),
+            Self::Raw { tag, data } => (*tag, *data),
+            Self::DMString(value) => (0x06, value.get_string_index(asm)),
 
-            Self::Number(value) => {
+            // Numbers are a special case. They use an extra operand.
+            Self::Number(num) => {
+                let bits = num.to_bits();
                 asm.emit(0x2A);
-                // Numbers store their data portion in the lower 16-bits of two operands
-                // TODO: test code
-                let bits = value.to_bits();
                 asm.emit((bits >> 16) & 0xFFFF);
                 asm.emit(bits & 0xFFFF);
+                return;
             }
 
-            Self::Path(..) | Self::Resource(..) | Self::File => {
-                // TODO: This _will_ bite me in the ass, implement assemble errors asap
-                asm.emit(0x00);
-                asm.emit(0x00);
-            }
-        }
+            // TODO: This _will_ bite me in the ass, implement assemble errors asap
+            Self::Path(..) | Self::Resource(..) | Self::File => (0x00, 0x00),
+        };
+
+        // The top 8 bits of data live in tag
+        asm.emit((tag as u32) | ((data & 0xFF0000) >> 8));
+        asm.emit(data & 0xFFFF);
     }
 
     fn disassemble<E: DisassembleEnv>(
