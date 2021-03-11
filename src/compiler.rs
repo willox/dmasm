@@ -8,6 +8,61 @@ use crate::operands::{DMString, Value, Variable};
 use crate::Instruction;
 use crate::Node;
 
+#[derive(Debug, PartialEq)]
+struct VariableChainBuilder {
+    var: Variable,
+}
+
+impl VariableChainBuilder {
+    fn begin(base: Variable) -> Self {
+        let var = match base {
+            Variable::Cache => {
+                // We're already in the cache so there's nothing to do here
+                // This null gets replaced later
+                Variable::Null
+            }
+
+            other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
+        };
+
+        Self {
+            var,
+        }
+    }
+
+    fn last_setcache_rhs(&mut self) -> Option<&mut Box<Variable>> {
+        if let Variable::SetCache(_, rhs) = &mut self.var {
+            if let Variable::SetCache { .. } = **rhs {
+                return last_setcache_rhs(rhs.as_mut());
+            }
+
+            return Some(rhs);
+        }
+
+        None
+    }
+
+    fn append(&mut self, field: DMString) {
+        if let Some(rhs) = self.last_setcache_rhs() {
+            **rhs = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
+            return;
+        }
+
+        // This is the first SetCache - discard the current var (which should be null)
+        assert!(self.var == Variable::Null);
+        self.var = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
+    }
+
+    fn finalise(mut self, field: DMString) -> Variable {
+        if let Some(rhs) = self.last_setcache_rhs() {
+            **rhs = Variable::Field(field);
+            return self.var;
+        }
+
+        Variable::Field(field)
+    }
+}
+
 fn last_setcache_rhs(var: &mut Variable) -> Option<&mut Box<Variable>> {
     if let Variable::SetCache(_, rhs) = var {
         if let Variable::SetCache { .. } = **rhs {
@@ -94,9 +149,9 @@ pub fn compile_expr(
             compiler.emit_ins(Instruction::Ret);
         }
 
-        EvalKind::Field(mut v, f) => {
-            final_field(&mut v, DMString(f.into()));
-            compiler.emit_ins(Instruction::GetVar(v));
+        EvalKind::Field(builder, f) => {
+            let var = builder.finalise(DMString(f.into()));
+            compiler.emit_ins(Instruction::GetVar(var));
             compiler.emit_ins(Instruction::Ret);
         }
     }
@@ -111,7 +166,7 @@ enum EvalKind {
     // The result of the expression can be accessed using a Variable operand
     Var(Variable),
     // Similar to Var, but more state
-    Field(Variable, String),
+    Field(VariableChainBuilder, String),
 }
 
 struct Compiler<'a> {
@@ -132,26 +187,26 @@ impl<'a> Compiler<'a> {
         EvalKind::Var(Variable::Global(DMString(ident.into())))
     }
 
-    fn emit_sub_expr(&mut self, follow: Vec<Spanned<Follow>>, kind: EvalKind) -> Result<EvalKind, CompileError> {
+    fn emit_follow(&mut self, follow: Vec<Spanned<Follow>>, kind: EvalKind) -> Result<EvalKind, CompileError> {
         if follow.is_empty() {
             return Ok(kind);
         }
 
         // We need a Variable reference to our value
-        let mut var = match kind {
+        let mut builder = match kind {
             // Results on the stack are moved into the `Cache` register
             EvalKind::Stack => {
                 self.emit_ins(Instruction::SetVar(Variable::Cache));
-                Variable::Cache
+                VariableChainBuilder::begin(Variable::Cache)
             }
 
             // Convert l-value field references to a normal variable chain
-            EvalKind::Field(mut var, field) => {
-                append_field(&mut var, DMString(field.into()));
-                var
+            EvalKind::Field(mut builder, field) => {
+                builder.append(DMString(field.into()));
+                builder
             }
 
-            EvalKind::Var(var) => var,
+            EvalKind::Var(var) => VariableChainBuilder::begin(var),
         };
 
         let mut field_chain = vec![];
@@ -174,28 +229,15 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        // BEGIN SUBEXPR BUILDER
-
-        // Move our variable into the `Cache` register
-        var = match var {
-            Variable::Cache => {
-                // We're already in the cache so there's nothing to do here
-                // This null gets replaced later
-                Variable::Null
-            }
-
-            other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
-        };
-
         if !field_chain.is_empty() {
-            // We pull the last field out now so we can return an l-value reference later
+            // We pull the last field out now so we can return an l-value reference
             let last = field_chain.pop().unwrap();
 
             for field in field_chain {
-                append_field(&mut var, DMString(field.into()));
+                builder.append(DMString(field.into()));
             }
 
-            return Ok(EvalKind::Field(var, last));
+            return Ok(EvalKind::Field(builder, last));
         } else {
             unreachable!()
         }
@@ -210,8 +252,8 @@ impl<'a> Compiler<'a> {
         match kind {
             EvalKind::Stack => {},
 
-            EvalKind::Field(mut var, field) => {
-                final_field(&mut var, DMString(field.into()));
+            EvalKind::Field(builder, field) => {
+                let var = builder.finalise(DMString(field.into()));
                 self.emit_ins(Instruction::GetVar(var));
             }
 
@@ -332,7 +374,7 @@ impl<'a> Compiler<'a> {
                     other => return Err(CompileError::UnsupportedExpressionTerm(other)),
                 };
 
-                let kind = self.emit_sub_expr(follow, kind)?;
+                let kind = self.emit_follow(follow, kind)?;
                 let kind = self.emit_unary_ops(unary, kind)?;
 
                 return Ok(kind);
