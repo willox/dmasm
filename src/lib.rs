@@ -25,6 +25,16 @@ pub enum Node<D = ()> {
     Instruction(Instruction, D),
 }
 
+impl<D> Node<D> {
+    pub fn strip_debug_data(self) -> Node {
+        match self {
+            Self::Comment(str) => Node::Comment(str),
+            Self::Label(str) => Node::Label(str),
+            Self::Instruction(ins, _debug) => Node::Instruction(ins, ()),
+        }
+    }
+}
+
 impl<D> std::fmt::Display for Node<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -94,12 +104,16 @@ pub fn format<D>(nodes: &[Node<D>]) -> String {
     out
 }
 
-struct TestAssembleEnv;
+pub(crate) struct TestAssembleEnv;
 struct TestDisassembleEnv;
 
 impl assembler::AssembleEnv for TestAssembleEnv {
     fn get_string_index(&mut self, _data: &[u8]) -> u32 {
         1337
+    }
+
+    fn get_variable_name_index(&mut self, _name: &[u8]) -> u32 {
+        1338
     }
 }
 

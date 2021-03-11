@@ -684,8 +684,67 @@ pub enum Variable {
 }
 
 impl Operand for Variable {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
-        panic!("TODO")
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+        use crate::access_modifiers;
+
+        fn write_variable_name<E: AssembleEnv>(asm: &mut Assembler<E>, name: &DMString) {
+            let id = asm.env.get_variable_name_index(&name.0);
+            asm.emit(id);
+        }
+
+        match self {
+            Variable::Null => asm.emit(access_modifiers::Null),
+            Variable::World => asm.emit(access_modifiers::World),
+            Variable::Usr => asm.emit(access_modifiers::Usr),
+            Variable::Src => asm.emit(access_modifiers::Src),
+            Variable::Args => asm.emit(access_modifiers::Args),
+            Variable::Dot => asm.emit(access_modifiers::Dot),
+            Variable::Cache => asm.emit(access_modifiers::Cache),
+            Variable::CacheKey => asm.emit(access_modifiers::CacheKey),
+            Variable::CacheIndex => asm.emit(access_modifiers::CacheIndex),
+            Variable::Field(name) => name.assemble(asm),
+            Variable::Arg(idx) => {
+                asm.emit(access_modifiers::Arg);
+                asm.emit(*idx);
+            }
+            Variable::Local(idx) => {
+                asm.emit(access_modifiers::Local);
+                asm.emit(*idx);
+            }
+            Variable::Global(name) => {
+                asm.emit(access_modifiers::Global);
+                write_variable_name(asm, name);
+            }
+            Variable::SetCache(lhs, rhs) => {
+                asm.emit(access_modifiers::SetCache);
+                lhs.assemble(asm);
+                rhs.assemble(asm);
+            }
+            Variable::Initial(rhs) => {
+                asm.emit(access_modifiers::Initial);
+                rhs.assemble(asm);
+            }
+            Variable::IsSaved(rhs) => {
+                asm.emit(access_modifiers::IsSaved);
+                rhs.assemble(asm);
+            }
+            Variable::DynamicProc(name) => {
+                asm.emit(access_modifiers::DynamicProc);
+                name.assemble(asm);
+            }
+            Variable::DynamicVerb(name) => {
+                asm.emit(access_modifiers::DynamicVerb);
+                name.assemble(asm);
+            }
+            Variable::StaticProc(proc) => {
+                asm.emit(access_modifiers::StaticProc);
+                proc.assemble(asm);
+            }
+            Variable::StaticVerb(proc) => {
+                asm.emit(access_modifiers::StaticVerb);
+                proc.assemble(asm);
+            }
+        }
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -693,7 +752,7 @@ impl Operand for Variable {
     ) -> Result<Self, DisassembleError> {
         use crate::access_modifiers;
 
-        pub fn read_variable_name<E: DisassembleEnv>(
+        fn read_variable_name<E: DisassembleEnv>(
             dism: &mut Disassembler<E>,
         ) -> Result<DMString, DisassembleError> {
             let id = dism.read_u32()?;

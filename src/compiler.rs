@@ -10,7 +10,7 @@ use crate::Node;
 
 fn last_setcache_rhs(var: &mut Variable) -> Option<&mut Box<Variable>> {
     if let Variable::SetCache(_, rhs) = var {
-        if let Variable::SetCache {..} = **rhs {
+        if let Variable::SetCache { .. } = **rhs {
             return last_setcache_rhs(rhs.as_mut());
         }
 
@@ -291,9 +291,7 @@ impl<'a> Compiler<'a> {
                         Variable::Null
                     }
 
-                    other => {
-                        Variable::SetCache(Box::new(other), Box::new(Variable::Null))
-                    }
+                    other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
                 };
 
                 // We pull the last field out now so we can return an l-value reference later
@@ -337,10 +335,17 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("- -(-a.b).c", &["a"]);
+    let expr = compile_expr("a.b.c.d", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
         println!("{}", crate::format(&expr));
+
+        let stripped: Vec<Node> = expr
+            .into_iter()
+            .map(Node::<Option<CompileData>>::strip_debug_data)
+            .collect();
+        let code = crate::assembler::assemble(&stripped, &mut crate::TestAssembleEnv);
+        println!("{:#x?}", code);
     }
 }
