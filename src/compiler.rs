@@ -401,12 +401,6 @@ impl<'a> Compiler<'a> {
 
                     // Resources
                     Term::Resource(resource) => {
-                        /*
-                        self.emit_ins(
-                            Instruction::PushVal(Value::DMString(DMString(resource.into())))
-                        );
-                        self.emit_ins(Instruction::Text2File);
-                        */
                         self.emit_ins(Instruction::PushVal(Value::Resource(resource)));
                         EvalKind::Stack
                     }
@@ -425,13 +419,6 @@ impl<'a> Compiler<'a> {
                             write!(&mut path, "{}{}", op, part).unwrap();
                         }
 
-                        /*
-                        self.emit_ins(
-                            Instruction::PushVal(Value::DMString(DMString(path.into()))),
-                            Some(data),
-                        );
-                        self.emit_ins(Instruction::Text2Path, Some(data));
-                        */
                         self.emit_ins(Instruction::PushVal(Value::Path(path)));
                         EvalKind::Stack
                     }
