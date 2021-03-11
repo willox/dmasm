@@ -144,6 +144,11 @@ pub fn compile_expr(
             compiler.emit_ins(Instruction::Ret);
         }
 
+        EvalKind::ListRef => {
+            compiler.emit_ins(Instruction::ListGet);
+            compiler.emit_ins(Instruction::Ret);
+        }
+
         EvalKind::Var(v) => {
             compiler.emit_ins(Instruction::GetVar(v));
             compiler.emit_ins(Instruction::Ret);
@@ -163,6 +168,8 @@ pub fn compile_expr(
 enum EvalKind {
     // The result of the expression will be on the top of the stack
     Stack,
+    // The result of the expression is a list entry L[K] where the top of the stack is the index and the 2nd top of the stack is the list
+    ListRef,
     // The result of the expression can be accessed using a Variable operand
     Var(Variable),
     // Similar to Var, but more state
@@ -187,29 +194,51 @@ impl<'a> Compiler<'a> {
         EvalKind::Var(Variable::Global(DMString(ident.into())))
     }
 
-    fn emit_follow(&mut self, follow: Vec<Spanned<Follow>>, kind: EvalKind) -> Result<EvalKind, CompileError> {
+    fn emit_follow(&mut self, follow: Vec<Spanned<Follow>>, mut kind: EvalKind) -> Result<EvalKind, CompileError> {
         if follow.is_empty() {
             return Ok(kind);
         }
 
-        // We need a Variable reference to our value
-        let mut builder = match kind {
-            // Results on the stack are moved into the `Cache` register
-            EvalKind::Stack => {
-                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                VariableChainBuilder::begin(Variable::Cache)
+        // sequential field accessors (example: a.b.c) get buffered into a single operand
+        let mut field_buffer = vec![];
+
+        fn commit_field_buffer(compiler: &mut Compiler, kind: EvalKind, field_chain: &mut Vec<String>) -> EvalKind {
+            if field_chain.is_empty() {
+                return kind;
             }
 
-            // Convert l-value field references to a normal variable chain
-            EvalKind::Field(mut builder, field) => {
-                builder.append(DMString(field.into()));
-                builder
+            // We need a value
+            let mut builder = match kind {
+                EvalKind::Stack => {
+                    compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+                    VariableChainBuilder::begin(Variable::Cache)
+                }
+
+                EvalKind::ListRef => {
+                    compiler.emit_ins(Instruction::ListGet);
+                    compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+                    VariableChainBuilder::begin(Variable::Cache)
+                }
+
+                EvalKind::Field(mut builder, field) => {
+                    builder.append(DMString(field.into()));
+                    builder
+                }
+
+                EvalKind::Var(var) => {
+                    VariableChainBuilder::begin(var)
+                }
+            };
+
+            let last = field_chain.pop().unwrap();
+
+            for field in field_chain.iter() {
+                builder.append(DMString(field.clone().into()));
             }
 
-            EvalKind::Var(var) => VariableChainBuilder::begin(var),
-        };
-
-        let mut field_chain = vec![];
+            field_chain.clear();
+            EvalKind::Field(builder, last)
+        }
 
         for sub_expr in follow {
             match sub_expr.elem {
@@ -218,29 +247,61 @@ impl<'a> Compiler<'a> {
                         // We just treat these as the same
                         // TODO: Should we type check?
                         IndexKind::Dot | IndexKind::Colon => {
-                            field_chain.push(ident);
+                            field_buffer.push(ident);
                         }
 
                         other => return Err(CompileError::UnsupportedIndexKind(other)),
                     }
                 }
 
+                Follow::Index(expr) => {
+                    kind = commit_field_buffer(self, kind, &mut field_buffer);
+
+                    // Move base to the stack
+                    match kind {
+                        EvalKind::Stack => {},
+
+                        EvalKind::ListRef => {
+                            self.emit_ins(Instruction::ListGet);
+                        }
+
+                        EvalKind::Var(var) => {
+                            self.emit_ins(Instruction::GetVar(var));
+                        }
+
+                        EvalKind::Field(builder, field) => {
+                            let var = builder.finalise(DMString(field.into()));
+                            self.emit_ins(Instruction::GetVar(var));
+                        }
+                    }
+
+                    // Handle inner expression and move it to the stack
+                    match self.parse_expr(*expr)? {
+                        EvalKind::Stack => {}
+
+                        EvalKind::ListRef => {
+                            self.emit_ins(Instruction::ListGet);
+                        }
+
+                        EvalKind::Var(var) => {
+                            self.emit_ins(Instruction::GetVar(var));
+                        }
+
+                        EvalKind::Field(builder, field) => {
+                            let var = builder.finalise(DMString(field.into()));
+                            self.emit_ins(Instruction::GetVar(var));
+                        }
+                    }
+
+                    kind = EvalKind::ListRef;
+                }
+
                 other => return Err(CompileError::UnsupportedSubExpr(other)),
             }
         }
 
-        if !field_chain.is_empty() {
-            // We pull the last field out now so we can return an l-value reference
-            let last = field_chain.pop().unwrap();
-
-            for field in field_chain {
-                builder.append(DMString(field.into()));
-            }
-
-            return Ok(EvalKind::Field(builder, last));
-        } else {
-            unreachable!()
-        }
+        kind = commit_field_buffer(self, kind, &mut field_buffer);
+        Ok(kind)
     }
 
     fn emit_unary_ops(&mut self, unary: Vec<UnaryOp>, kind: EvalKind) -> Result<EvalKind, CompileError> {
@@ -251,6 +312,10 @@ impl<'a> Compiler<'a> {
         // Unary ops need our value on the stack
         match kind {
             EvalKind::Stack => {},
+
+            EvalKind::ListRef => {
+                self.emit_ins(Instruction::ListGet);
+            }
 
             EvalKind::Field(builder, field) => {
                 let var = builder.finalise(DMString(field.into()));
@@ -385,14 +450,14 @@ impl<'a> Compiler<'a> {
 
 #[test]
 fn compile_test() {
-    //let context: dreammaker::Context = Default::default();
-    //let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b.c".as_bytes());
-    ////let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
-    //let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
-    //context.assert_success();
-    //println!("{:#?}\n\n\n", expr);
+    let context: dreammaker::Context = Default::default();
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[\"c\"].d".as_bytes());
+    //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
+    let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
+    context.assert_success();
+    println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("(-a.b).c", &["a"]);
+    let expr = compile_expr("-a.b[a.c].g.f[2]", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
