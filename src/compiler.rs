@@ -8,6 +8,17 @@ use crate::operands::{DMString, Value, Variable};
 use crate::Instruction;
 use crate::Node;
 
+// TODO: Think
+fn is_l_value(var: &Variable) -> bool {
+    match var {
+        // Does Field count? We probably don't hit that code path but it might count
+        Variable::Dot | Variable::CacheIndex | Variable::Arg {..} | Variable::Local {..} | Variable::Global {..}  => {
+            true
+        }
+        _ => false
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct VariableChainBuilder {
     var: Variable,
@@ -113,7 +124,7 @@ pub enum CompileError {
     UnsupportedIndexKind(dreammaker::ast::IndexKind),
     UnsupportedPrefabWithVars,
     MultipleUnaryMutations,
-    UnaryMutationsNotImplemented,
+    ExpectedLValue,
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -304,39 +315,83 @@ impl<'a> Compiler<'a> {
         Ok(kind)
     }
 
-    fn emit_unary_ops(&mut self, unary: Vec<UnaryOp>, kind: EvalKind) -> Result<EvalKind, CompileError> {
+    fn emit_unary_ops(&mut self, unary: Vec<UnaryOp>, mut kind: EvalKind) -> Result<EvalKind, CompileError> {
         if unary.is_empty() {
             return Ok(kind);
         }
 
-        // Unary ops need our value on the stack
-        match kind {
-            EvalKind::Stack => {},
+        fn emit_unary_op(compiler: &mut Compiler, op: UnaryOp, kind: EvalKind) -> Result<EvalKind, CompileError> {
+            match op {
+                // Simple unary ops
+                UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot => {
+                    // These ops need the value on the stack
+                    match kind {
+                        EvalKind::Stack => {},
 
-            EvalKind::ListRef => {
-                self.emit_ins(Instruction::ListGet);
+                        EvalKind::ListRef => {
+                            compiler.emit_ins(Instruction::ListGet);
+                        }
+
+                        EvalKind::Field(builder, field) => {
+                            let var = builder.finalise(DMString(field.into()));
+                            compiler.emit_ins(Instruction::GetVar(var));
+                        }
+
+                        EvalKind::Var(var) => {
+                            compiler.emit_ins(Instruction::GetVar(var));
+                        }
+                    }
+
+                    match op {
+                        UnaryOp::Neg => compiler.emit_ins(Instruction::UnaryNeg),
+                        UnaryOp::Not => compiler.emit_ins(Instruction::Not),
+                        UnaryOp::BitNot => compiler.emit_ins(Instruction::Bnot),
+                        _ => unreachable!()
+                    }
+                }
+
+                // l-value mutating unary ops
+                UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr => {
+                    // These ops require an l-value
+                    let var = match kind {
+                        EvalKind::Var(var) if is_l_value(&var) => {
+                            var
+                        }
+
+                        EvalKind::Field(builder, field) => {
+                            builder.finalise(DMString(field.into()))
+                        }
+
+                        EvalKind::ListRef => {
+                            compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
+                            compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+                            Variable::CacheIndex
+                        }
+
+                        _ => return Err(CompileError::ExpectedLValue),
+                    };
+
+                    match op {
+                        UnaryOp::PreIncr => compiler.emit_ins(Instruction::PreInc(var)),
+                        UnaryOp::PostIncr => compiler.emit_ins(Instruction::PostInc(var)),
+                        UnaryOp::PreDecr => compiler.emit_ins(Instruction::PreDec(var)),
+                        UnaryOp::PostDecr => compiler.emit_ins(Instruction::PostDec(var)),
+                        _ => unreachable!()
+                    }
+                }
             }
 
-            EvalKind::Field(builder, field) => {
-                let var = builder.finalise(DMString(field.into()));
-                self.emit_ins(Instruction::GetVar(var));
-            }
-
-            EvalKind::Var(var) => {
-                self.emit_ins(Instruction::GetVar(var));
-            }
+            Ok(EvalKind::Stack)
         }
+
+        // Unary ops need our value on the stack
+
 
         for op in unary.into_iter().rev() {
-            match op {
-                UnaryOp::Neg => self.emit_ins(Instruction::UnaryNeg),
-                UnaryOp::Not => self.emit_ins(Instruction::Not),
-                UnaryOp::BitNot => self.emit_ins(Instruction::Bnot),
-                other => return Err(CompileError::UnsupportedUnaryOp(other)),
-            }
+            kind = emit_unary_op(self, op, kind)?;
         }
 
-        return Ok(EvalKind::Stack);
+        return Ok(kind);
     }
 
     fn parse_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
@@ -350,28 +405,6 @@ impl<'a> Compiler<'a> {
                 term,
                 follow,
             } => {
-                // r-value mutation will be a special case
-                // TODO: this won't be necessary
-                {
-                    let r_val_mutate_count = unary
-                        .iter()
-                        .filter(|x| {
-                            **x == UnaryOp::PostIncr
-                                || **x == UnaryOp::PostDecr
-                                || **x == UnaryOp::PreIncr
-                                || **x == UnaryOp::PreDecr
-                        })
-                        .count();
-
-                    if r_val_mutate_count > 1 {
-                        return Err(CompileError::MultipleUnaryMutations);
-                    }
-
-                    if r_val_mutate_count > 0 {
-                        return Err(CompileError::UnaryMutationsNotImplemented);
-                    }
-                }
-
                 let kind = match term.elem {
                     // Nested expression, probably something in brackets
                     Term::Expr(expr) => self.parse_expr(*expr)?,
@@ -438,13 +471,13 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[\"c\"].d".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[\"c\"].d++".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("-a.b[a.c].g.f[2]", &["a"]);
+    let expr = compile_expr("--a.b[(a.c)++]", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
