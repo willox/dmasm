@@ -1,16 +1,17 @@
 #![allow(dead_code)]
 
 mod access_modifiers;
-mod assembler;
+pub mod assembler;
 pub mod disassembler;
 // pub mod builder;
-mod compiler;
+pub mod compiler;
 mod instructions;
 mod list_operands;
 mod operands;
 mod operands_deserialize;
 mod parser;
 
+pub use compiler::CompileData;
 pub use disassembler::DebugData;
 pub use instructions::Instruction;
 

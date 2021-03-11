@@ -335,7 +335,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a.b.c.d", &["a"]);
+    let expr = compile_expr("\"a\".b.c.d", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
