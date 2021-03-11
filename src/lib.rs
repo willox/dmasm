@@ -150,7 +150,7 @@ End
     )
     .unwrap();
 
-    let bytecode = assembler::assemble(&nodes, &mut TestAssembleEnv);
+    let bytecode = assembler::assemble(&nodes, &mut TestAssembleEnv).unwrap();
 
     let mut env = TestDisassembleEnv;
     let (nodes, _error) = disassembler::disassemble(&bytecode, &mut env);

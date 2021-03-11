@@ -1,4 +1,4 @@
-use dreammaker::ast::Expression;
+use dreammaker::ast::{Expression, Spanned};
 use dreammaker::ast::Follow;
 use dreammaker::ast::IndexKind;
 use dreammaker::ast::Term;
@@ -86,18 +86,18 @@ pub fn compile_expr(
 
     match compiler.parse_expr(expr)? {
         EvalKind::Stack => {
-            compiler.emit_ins(Instruction::Ret, None);
+            compiler.emit_ins(Instruction::Ret);
         }
 
         EvalKind::Var(v) => {
-            compiler.emit_ins(Instruction::GetVar(v), None);
-            compiler.emit_ins(Instruction::Ret, None);
+            compiler.emit_ins(Instruction::GetVar(v));
+            compiler.emit_ins(Instruction::Ret);
         }
 
         EvalKind::Field(mut v, f) => {
             final_field(&mut v, DMString(f.into()));
-            compiler.emit_ins(Instruction::GetVar(v), None);
-            compiler.emit_ins(Instruction::Ret, None);
+            compiler.emit_ins(Instruction::GetVar(v));
+            compiler.emit_ins(Instruction::Ret);
         }
     }
 
@@ -120,8 +120,8 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    fn emit_ins(&mut self, ins: Instruction, data: Option<CompileData>) {
-        self.nodes.push(Node::Instruction(ins, data));
+    fn emit_ins(&mut self, ins: Instruction) {
+        self.nodes.push(Node::Instruction(ins, None));
     }
 
     fn emit_find_var(&mut self, ident: dreammaker::ast::Ident) -> EvalKind {
@@ -130,6 +130,106 @@ impl<'a> Compiler<'a> {
         }
 
         EvalKind::Var(Variable::Global(DMString(ident.into())))
+    }
+
+    fn emit_sub_expr(&mut self, follow: Vec<Spanned<Follow>>, kind: EvalKind) -> Result<EvalKind, CompileError> {
+        if follow.is_empty() {
+            return Ok(kind);
+        }
+
+        // We need a Variable reference to our value
+        let mut var = match kind {
+            // Results on the stack are moved into the `Cache` register
+            EvalKind::Stack => {
+                self.emit_ins(Instruction::SetVar(Variable::Cache));
+                Variable::Cache
+            }
+
+            // Convert l-value field references to a normal variable chain
+            EvalKind::Field(mut var, field) => {
+                append_field(&mut var, DMString(field.into()));
+                var
+            }
+
+            EvalKind::Var(var) => var,
+        };
+
+        let mut field_chain = vec![];
+
+        for sub_expr in follow {
+            match sub_expr.elem {
+                Follow::Field(index_kind, ident) => {
+                    match index_kind {
+                        // We just treat these as the same
+                        // TODO: Should we type check?
+                        IndexKind::Dot | IndexKind::Colon => {
+                            field_chain.push(ident);
+                        }
+
+                        other => return Err(CompileError::UnsupportedIndexKind(other)),
+                    }
+                }
+
+                other => return Err(CompileError::UnsupportedSubExpr(other)),
+            }
+        }
+
+        // BEGIN SUBEXPR BUILDER
+
+        // Move our variable into the `Cache` register
+        var = match var {
+            Variable::Cache => {
+                // We're already in the cache so there's nothing to do here
+                // This null gets replaced later
+                Variable::Null
+            }
+
+            other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
+        };
+
+        if !field_chain.is_empty() {
+            // We pull the last field out now so we can return an l-value reference later
+            let last = field_chain.pop().unwrap();
+
+            for field in field_chain {
+                append_field(&mut var, DMString(field.into()));
+            }
+
+            return Ok(EvalKind::Field(var, last));
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn emit_unary_ops(&mut self, unary: Vec<UnaryOp>, kind: EvalKind) -> Result<EvalKind, CompileError> {
+        if unary.is_empty() {
+            return Ok(kind);
+        }
+
+        // Unary ops need our value on the stack
+        match kind {
+            EvalKind::Stack => {},
+
+            EvalKind::Field(mut var, field) => {
+                final_field(&mut var, DMString(field.into()));
+                self.emit_ins(Instruction::GetVar(var));
+            }
+
+            EvalKind::Var(var) => {
+                self.emit_ins(Instruction::GetVar(var));
+            }
+        }
+
+        for op in unary.into_iter().rev() {
+            match op {
+                UnaryOp::Neg => self.emit_ins(Instruction::UnaryNeg),
+                UnaryOp::Not => self.emit_ins(Instruction::Not),
+                UnaryOp::BitNot => self.emit_ins(Instruction::Bnot),
+                other => return Err(CompileError::UnsupportedUnaryOp(other)),
+            }
+        }
+
+        return Ok(EvalKind::Stack);
     }
 
     fn parse_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
@@ -143,13 +243,8 @@ impl<'a> Compiler<'a> {
                 term,
                 follow,
             } => {
-                let data = CompileData {
-                    line: term.location.line,
-                    column: term.location.column,
-                };
-
                 // r-value mutation will be a special case
-                // TODO:
+                // TODO: this won't be necessary
                 {
                     let r_val_mutate_count = unary
                         .iter()
@@ -176,21 +271,20 @@ impl<'a> Compiler<'a> {
 
                     // Simple stack pushes
                     Term::Null => {
-                        self.emit_ins(Instruction::PushVal(Value::Null), Some(data));
+                        self.emit_ins(Instruction::PushVal(Value::Null));
                         EvalKind::Stack
                     }
                     Term::Int(i) => {
-                        self.emit_ins(Instruction::PushInt(i), Some(data));
+                        self.emit_ins(Instruction::PushInt(i));
                         EvalKind::Stack
                     }
                     Term::Float(f) => {
-                        self.emit_ins(Instruction::PushVal(Value::Number(f)), Some(data));
+                        self.emit_ins(Instruction::PushVal(Value::Number(f)));
                         EvalKind::Stack
                     }
                     Term::String(str) => {
                         self.emit_ins(
-                            Instruction::PushVal(Value::DMString(DMString(str.into()))),
-                            Some(data),
+                            Instruction::PushVal(Value::DMString(DMString(str.into())))
                         );
                         EvalKind::Stack
                     }
@@ -198,20 +292,19 @@ impl<'a> Compiler<'a> {
                     // Identifiers. These could be params or globals.
                     Term::Ident(ident) => self.emit_find_var(ident),
 
-                    // Resources: We just find these using Text2File
-                    // TODO: Runtime if not found
+                    // Resources
                     Term::Resource(resource) => {
+                        /*
                         self.emit_ins(
-                            Instruction::PushVal(Value::DMString(DMString(resource.into()))),
-                            Some(data),
+                            Instruction::PushVal(Value::DMString(DMString(resource.into())))
                         );
-                        self.emit_ins(Instruction::Text2File, Some(data));
+                        self.emit_ins(Instruction::Text2File);
+                        */
+                        self.emit_ins(Instruction::PushVal(Value::Resource(resource)));
                         EvalKind::Stack
                     }
 
                     // Type paths: We don't support the anonymous kind with variable declarations.
-                    // We also just find these by using Text2Path at runtime
-                    // TODO: Runtime if not found
                     Term::Prefab(prefab) => {
                         if !prefab.vars.is_empty() {
                             return Err(CompileError::UnsupportedPrefabWithVars);
@@ -232,117 +325,17 @@ impl<'a> Compiler<'a> {
                         );
                         self.emit_ins(Instruction::Text2Path, Some(data));
                         */
-                        self.emit_ins(Instruction::PushVal(Value::Path(path)), Some(data));
+                        self.emit_ins(Instruction::PushVal(Value::Path(path)));
                         EvalKind::Stack
                     }
 
                     other => return Err(CompileError::UnsupportedExpressionTerm(other)),
                 };
 
-                // Early exit that allows for propagating stack and l-values
-                if follow.is_empty() && unary.is_empty() {
-                    return Ok(kind);
-                }
+                let kind = self.emit_sub_expr(follow, kind)?;
+                let kind = self.emit_unary_ops(unary, kind)?;
 
-                if !follow.is_empty() {
-                    // To emit follow sub-expressions we need a Variable reference to our value
-                    let mut var = match kind {
-                        // Results on the stack are moved into the `Cache` register
-                        EvalKind::Stack => {
-                            self.emit_ins(Instruction::SetVar(Variable::Cache), Some(data));
-                            Variable::Cache
-                        }
-
-                        // Convert l-value field references to a normal variable chain
-                        EvalKind::Field(mut var, field) => {
-                            append_field(&mut var, DMString(field.into()));
-                            var
-                        }
-
-                        EvalKind::Var(var) => var,
-                    };
-
-                    let mut field_chain = vec![];
-
-                    for sub_expr in follow {
-                        match sub_expr.elem {
-                            Follow::Field(index_kind, ident) => {
-                                match index_kind {
-                                    // We just treat these as the same
-                                    // TODO: Should we type check?
-                                    IndexKind::Dot | IndexKind::Colon => {
-                                        field_chain.push(ident);
-                                    }
-
-                                    other => return Err(CompileError::UnsupportedIndexKind(other)),
-                                }
-                            }
-
-                            other => return Err(CompileError::UnsupportedSubExpr(other)),
-                        }
-                    }
-
-                    // BEGIN SUBEXPR BUILDER
-                    // TODO: Move into helper code
-                    var = match var {
-                        Variable::Cache => {
-                            // We're already in the cache so there's nothing to do here
-                            // This null gets replaced later
-                            Variable::Null
-                        }
-
-                        other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
-                    };
-
-                    if !field_chain.is_empty() {
-                        // We pull the last field out now so we can return an l-value reference later
-                        let last = field_chain.pop().unwrap();
-
-                        for field in field_chain {
-                            append_field(&mut var, DMString(field.into()));
-                        }
-
-                        // Early return if we have no unary ops
-                        // This is necessary so that we can return l-values
-                        if unary.is_empty() {
-                            return Ok(EvalKind::Field(var, last));
-                        }
-
-                        // If we didn't early exit, we still have some unary ops to do.
-                        // Move our value to the stack in preparation for that
-                        final_field(&mut var, DMString(last.into()));
-                        self.emit_ins(Instruction::GetVar(var), Some(data));
-                    }
-                } else {
-                    // Unary ops with no follows. This means we need our value on the stack
-                    match kind {
-                        // Results on the stack are already in the right place
-                        EvalKind::Stack => {},
-
-                        // Convert l-value field references to a normal variable chain
-                        EvalKind::Field(mut var, field) => {
-                            append_field(&mut var, DMString(field.into()));
-                            self.emit_ins(Instruction::GetVar(var), Some(data));
-                        }
-
-                        EvalKind::Var(var) => {
-                            self.emit_ins(Instruction::GetVar(var), Some(data));
-                        }
-                    }
-                }
-
-
-
-                for op in unary.into_iter().rev() {
-                    match op {
-                        UnaryOp::Neg => self.emit_ins(Instruction::UnaryNeg, Some(data)),
-                        UnaryOp::Not => self.emit_ins(Instruction::Not, Some(data)),
-                        UnaryOp::BitNot => self.emit_ins(Instruction::Bnot, Some(data)),
-                        other => return Err(CompileError::UnsupportedUnaryOp(other)),
-                    }
-                }
-
-                return Ok(EvalKind::Stack);
+                return Ok(kind);
             }
         }
     }
@@ -357,7 +350,7 @@ fn compile_test() {
     //context.assert_success();
     //println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("(/mob).a", &["a"]);
+    let expr = compile_expr("(-a.b).c", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
