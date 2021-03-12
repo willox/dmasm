@@ -1,4 +1,4 @@
-use crate::{Node, operands};
+use crate::{operands, Node};
 use std::collections::HashMap;
 
 pub trait AssembleEnv {

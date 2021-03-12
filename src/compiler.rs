@@ -1,10 +1,10 @@
-use dreammaker::ast::{Expression, Spanned};
 use dreammaker::ast::Follow;
 use dreammaker::ast::IndexKind;
 use dreammaker::ast::Term;
-use dreammaker::ast::UnaryOp;
+use dreammaker::ast::{BinaryOp, UnaryOp};
+use dreammaker::ast::{Expression, Spanned};
 
-use crate::operands::{DMString, Value, Variable};
+use crate::operands::{DMString, Label, Value, Variable};
 use crate::Instruction;
 use crate::Node;
 
@@ -12,10 +12,12 @@ use crate::Node;
 fn is_l_value(var: &Variable) -> bool {
     match var {
         // Does Field count? We probably don't hit that code path but it might count
-        Variable::Dot | Variable::CacheIndex | Variable::Arg {..} | Variable::Local {..} | Variable::Global {..}  => {
-            true
-        }
-        _ => false
+        Variable::Dot
+        | Variable::CacheIndex
+        | Variable::Arg { .. }
+        | Variable::Local { .. }
+        | Variable::Global { .. } => true,
+        _ => false,
     }
 }
 
@@ -36,9 +38,7 @@ impl VariableChainBuilder {
             other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
         };
 
-        Self {
-            var,
-        }
+        Self { var }
     }
 
     fn last_setcache_rhs(&mut self) -> Option<&mut Box<Variable>> {
@@ -120,6 +120,7 @@ pub enum CompileError {
     TernaryOpNotImplemented,
     UnsupportedExpressionTerm(dreammaker::ast::Term),
     UnsupportedUnaryOp(dreammaker::ast::UnaryOp),
+    UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
     UnsupportedSubExpr(dreammaker::ast::Follow),
     UnsupportedIndexKind(dreammaker::ast::IndexKind),
     UnsupportedPrefabWithVars,
@@ -143,6 +144,7 @@ pub fn compile_expr(
             Instruction::DbgFile(DMString(b"<dmasm expression>".to_vec())),
             None,
         )],
+        label_count: 0,
     };
 
     // Expression begin
@@ -150,7 +152,7 @@ pub fn compile_expr(
     let lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
     let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), lexer)?;
 
-    match compiler.parse_expr(expr)? {
+    match compiler.emit_expr(expr)? {
         EvalKind::Stack => {
             compiler.emit_ins(Instruction::Ret);
         }
@@ -190,11 +192,16 @@ enum EvalKind {
 struct Compiler<'a> {
     params: &'a [&'a str],
     nodes: Vec<Node<Option<CompileData>>>,
+    label_count: u32,
 }
 
 impl<'a> Compiler<'a> {
     fn emit_ins(&mut self, ins: Instruction) {
         self.nodes.push(Node::Instruction(ins, None));
+    }
+
+    fn emit_label(&mut self, label: String) {
+        self.nodes.push(Node::Label(label));
     }
 
     fn emit_find_var(&mut self, ident: dreammaker::ast::Ident) -> EvalKind {
@@ -205,7 +212,32 @@ impl<'a> Compiler<'a> {
         EvalKind::Var(Variable::Global(DMString(ident.into())))
     }
 
-    fn emit_follow(&mut self, follow: Vec<Spanned<Follow>>, mut kind: EvalKind) -> Result<EvalKind, CompileError> {
+    fn emit_move_to_stack(&mut self, kind: EvalKind) -> EvalKind {
+        match kind {
+            EvalKind::Stack => {}
+
+            EvalKind::ListRef => {
+                self.emit_ins(Instruction::ListGet);
+            }
+
+            EvalKind::Var(var) => {
+                self.emit_ins(Instruction::GetVar(var));
+            }
+
+            EvalKind::Field(builder, field) => {
+                let var = builder.finalise(DMString(field.into()));
+                self.emit_ins(Instruction::GetVar(var));
+            }
+        }
+
+        EvalKind::Stack
+    }
+
+    fn emit_follow(
+        &mut self,
+        follow: Vec<Spanned<Follow>>,
+        mut kind: EvalKind,
+    ) -> Result<EvalKind, CompileError> {
         if follow.is_empty() {
             return Ok(kind);
         }
@@ -213,7 +245,11 @@ impl<'a> Compiler<'a> {
         // sequential field accessors (example: a.b.c) get buffered into a single operand
         let mut field_buffer = vec![];
 
-        fn commit_field_buffer(compiler: &mut Compiler, kind: EvalKind, field_chain: &mut Vec<String>) -> EvalKind {
+        fn commit_field_buffer(
+            compiler: &mut Compiler,
+            kind: EvalKind,
+            field_chain: &mut Vec<String>,
+        ) -> EvalKind {
             if field_chain.is_empty() {
                 return kind;
             }
@@ -236,9 +272,7 @@ impl<'a> Compiler<'a> {
                     builder
                 }
 
-                EvalKind::Var(var) => {
-                    VariableChainBuilder::begin(var)
-                }
+                EvalKind::Var(var) => VariableChainBuilder::begin(var),
             };
 
             let last = field_chain.pop().unwrap();
@@ -269,25 +303,10 @@ impl<'a> Compiler<'a> {
                     kind = commit_field_buffer(self, kind, &mut field_buffer);
 
                     // Move base to the stack
-                    match kind {
-                        EvalKind::Stack => {},
-
-                        EvalKind::ListRef => {
-                            self.emit_ins(Instruction::ListGet);
-                        }
-
-                        EvalKind::Var(var) => {
-                            self.emit_ins(Instruction::GetVar(var));
-                        }
-
-                        EvalKind::Field(builder, field) => {
-                            let var = builder.finalise(DMString(field.into()));
-                            self.emit_ins(Instruction::GetVar(var));
-                        }
-                    }
+                    self.emit_move_to_stack(kind);
 
                     // Handle inner expression and move it to the stack
-                    match self.parse_expr(*expr)? {
+                    match self.emit_expr(*expr)? {
                         EvalKind::Stack => {}
 
                         EvalKind::ListRef => {
@@ -315,38 +334,31 @@ impl<'a> Compiler<'a> {
         Ok(kind)
     }
 
-    fn emit_unary_ops(&mut self, unary: Vec<UnaryOp>, mut kind: EvalKind) -> Result<EvalKind, CompileError> {
+    fn emit_unary_ops(
+        &mut self,
+        unary: Vec<UnaryOp>,
+        mut kind: EvalKind,
+    ) -> Result<EvalKind, CompileError> {
         if unary.is_empty() {
             return Ok(kind);
         }
 
-        fn emit_unary_op(compiler: &mut Compiler, op: UnaryOp, kind: EvalKind) -> Result<EvalKind, CompileError> {
+        fn emit_unary_op(
+            compiler: &mut Compiler,
+            op: UnaryOp,
+            kind: EvalKind,
+        ) -> Result<EvalKind, CompileError> {
             match op {
                 // Simple unary ops
                 UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot => {
                     // These ops need the value on the stack
-                    match kind {
-                        EvalKind::Stack => {},
-
-                        EvalKind::ListRef => {
-                            compiler.emit_ins(Instruction::ListGet);
-                        }
-
-                        EvalKind::Field(builder, field) => {
-                            let var = builder.finalise(DMString(field.into()));
-                            compiler.emit_ins(Instruction::GetVar(var));
-                        }
-
-                        EvalKind::Var(var) => {
-                            compiler.emit_ins(Instruction::GetVar(var));
-                        }
-                    }
+                    compiler.emit_move_to_stack(kind);
 
                     match op {
                         UnaryOp::Neg => compiler.emit_ins(Instruction::UnaryNeg),
                         UnaryOp::Not => compiler.emit_ins(Instruction::Not),
                         UnaryOp::BitNot => compiler.emit_ins(Instruction::Bnot),
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 }
 
@@ -354,13 +366,9 @@ impl<'a> Compiler<'a> {
                 UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr => {
                     // These ops require an l-value
                     let var = match kind {
-                        EvalKind::Var(var) if is_l_value(&var) => {
-                            var
-                        }
+                        EvalKind::Var(var) if is_l_value(&var) => var,
 
-                        EvalKind::Field(builder, field) => {
-                            builder.finalise(DMString(field.into()))
-                        }
+                        EvalKind::Field(builder, field) => builder.finalise(DMString(field.into())),
 
                         EvalKind::ListRef => {
                             compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
@@ -376,7 +384,7 @@ impl<'a> Compiler<'a> {
                         UnaryOp::PostIncr => compiler.emit_ins(Instruction::PostInc(var)),
                         UnaryOp::PreDecr => compiler.emit_ins(Instruction::PreDec(var)),
                         UnaryOp::PostDecr => compiler.emit_ins(Instruction::PostDec(var)),
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -386,7 +394,6 @@ impl<'a> Compiler<'a> {
 
         // Unary ops need our value on the stack
 
-
         for op in unary.into_iter().rev() {
             kind = emit_unary_op(self, op, kind)?;
         }
@@ -394,10 +401,9 @@ impl<'a> Compiler<'a> {
         return Ok(kind);
     }
 
-    fn parse_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
+    fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
             Expression::AssignOp { .. } => return Err(CompileError::AssignOpNotImplemented),
-            Expression::BinaryOp { .. } => return Err(CompileError::BinaryOpNotImplemented),
             Expression::TernaryOp { .. } => return Err(CompileError::TernaryOpNotImplemented),
 
             Expression::Base {
@@ -407,7 +413,7 @@ impl<'a> Compiler<'a> {
             } => {
                 let kind = match term.elem {
                     // Nested expression, probably something in brackets
-                    Term::Expr(expr) => self.parse_expr(*expr)?,
+                    Term::Expr(expr) => self.emit_expr(*expr)?,
 
                     // Simple stack pushes
                     Term::Null => {
@@ -423,9 +429,7 @@ impl<'a> Compiler<'a> {
                         EvalKind::Stack
                     }
                     Term::String(str) => {
-                        self.emit_ins(
-                            Instruction::PushVal(Value::DMString(DMString(str.into())))
-                        );
+                        self.emit_ins(Instruction::PushVal(Value::DMString(DMString(str.into()))));
                         EvalKind::Stack
                     }
 
@@ -464,6 +468,56 @@ impl<'a> Compiler<'a> {
 
                 return Ok(kind);
             }
+
+            Expression::BinaryOp { op, lhs, rhs } => {
+                match op {
+                    // Short circuiting logic ops
+                    BinaryOp::And | BinaryOp::Or => {
+                        // Bring LHS to stack
+                        let lhs = self.emit_expr(*lhs)?;
+                        self.emit_move_to_stack(lhs);
+
+                        let label = format!("LAB_{:0>4X}", self.label_count);
+                        self.label_count += 1;
+
+                        match op {
+                            BinaryOp::And => {
+                                self.emit_ins(Instruction::JmpAnd(Label(label.clone())))
+                            }
+                            BinaryOp::Or => self.emit_ins(Instruction::JmpOr(Label(label.clone()))),
+                            _ => unreachable!(),
+                        }
+
+                        // Bring RHS to stack
+                        let rhs = self.emit_expr(*rhs)?;
+                        self.emit_move_to_stack(rhs);
+
+                        self.emit_label(label);
+                    }
+
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                        // Bring LHS to stack
+                        let lhs = self.emit_expr(*lhs)?;
+                        self.emit_move_to_stack(lhs);
+
+                        // Bring RHS to stack
+                        let rhs = self.emit_expr(*rhs)?;
+                        self.emit_move_to_stack(rhs);
+
+                        match op {
+                            BinaryOp::Add => self.emit_ins(Instruction::Add),
+                            BinaryOp::Sub => self.emit_ins(Instruction::Sub),
+                            BinaryOp::Mul => self.emit_ins(Instruction::Mul),
+                            BinaryOp::Div => self.emit_ins(Instruction::Div),
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    other => return Err(CompileError::UnsupportedBinaryOp(other)),
+                }
+
+                Ok(EvalKind::Stack)
+            }
         }
     }
 }
@@ -471,13 +525,14 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[\"c\"].d++".as_bytes());
+    let lexer =
+        dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[\"c\"].d++".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("--a.b[(a.c)++]", &["a"]);
+    let expr = compile_expr("a[1] && a[2]", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

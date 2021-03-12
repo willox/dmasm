@@ -84,7 +84,7 @@ impl Operand for f32 {
 //
 // Label
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Label(pub String);
 
 impl Operand for Label {
