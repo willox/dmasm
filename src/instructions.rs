@@ -449,7 +449,7 @@ instructions! {
     // I haven't confirmed if anything but Aug* instructions set this value yet.
     0x13F = PushEval,
 
-    // 0x140
+    0x140 = TestEquiv,
     0x141 = TestNotEquiv,
 
     // These instructions interact with a separate stack than the other ones (although both stacks share the same memory allocation.)

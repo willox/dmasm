@@ -4,7 +4,7 @@ use dreammaker::ast::Term;
 use dreammaker::ast::{BinaryOp, UnaryOp};
 use dreammaker::ast::{Expression, Spanned};
 
-use crate::operands::{DMString, Label, Value, Variable};
+use crate::operands::{self, DMString, Label, Value, Variable};
 use crate::Instruction;
 use crate::Node;
 
@@ -495,7 +495,26 @@ impl<'a> Compiler<'a> {
                         self.emit_label(label);
                     }
 
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Pow
+                    | BinaryOp::Mod
+                    | BinaryOp::Eq
+                    | BinaryOp::NotEq
+                    | BinaryOp::Less
+                    | BinaryOp::LessEq
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEq
+                    | BinaryOp::Equiv
+                    | BinaryOp::NotEquiv
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitXor
+                    | BinaryOp::BitOr
+                    | BinaryOp::LShift
+                    | BinaryOp::RShift
+                    | BinaryOp::In => {
                         // Bring LHS to stack
                         let lhs = self.emit_expr(*lhs)?;
                         self.emit_move_to_stack(lhs);
@@ -509,6 +528,34 @@ impl<'a> Compiler<'a> {
                             BinaryOp::Sub => self.emit_ins(Instruction::Sub),
                             BinaryOp::Mul => self.emit_ins(Instruction::Mul),
                             BinaryOp::Div => self.emit_ins(Instruction::Div),
+                            BinaryOp::Pow => self.emit_ins(Instruction::Pow),
+                            BinaryOp::Mod => self.emit_ins(Instruction::Mod),
+                            BinaryOp::Eq => {
+                                // This is how DM compiles it. I wonder if it is necessary.
+                                self.emit_ins(Instruction::Teq);
+                                self.emit_ins(Instruction::Pop);
+                                self.emit_ins(Instruction::GetFlag);
+                            }
+                            BinaryOp::NotEq => self.emit_ins(Instruction::Tne),
+                            BinaryOp::Less => self.emit_ins(Instruction::Tl),
+                            BinaryOp::LessEq => self.emit_ins(Instruction::Tle),
+                            BinaryOp::Greater => self.emit_ins(Instruction::Tg),
+                            BinaryOp::GreaterEq => self.emit_ins(Instruction::Tge),
+                            BinaryOp::Equiv => self.emit_ins(Instruction::TestEquiv),
+                            BinaryOp::NotEquiv => self.emit_ins(Instruction::TestNotEquiv),
+                            BinaryOp::BitAnd => self.emit_ins(Instruction::Band),
+                            BinaryOp::BitXor => self.emit_ins(Instruction::Bxor),
+                            BinaryOp::BitOr => self.emit_ins(Instruction::Bor),
+                            BinaryOp::LShift => self.emit_ins(Instruction::LShift),
+                            BinaryOp::RShift => self.emit_ins(Instruction::RShift),
+                            BinaryOp::In => {
+                                self.emit_ins(Instruction::IsIn(operands::IsInParams::Value));
+                                self.emit_ins(Instruction::GetFlag);
+                            }
+
+                            // TODO: Sounds cursed
+                            // BinaryOp::To
+
                             _ => unreachable!(),
                         }
                     }
@@ -532,7 +579,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a[1] && a[2]", &["a"]);
+    let expr = compile_expr("a <> b", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
