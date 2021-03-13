@@ -117,8 +117,10 @@ impl Operand for Label {
 pub struct Proc(pub String);
 
 impl Operand for Proc {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        panic!("TODO");
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        let idx = asm.env.get_proc_index(&self.0);
+        asm.emit(idx);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(

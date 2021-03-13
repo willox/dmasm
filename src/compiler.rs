@@ -126,6 +126,8 @@ pub enum CompileError {
     UnsupportedPrefabWithVars,
     MultipleUnaryMutations,
     ExpectedLValue,
+    NamedArgumentsNotImplemented,
+    IncorrectArgCount(String)
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -460,6 +462,63 @@ impl<'a> Compiler<'a> {
                         EvalKind::Stack
                     }
 
+                    Term::Call(ident, args) => {
+                        // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
+                        // We can implement this later...
+                        if args
+                            .iter()
+                            .any(|x| matches!(x, Expression::AssignOp { .. }))
+                        {
+                            return Err(CompileError::NamedArgumentsNotImplemented);
+                        }
+
+                        let arg_count = args.len() as u32;
+
+                        match ident.as_str() {
+                            "url_encode" => {
+                                if !(1..=2).contains(&arg_count) {
+                                    return Err(CompileError::IncorrectArgCount(ident));
+                                }
+
+                                // TODO: ugly clones
+                                let text = self.emit_expr(args[0].clone())?;
+                                self.emit_move_to_stack(text);
+
+                                if let Some(format) = args.get(1) {
+                                    let format = self.emit_expr(format.clone())?;
+                                    self.emit_move_to_stack(format);
+                                } else {
+                                    self.emit_ins(Instruction::PushVal(Value::Null));
+                                }
+
+                                self.emit_ins(Instruction::UrlEncode);
+                                EvalKind::Stack
+                            }
+
+                            _ => {
+                                // Bring all arguments onto the stack
+                                for arg in args {
+                                    let expr = self.emit_expr(arg)?;
+                                    self.emit_move_to_stack(expr);
+                                }
+
+                                // TODO: builtins
+
+                                // We're treating all Term::Call expressions as global calls
+                                self.emit_ins(Instruction::CallGlob(
+                                    arg_count,
+                                    operands::Proc(format!("/proc/{}", ident)),
+                                ));
+
+                                EvalKind::Stack
+                            }
+                        }
+
+
+
+
+                    }
+
                     other => return Err(CompileError::UnsupportedExpressionTerm(other)),
                 };
 
@@ -555,7 +614,6 @@ impl<'a> Compiler<'a> {
 
                             // TODO: Sounds cursed
                             // BinaryOp::To
-
                             _ => unreachable!(),
                         }
                     }
@@ -572,14 +630,13 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer =
-        dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[\"c\"].d++".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "f(b = c)".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a <> b", &["a"]);
+    let expr = compile_expr("url_encode()", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

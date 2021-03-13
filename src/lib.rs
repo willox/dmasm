@@ -116,6 +116,10 @@ impl assembler::AssembleEnv for TestAssembleEnv {
     fn get_variable_name_index(&mut self, _name: &[u8]) -> u32 {
         1338
     }
+
+    fn get_proc_index(&mut self, _path: &str) -> u32 {
+        1339
+    }
 }
 
 impl disassembler::DisassembleEnv for TestDisassembleEnv {
