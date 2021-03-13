@@ -64,7 +64,15 @@ impl VariableChainBuilder {
         self.var = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
     }
 
-    fn finalise(mut self, field: DMString) -> Variable {
+    fn get_push_cache(mut self) -> Option<Variable> {
+        if let Some(_rhs) = self.last_setcache_rhs() {
+            return Some(self.var);
+        }
+
+        None
+    }
+
+    fn get_field(mut self, field: DMString) -> Variable {
         if let Some(rhs) = self.last_setcache_rhs() {
             **rhs = Variable::Field(field);
             return self.var;
@@ -72,8 +80,18 @@ impl VariableChainBuilder {
 
         Variable::Field(field)
     }
+
+    fn get_dynamic_proc(mut self, proc: DMString) -> Variable {
+        if let Some(rhs) = self.last_setcache_rhs() {
+            **rhs = Variable::DynamicProc(proc);
+            return self.var;
+        }
+
+        Variable::DynamicProc(proc)
+    }
 }
 
+// TODO: dedupe
 fn last_setcache_rhs(var: &mut Variable) -> Option<&mut Box<Variable>> {
     if let Variable::SetCache(_, rhs) = var {
         if let Variable::SetCache { .. } = **rhs {
@@ -84,26 +102,6 @@ fn last_setcache_rhs(var: &mut Variable) -> Option<&mut Box<Variable>> {
     }
 
     None
-}
-
-fn append_field(var: &mut Variable, field: DMString) {
-    if let Some(rhs) = last_setcache_rhs(var) {
-        **rhs = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
-        return;
-    }
-
-    // This is the first SetCache - discard the current var (which should be null)
-    *var = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
-}
-
-fn final_field(var: &mut Variable, field: DMString) {
-    if let Some(rhs) = last_setcache_rhs(var) {
-        **rhs = Variable::Field(field);
-        return;
-    }
-
-    // This is the first SetCache - discard the current var (which should be null)
-    *var = Variable::Field(field);
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -170,7 +168,7 @@ pub fn compile_expr(
         }
 
         EvalKind::Field(builder, f) => {
-            let var = builder.finalise(DMString(f.into()));
+            let var = builder.get_field(DMString(f.into()));
             compiler.emit_ins(Instruction::GetVar(var));
             compiler.emit_ins(Instruction::Ret);
         }
@@ -227,12 +225,41 @@ impl<'a> Compiler<'a> {
             }
 
             EvalKind::Field(builder, field) => {
-                let var = builder.finalise(DMString(field.into()));
+                let var = builder.get_field(DMString(field.into()));
                 self.emit_ins(Instruction::GetVar(var));
             }
         }
 
         EvalKind::Stack
+    }
+
+    // returns Var or Field
+    fn emit_move_to_builder(&mut self, kind: EvalKind) -> VariableChainBuilder {
+        match kind {
+            EvalKind::Stack => {
+                self.emit_ins(Instruction::SetVar(Variable::Cache));
+                VariableChainBuilder::begin(Variable::Cache)
+            }
+
+            EvalKind::ListRef => {
+                self.emit_ins(Instruction::ListGet);
+                self.emit_ins(Instruction::SetVar(Variable::Cache));
+                VariableChainBuilder::begin(Variable::Cache)
+            }
+
+            EvalKind::Var(var) => {
+                //self.emit_ins(Instruction::GetVar(var));
+                //self.emit_ins(Instruction::SetVar(Variable::Cache));
+                //VariableChainBuilder::begin(Variable::Cache)
+
+                VariableChainBuilder::begin(var)
+            }
+
+            EvalKind::Field(mut builder, field) => {
+                builder.append(DMString(field.into()));
+                builder
+            }
+        }
     }
 
     fn emit_follow(
@@ -320,7 +347,7 @@ impl<'a> Compiler<'a> {
                         }
 
                         EvalKind::Field(builder, field) => {
-                            let var = builder.finalise(DMString(field.into()));
+                            let var = builder.get_field(DMString(field.into()));
                             self.emit_ins(Instruction::GetVar(var));
                         }
                     }
@@ -328,7 +355,47 @@ impl<'a> Compiler<'a> {
                     kind = EvalKind::ListRef;
                 }
 
-                other => return Err(CompileError::UnsupportedSubExpr(other)),
+                Follow::Call(index_kind, ident, args) => {
+                    // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
+                    // We can implement this later...
+                    if args
+                        .iter()
+                        .any(|x| matches!(x, Expression::AssignOp { .. }))
+                    {
+                        return Err(CompileError::NamedArgumentsNotImplemented);
+                    }
+
+                    match index_kind {
+                        // We just treat these as the same
+                        // TODO: Should we type check?
+                        IndexKind::Dot | IndexKind::Colon => {
+                            let args_count = args.len() as u32;
+
+                            // TODO: Can emit much cleaner code when no params
+                            kind = commit_field_buffer(self, kind, &mut field_buffer);
+                            self.emit_move_to_stack(kind);
+
+                            // We'll need our src after pushing the parameters
+                            self.emit_ins(Instruction::SetVar(Variable::Cache));
+                            self.emit_ins(Instruction::PushCache);
+
+                            // Push args to the stack
+                            for arg in args {
+                                let arg = self.emit_expr(arg)?;
+                                self.emit_move_to_stack(arg);
+                            }
+
+                            self.emit_ins(Instruction::PopCache);
+
+                            // Move base to the stack
+                            self.emit_ins(Instruction::Call(Variable::DynamicProc(DMString(ident.into())), args_count));
+                        }
+
+                        other => return Err(CompileError::UnsupportedIndexKind(other)),
+                    }
+
+                    kind = EvalKind::Stack;
+                }
             }
         }
 
@@ -370,7 +437,7 @@ impl<'a> Compiler<'a> {
                     let var = match kind {
                         EvalKind::Var(var) if is_l_value(&var) => var,
 
-                        EvalKind::Field(builder, field) => builder.finalise(DMString(field.into())),
+                        EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
 
                         EvalKind::ListRef => {
                             compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
@@ -494,6 +561,8 @@ impl<'a> Compiler<'a> {
                                 self.emit_ins(Instruction::UrlEncode);
                                 EvalKind::Stack
                             }
+
+                            // TODO: The other built-ins, ideally in a less-repetitive way.
 
                             _ => {
                                 // Bring all arguments onto the stack
@@ -630,13 +699,13 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "f(b = c)".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[2](a.c)".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("url_encode()", &["a"]);
+    let expr = compile_expr("mob_list[29].is_face_visible()", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

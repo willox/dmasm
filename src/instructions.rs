@@ -150,7 +150,7 @@ instructions! {
     0x27 = BrowseRsc,
     0x28 = IsIcon,
     0x29 = Call(proc: Variable, arg_count: u32),
-    0x2A = CallNoReturn(proc: Variable, arg_count: u32),
+    0x2A = CallStatement(proc: Variable, arg_count: u32),
     0x2B = CallPath(arg_count: u32),
     0x2C = CallParent,
     0x2D = CallParentArgs(arg_count: u32),
