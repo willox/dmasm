@@ -118,7 +118,10 @@ pub struct Proc(pub String);
 
 impl Operand for Proc {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        let idx = asm.env.get_proc_index(&self.0);
+        let idx = asm
+            .env
+            .get_proc_index(&self.0)
+            .ok_or(AssembleError::ProcNotFound)?;
         asm.emit(idx);
         Ok(())
     }
@@ -151,7 +154,7 @@ pub struct DMString(pub Vec<u8>);
 
 impl DMString {
     fn get_string_index<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> u32 {
-        asm.env.get_string_index(&self.0)
+        asm.env.get_string_index(&self.0).unwrap()
     }
 }
 
@@ -693,9 +696,16 @@ impl Operand for Variable {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         use crate::access_modifiers;
 
-        fn write_variable_name<E: AssembleEnv>(asm: &mut Assembler<E>, name: &DMString) {
-            let id = asm.env.get_variable_name_index(&name.0);
+        fn write_variable_name<E: AssembleEnv>(
+            asm: &mut Assembler<E>,
+            name: &DMString,
+        ) -> Result<(), AssembleError> {
+            let id = asm
+                .env
+                .get_variable_name_index(&name.0)
+                .ok_or(AssembleError::InvalidVariableName)?;
             asm.emit(id);
+            Ok(())
         }
 
         match self {
@@ -719,7 +729,7 @@ impl Operand for Variable {
             }
             Variable::Global(name) => {
                 asm.emit(access_modifiers::Global);
-                write_variable_name(asm, name);
+                write_variable_name(asm, name)?;
             }
             Variable::SetCache(lhs, rhs) => {
                 asm.emit(access_modifiers::SetCache);
