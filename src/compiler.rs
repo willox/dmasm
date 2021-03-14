@@ -472,7 +472,6 @@ impl<'a> Compiler<'a> {
 
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
-            Expression::AssignOp { .. } => return Err(CompileError::AssignOpNotImplemented),
             Expression::TernaryOp { .. } => return Err(CompileError::TernaryOpNotImplemented),
 
             Expression::Base {
@@ -692,6 +691,33 @@ impl<'a> Compiler<'a> {
 
                 Ok(EvalKind::Stack)
             }
+
+            Expression::AssignOp { op, lhs, rhs } => {
+                // RHS seems to evaluate before LHS here, but I haven't investigated it too heavily.
+                let rhs = self.emit_expr(*rhs)?;
+                self.emit_move_to_stack(rhs);
+
+                let lhs = self.emit_expr(*lhs)?;
+
+                // TODO: I'm compiling _way_ differently than byond for list sets here. Is that ok?
+                // These ops require an l-value
+                let var = match lhs {
+                    EvalKind::Var(var) if is_l_value(&var) => var,
+
+                    EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
+
+                    EvalKind::ListRef => {
+                        self.emit_ins(Instruction::SetVar(Variable::CacheKey));
+                        self.emit_ins(Instruction::SetVar(Variable::Cache));
+                        Variable::CacheIndex
+                    }
+
+                    _ => return Err(CompileError::ExpectedLValue),
+                };
+
+                self.emit_ins(Instruction::SetVarExpr(var));
+                Ok(EvalKind::Stack)
+            }
         }
     }
 }
@@ -705,7 +731,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("mob_list[29].is_face_visible()", &["a"]);
+    let expr = compile_expr("a[1] = (b || c)", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
