@@ -1,7 +1,7 @@
 use dreammaker::ast::Follow;
 use dreammaker::ast::IndexKind;
 use dreammaker::ast::Term;
-use dreammaker::ast::{BinaryOp, UnaryOp};
+use dreammaker::ast::{AssignOp, BinaryOp, UnaryOp};
 use dreammaker::ast::{Expression, Spanned};
 
 use crate::operands::{self, DMString, Label, Value, Variable};
@@ -117,6 +117,7 @@ pub enum CompileError {
     UnsupportedExpressionTerm(dreammaker::ast::Term),
     UnsupportedIndexKind(dreammaker::ast::IndexKind),
     UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
+    UnsupportedAssignOp(dreammaker::ast::AssignOp),
     UnsupportedPrefabWithVars,
     ExpectedLValue,
     NamedArgumentsNotImplemented,
@@ -710,7 +711,24 @@ impl<'a> Compiler<'a> {
                     _ => return Err(CompileError::ExpectedLValue),
                 };
 
-                self.emit_ins(Instruction::SetVarExpr(var));
+                match op {
+                    AssignOp::Assign => self.emit_ins(Instruction::SetVarExpr(var)),
+                    AssignOp::AddAssign => self.emit_ins(Instruction::AugAdd(var)),
+                    AssignOp::SubAssign => self.emit_ins(Instruction::AugSub(var)),
+                    AssignOp::MulAssign => self.emit_ins(Instruction::AugMul(var)),
+                    AssignOp::DivAssign => self.emit_ins(Instruction::AugDiv(var)),
+                    AssignOp::ModAssign => self.emit_ins(Instruction::AugMod(var)),
+                    AssignOp::BitAndAssign => self.emit_ins(Instruction::AugBand(var)),
+                    AssignOp::BitOrAssign => self.emit_ins(Instruction::AugBor(var)),
+                    AssignOp::BitXorAssign => self.emit_ins(Instruction::AugXor(var)),
+                    AssignOp::LShiftAssign => self.emit_ins(Instruction::AugLShift(var)),
+                    AssignOp::RShiftAssign => self.emit_ins(Instruction::AugRShift(var)),
+
+                    // These need different code gen
+                    other => return Err(CompileError::UnsupportedAssignOp(other)),
+                }
+
+                ;
                 Ok(EvalKind::Stack)
             }
         }
@@ -726,7 +744,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a[1] = (b || c)", &["a"]);
+    let expr = compile_expr("a.b += a.c", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
