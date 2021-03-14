@@ -746,10 +746,28 @@ impl Operand for Variable {
             }
             Variable::DynamicProc(name) => {
                 asm.emit(access_modifiers::DynamicProc);
+
+                // TODO: Improve
+                let mut name = name.clone();
+                for character in &mut name.0 {
+                    if *character == b'_' {
+                        *character = b' ';
+                    }
+                }
+
                 name.assemble(asm)?;
             }
             Variable::DynamicVerb(name) => {
                 asm.emit(access_modifiers::DynamicVerb);
+
+                // TODO: Improve
+                let mut name = name.clone();
+                for character in &mut name.0 {
+                    if *character == b'_' {
+                        *character = b' ';
+                    }
+                }
+
                 name.assemble(asm)?;
             }
             Variable::StaticProc(proc) => {
