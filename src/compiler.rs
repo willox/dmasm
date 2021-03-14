@@ -713,16 +713,46 @@ impl<'a> Compiler<'a> {
 
                 match op {
                     AssignOp::Assign => self.emit_ins(Instruction::SetVarExpr(var)),
-                    AssignOp::AddAssign => self.emit_ins(Instruction::AugAdd(var)),
-                    AssignOp::SubAssign => self.emit_ins(Instruction::AugSub(var)),
-                    AssignOp::MulAssign => self.emit_ins(Instruction::AugMul(var)),
-                    AssignOp::DivAssign => self.emit_ins(Instruction::AugDiv(var)),
-                    AssignOp::ModAssign => self.emit_ins(Instruction::AugMod(var)),
-                    AssignOp::BitAndAssign => self.emit_ins(Instruction::AugBand(var)),
-                    AssignOp::BitOrAssign => self.emit_ins(Instruction::AugBor(var)),
-                    AssignOp::BitXorAssign => self.emit_ins(Instruction::AugXor(var)),
-                    AssignOp::LShiftAssign => self.emit_ins(Instruction::AugLShift(var)),
-                    AssignOp::RShiftAssign => self.emit_ins(Instruction::AugRShift(var)),
+                    AssignOp::AddAssign => {
+                        self.emit_ins(Instruction::AugAdd(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::SubAssign => {
+                        self.emit_ins(Instruction::AugSub(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::MulAssign => {
+                        self.emit_ins(Instruction::AugMul(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::DivAssign => {
+                        self.emit_ins(Instruction::AugDiv(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::ModAssign => {
+                        self.emit_ins(Instruction::AugMod(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::BitAndAssign => {
+                        self.emit_ins(Instruction::AugBand(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::BitOrAssign => {
+                        self.emit_ins(Instruction::AugBor(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::BitXorAssign => {
+                        self.emit_ins(Instruction::AugXor(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::LShiftAssign => {
+                        self.emit_ins(Instruction::AugLShift(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::RShiftAssign => {
+                        self.emit_ins(Instruction::AugRShift(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
 
                     // These need different code gen
                     other => return Err(CompileError::UnsupportedAssignOp(other)),
@@ -744,7 +774,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a.b += a.c", &["a"]);
+    let expr = compile_expr("(extools += \"penis\") && extools", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
