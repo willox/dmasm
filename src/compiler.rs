@@ -148,6 +148,8 @@ pub fn compile_expr(
     let lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
     let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), lexer)?;
 
+    // TODO: Error check expr
+
     match compiler.emit_expr(expr)? {
         EvalKind::Stack => {
             compiler.emit_ins(Instruction::Ret);
@@ -205,7 +207,16 @@ impl<'a> Compiler<'a> {
             return EvalKind::Var(Variable::Arg(index as u32));
         }
 
-        EvalKind::Var(Variable::Global(DMString(ident.into())))
+        match ident.as_str() {
+            "." => EvalKind::Var(Variable::Dot),
+            "usr" => EvalKind::Var(Variable::Usr),
+            "src" => EvalKind::Var(Variable::Src),
+            "args" => EvalKind::Var(Variable::Args),
+            "world" => EvalKind::Var(Variable::World),
+
+            // Anything else is treated as a global var
+            _ => EvalKind::Var(Variable::Global(DMString(ident.into()))),
+        }
     }
 
     fn emit_move_to_stack(&mut self, kind: EvalKind) -> EvalKind {
@@ -768,13 +779,13 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a.b[2](a.c)".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "1 !".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("(extools += \"penis\") && extools", &["extools"]);
+    let expr = compile_expr("(a.b) || __aux_cache", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
