@@ -12,7 +12,10 @@ use crate::Node;
 fn is_l_value(var: &Variable) -> bool {
     match var {
         // Does Field count? We probably don't hit that code path but it might count
-        Variable::Dot
+        Variable::Usr
+        | Variable::Src
+        | Variable::Args
+        | Variable::Dot
         | Variable::CacheIndex
         | Variable::Arg { .. }
         | Variable::Local { .. }
