@@ -113,16 +113,11 @@ pub struct CompileData {
 #[derive(Debug)]
 pub enum CompileError {
     ParseError(dreammaker::DMError),
-    AssignOpNotImplemented,
-    BinaryOpNotImplemented,
     TernaryOpNotImplemented,
     UnsupportedExpressionTerm(dreammaker::ast::Term),
-    UnsupportedUnaryOp(dreammaker::ast::UnaryOp),
-    UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
-    UnsupportedSubExpr(dreammaker::ast::Follow),
     UnsupportedIndexKind(dreammaker::ast::IndexKind),
+    UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
     UnsupportedPrefabWithVars,
-    MultipleUnaryMutations,
     ExpectedLValue,
     NamedArgumentsNotImplemented,
     IncorrectArgCount(String)
