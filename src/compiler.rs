@@ -8,6 +8,8 @@ use crate::operands::{self, DMString, Label, Value, Variable};
 use crate::Instruction;
 use crate::Node;
 
+mod builtin_procs;
+
 // TODO: Think
 fn is_l_value(var: &Variable) -> bool {
     match var {
@@ -84,6 +86,15 @@ impl VariableChainBuilder {
         Variable::Field(field)
     }
 
+    fn get_initial_field(mut self, field: DMString) -> Variable {
+        if let Some(rhs) = self.last_setcache_rhs() {
+            **rhs = Variable::Initial(Box::new(Variable::Field(field)));
+            return self.var;
+        }
+
+        Variable::Initial(Box::new(Variable::Field(field)))
+    }
+
     fn get_dynamic_proc(mut self, proc: DMString) -> Variable {
         if let Some(rhs) = self.last_setcache_rhs() {
             **rhs = Variable::DynamicProc(proc);
@@ -123,8 +134,9 @@ pub enum CompileError {
     UnsupportedAssignOp(dreammaker::ast::AssignOp),
     UnsupportedPrefabWithVars,
     ExpectedLValue,
+    ExpectedFieldReference,
     NamedArgumentsNotImplemented,
-    IncorrectArgCount(String)
+    IncorrectArgCount(String),
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -154,9 +166,7 @@ pub fn compile_expr(
     // TODO: Error check expr
 
     match compiler.emit_expr(expr)? {
-        EvalKind::Stack => {
-            compiler.emit_ins(Instruction::Ret);
-        }
+        EvalKind::Stack => {}
 
         EvalKind::ListRef => {
             compiler.emit_ins(Instruction::ListGet);
@@ -172,10 +182,10 @@ pub fn compile_expr(
         }
     }
 
-    let mut local_id = 0;
+    let mut arg_id = 0;
     for _ in params {
-        compiler.emit_ins(Instruction::GetVar(Variable::Local(local_id)));
-        local_id += 1;
+        compiler.emit_ins(Instruction::GetVar(Variable::Arg(arg_id)));
+        arg_id += 1;
     }
 
     compiler.emit_ins(Instruction::NewList(params.len() as u32 + 1));
@@ -246,35 +256,6 @@ impl<'a> Compiler<'a> {
         }
 
         EvalKind::Stack
-    }
-
-    // returns Var or Field
-    fn emit_move_to_builder(&mut self, kind: EvalKind) -> VariableChainBuilder {
-        match kind {
-            EvalKind::Stack => {
-                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                VariableChainBuilder::begin(Variable::Cache)
-            }
-
-            EvalKind::ListRef => {
-                self.emit_ins(Instruction::ListGet);
-                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                VariableChainBuilder::begin(Variable::Cache)
-            }
-
-            EvalKind::Var(var) => {
-                //self.emit_ins(Instruction::GetVar(var));
-                //self.emit_ins(Instruction::SetVar(Variable::Cache));
-                //VariableChainBuilder::begin(Variable::Cache)
-
-                VariableChainBuilder::begin(var)
-            }
-
-            EvalKind::Field(mut builder, field) => {
-                builder.append(DMString(field.into()));
-                builder
-            }
-        }
     }
 
     fn emit_follow(
@@ -403,7 +384,10 @@ impl<'a> Compiler<'a> {
                             self.emit_ins(Instruction::PopCache);
 
                             // Move base to the stack
-                            self.emit_ins(Instruction::Call(Variable::DynamicProc(DMString(ident.into())), args_count));
+                            self.emit_ins(Instruction::Call(
+                                Variable::DynamicProc(DMString(ident.into())),
+                                args_count,
+                            ));
                         }
 
                         other => return Err(CompileError::UnsupportedIndexKind(other)),
@@ -452,7 +436,9 @@ impl<'a> Compiler<'a> {
                     let var = match kind {
                         EvalKind::Var(var) if is_l_value(&var) => var,
 
-                        EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
+                        EvalKind::Field(builder, field) => {
+                            builder.get_field(DMString(field.into()))
+                        }
 
                         EvalKind::ListRef => {
                             compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
@@ -553,39 +539,19 @@ impl<'a> Compiler<'a> {
                             return Err(CompileError::NamedArgumentsNotImplemented);
                         }
 
-                        let arg_count = args.len() as u32;
+                        match builtin_procs::eval(self, &ident, &args)? {
+                            // Handled by builtin_procs
+                            Some(kind) => kind,
 
-                        match ident.as_str() {
-                            "url_encode" => {
-                                if !(1..=2).contains(&arg_count) {
-                                    return Err(CompileError::IncorrectArgCount(ident));
-                                }
+                            // We've got to call a proc
+                            None => {
+                                let arg_count = args.len() as u32;
 
-                                // TODO: ugly clones
-                                let text = self.emit_expr(args[0].clone())?;
-                                self.emit_move_to_stack(text);
-
-                                if let Some(format) = args.get(1) {
-                                    let format = self.emit_expr(format.clone())?;
-                                    self.emit_move_to_stack(format);
-                                } else {
-                                    self.emit_ins(Instruction::PushVal(Value::Null));
-                                }
-
-                                self.emit_ins(Instruction::UrlEncode);
-                                EvalKind::Stack
-                            }
-
-                            // TODO: The other built-ins, ideally in a less-repetitive way.
-
-                            _ => {
                                 // Bring all arguments onto the stack
                                 for arg in args {
                                     let expr = self.emit_expr(arg)?;
                                     self.emit_move_to_stack(expr);
                                 }
-
-                                // TODO: builtins
 
                                 // We're treating all Term::Call expressions as global calls
                                 self.emit_ins(Instruction::CallGlob(
@@ -596,10 +562,6 @@ impl<'a> Compiler<'a> {
                                 EvalKind::Stack
                             }
                         }
-
-
-
-
                     }
 
                     other => return Err(CompileError::UnsupportedExpressionTerm(other)),
@@ -775,9 +737,7 @@ impl<'a> Compiler<'a> {
 
                     // These need different code gen
                     other => return Err(CompileError::UnsupportedAssignOp(other)),
-                }
-
-                ;
+                };
                 Ok(EvalKind::Stack)
             }
         }
@@ -793,7 +753,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("(a.b) || __aux_cache", &["extools"]);
+    let expr = compile_expr("initial((extools.b.c)).", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
