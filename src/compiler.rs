@@ -160,21 +160,26 @@ pub fn compile_expr(
 
         EvalKind::ListRef => {
             compiler.emit_ins(Instruction::ListGet);
-            compiler.emit_ins(Instruction::Ret);
         }
 
         EvalKind::Var(v) => {
             compiler.emit_ins(Instruction::GetVar(v));
-            compiler.emit_ins(Instruction::Ret);
         }
 
         EvalKind::Field(builder, f) => {
             let var = builder.get_field(DMString(f.into()));
             compiler.emit_ins(Instruction::GetVar(var));
-            compiler.emit_ins(Instruction::Ret);
         }
     }
 
+    let mut local_id = 0;
+    for _ in params {
+        compiler.emit_ins(Instruction::GetVar(Variable::Local(local_id)));
+        local_id += 1;
+    }
+
+    compiler.emit_ins(Instruction::NewList(params.len() as u32 + 1));
+    compiler.emit_ins(Instruction::Ret);
     Ok(compiler.nodes)
 }
 
