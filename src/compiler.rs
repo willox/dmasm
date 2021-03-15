@@ -753,7 +753,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("initial((extools.b.c)).", &["extools"]);
+    let expr = compile_expr("initial((extools.b.c)).d", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
