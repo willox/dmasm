@@ -137,6 +137,13 @@ pub enum CompileError {
     ExpectedFieldReference,
     NamedArgumentsNotImplemented,
     IncorrectArgCount(String),
+    MissingArgument {
+        idx: u32,
+        name: String,
+    },
+    TooManyArguments {
+        expected: u32,
+    }
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -753,7 +760,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("initial((extools.b.c)).d", &["extools"]);
+    let expr = compile_expr("findlasttext(a)", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

@@ -328,7 +328,7 @@ instructions! {
     // It's identical to running an invalid opcode
     // 0xD8 = BadInstruction,
 
-    // 0xD9
+    0xD9 = ShellAllowed,
     0xDA = RandSeed,
     0xDB = Text2Ascii,
     0xDC = Ascii2Text,
@@ -344,18 +344,19 @@ instructions! {
     0xE6 = OViewers,
     0xE7 = Hearers,
     0xE8 = OHearers,
-    // 0xE9
+    0xE9 = DbNewConnection,
     // 0xEA
-    // 0xEB
-    // 0xEC
-    // 0xED
-    // 0xEE
-    // 0xEF
-    // 0xF0
-    // 0xF1
-    // 0xF2
-    // 0xF3
-    // 0xF4
+    0xEA = DbNewQuery,
+    0xEB = DbConnect,
+    0xEC = DbExecute,
+    0xED = DbNextRow,
+    0xEE = DbErrorMsg,
+    0xEF = DbClose,
+    0xF0 = DbIsConnected,
+    0xF1 = DbRowsAffected,
+    0xF2 = DbRowCount,
+    0xF3 = DbQuote,
+    0xF4 = DbColumns,
     0xF5 = IsPath,
     0xF6 = IsSubPath,
     0xF7 = FExists,
@@ -479,6 +480,15 @@ instructions! {
     0x157 = SplitTextChar,
     0x158 = Text2NumRadix,
     0x159 = Num2TextRadix,
+    // 0x15A
+    // 0x15B
+    // 0x15C
+    0x15D = Time2TextTZ(arg_count: u32),
+    // 0x15E
+    0x15F = SpliceText,
+    0x160 = SpliceTextChar,
+    // 0x161
+    0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
 
     0x1337 = AuxtoolsDebugBreak,
     0x1338 = AuxtoolsDebugBreakNop,
