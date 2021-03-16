@@ -138,11 +138,16 @@ pub enum CompileError {
     NamedArgumentsNotImplemented,
     IncorrectArgCount(String),
     MissingArgument {
+        proc: String,
         idx: u32,
         name: String,
     },
     TooManyArguments {
+        proc: String,
         expected: u32,
+    },
+    UnsupportedBuiltin {
+        proc: String,
     }
 }
 

@@ -31,29 +31,11 @@ impl From<f32> for DefaultValue {
     }
 }
 
-/*
 // # Simple-Stack Procs
 // These are built-in procs where a fixed amount of values are pushed to the stack
 // followed by a bare instruction (with no operands)
 // The parameters can have default values. If any params are missing, it'll error.
 // Note: Many of the defaults are null because that's how BYOND's compiler does it.
-*/
-
-/*
-#[allow(unused)]
-macro_rules! simple_stack_procs {
-    ( $(
-        $opcode:literal = $name:ident
-        $( ( $(
-            $operand_name:ident: $operand_type:tt
-        ),* $(,)? ) )?
-    ),* $(,)? ) => {
-
-    }
-}
-*/
-
-#[allow(unused)]
 macro_rules! simple_stack_procs {
     (
         $(
@@ -104,6 +86,7 @@ macro_rules! simple_stack_procs {
 
                                         None => {
                                             return Err(CompileError::MissingArgument {
+                                                proc: stringify!($proc_name).to_owned(),
                                                 idx: arg_idx as u32,
                                                 name: stringify!($param_name).to_owned(),
                                             });
@@ -115,6 +98,7 @@ macro_rules! simple_stack_procs {
 
                         if args.len() > arg_idx {
                             return Err(CompileError::TooManyArguments {
+                                proc: stringify!($proc_name).to_owned(),
                                 expected: arg_idx as u32,
                             });
                         }
@@ -220,110 +204,135 @@ simple_stack_procs! {
     /proc/winget(player, control_id, params) => Instruction::WinGet,
 }
 
-/*
-    // # Overloaded procs
-    /proc/arctan
-    /proc/bounds
-    /proc/icon_states
-    /proc/ispath
-    /proc/log
-    /proc/num2text
-    /proc/rand
-    /proc/roll
-    /proc/round
-    /proc/shell
-    /proc/shutdown
-    /proc/text2num
-*/
+// # Unsupported Procs
+// Get to these later.
+macro_rules! unsupported_procs {
+    (
+        $(
+            /proc/$proc_name:ident
+        ),* $(,)?
+    ) => {
+        fn is_unsupported_proc(
+            name: &str,
+        ) -> bool {
+            match name {
+                $(
+                    stringify!($proc_name) => true,
+                )*
 
-/*
-    // # Snowflake procs
-    /proc/arglist
-    /proc/addtext
-    /proc/animate
-    /proc/cmptext
-    /proc/cmptextEx
-    /proc/copytext
-    /proc/file
-    /proc/filter
-    /proc/gradient
-    /proc/icon
-    /proc/image
-    /proc/initial
-    /proc/input
-    /proc/isarea
-    /proc/isloc
-    /proc/ismob
-    /proc/ismovable
-    /proc/isobj
-    /proc/issaved
-    /proc/isturf
-    /proc/link
-    /proc/list
-    /proc/locate
-    /proc/matrix
-    /proc/max
-    /proc/min
-    /proc/newlist
-    /proc/obounds
-    /proc/pick
-    /proc/regex
-    /proc/rgb
-    /proc/sorttext
-    /proc/sorttextEx
-    /proc/sound
-    /proc/startup
-    /proc/step
-    /proc/step_away
-    /proc/step_rand
-    /proc/step_to
-    /proc/step_towards
-    /proc/text
-    /proc/typesof
-    /proc/_dm_db_new_query
-    /proc/_dm_db_execute
-    /proc/_dm_db_enxt_row
-    /proc/_dm_db_rows_affected
-    /proc/_dm_db_row_count
-    /proc/_dm_db_error_msg
-    /proc/_dm_db_columns
-    /proc/_dm_db_close
-    /proc/_dm_db_new_con
-    /proc/_dm_db_connect
-    /proc/_dm_db_quote
-    /proc/_dm_db_is_connected
-*/
+                _ => false,
+            }
+        }
+    }
+}
 
-/*
-    // # Not actually procs
-    /proc/browse
-    /proc/browse_rsc
-    /proc/flick
-    /proc/ftp
-    /proc/load_resource
-    /proc/penis
-    /proc/output
-    /proc/rand_seed
-    /proc/run
-    /proc/sleep
-    /proc/stat
-    /proc/statpanel
-    /proc/walk
-    /proc/walk_away
-    /proc/walk_rand
-    /proc/walk_to
-    /proc/walk_towards
-    /proc/winclone
-    /proc/winset
-    /proc/winshow
-    /proc/CRASH
-*/
+unsupported_procs! {
+    // Overloaded Procs
+    /proc/arctan,
+    /proc/bounds,
+    /proc/icon_states,
+    /proc/ispath,
+    /proc/log,
+    /proc/num2text,
+    /proc/rand,
+    /proc/roll,
+    /proc/round,
+    /proc/shell,
+    /proc/shutdown,
+    /proc/text2num,
+
+    // Snowflake procs
+    /proc/arglist,
+    /proc/addtext,
+    /proc/animate,
+    /proc/cmptext,
+    /proc/cmptextEx,
+    /proc/copytext,
+    /proc/file,
+    /proc/filter,
+    /proc/gradient,
+    /proc/icon,
+    /proc/image,
+    /proc/initial,
+    /proc/input,
+    /proc/isarea,
+    /proc/isloc,
+    /proc/ismob,
+    /proc/ismovable,
+    /proc/isobj,
+    /proc/issaved,
+    /proc/isturf,
+    /proc/link,
+    /proc/list,
+    /proc/locate,
+    /proc/matrix,
+    /proc/max,
+    /proc/min,
+    /proc/newlist,
+    /proc/obounds,
+    /proc/pick,
+    /proc/regex,
+    /proc/rgb,
+    /proc/sorttext,
+    /proc/sorttextEx,
+    /proc/sound,
+    /proc/startup,
+    /proc/step,
+    /proc/step_away,
+    /proc/step_rand,
+    /proc/step_to,
+    /proc/step_towards,
+    /proc/text,
+    /proc/typesof,
+    /proc/_dm_db_new_query,
+    /proc/_dm_db_execute,
+    /proc/_dm_db_enxt_row,
+    /proc/_dm_db_rows_affected,
+    /proc/_dm_db_row_count,
+    /proc/_dm_db_error_msg,
+    /proc/_dm_db_columns,
+    /proc/_dm_db_close,
+    /proc/_dm_db_new_con,
+    /proc/_dm_db_connect,
+    /proc/_dm_db_quote,
+    /proc/_dm_db_is_connected,
+
+    // Not actually procs
+    /proc/browse,
+    /proc/browse_rsc,
+    /proc/flick,
+    /proc/ftp,
+    /proc/load_resource,
+    /proc/penis,
+    /proc/output,
+    /proc/rand_seed,
+    /proc/run,
+    /proc/sleep,
+    /proc/stat,
+    /proc/statpanel,
+    /proc/walk,
+    /proc/walk_away,
+    /proc/walk_rand,
+    /proc/walk_to,
+    /proc/walk_towards,
+    /proc/winclone,
+    /proc/winset,
+    /proc/winshow,
+    /proc/CRASH,
+}
 
 pub(super) fn eval(
     compiler: &mut Compiler<'_>,
     name: &str,
     args: &Vec<Expression>,
 ) -> Result<Option<EvalKind>, CompileError> {
+
+    if is_unsupported_proc(name) {
+        return Err(CompileError::UnsupportedBuiltin {
+            proc: name.to_owned(),
+        });
+    }
+
     if let Some(res) = eval_simple_stack_procs(compiler, name, args)? {
         return Ok(Some(res));
     }
