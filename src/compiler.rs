@@ -139,7 +139,7 @@ pub enum CompileError {
     IncorrectArgCount(String),
     MissingArgument {
         proc: String,
-        idx: u32,
+        index: u32,
         name: String,
     },
     TooManyArguments {
