@@ -158,6 +158,7 @@ simple_stack_procs! {
     /proc/isnull(val) => Instruction::IsNull,
     /proc/isnum(val) => Instruction::IsNum,
     /proc/istext(val) => Instruction::IsText,
+    /proc/istype(val, path) => Instruction::IsType,
     /proc/jointext(list, glue, start = 1, end = null) => Instruction::JoinText,
     /proc/json_decode(json) => Instruction::JsonDecode,
     /proc/json_encode(val) => Instruction::JsonEncode,
