@@ -280,13 +280,16 @@ impl<'a> Compiler<'a> {
 
         // sequential field accessors (example: a.b.c) get buffered into a single operand
         let mut field_buffer = vec![];
+        let mut skip_label = None;
 
         fn commit_field_buffer(
             compiler: &mut Compiler,
             kind: EvalKind,
             field_chain: &mut Vec<String>,
+            skip_label: &mut Option<String>,
         ) -> EvalKind {
             if field_chain.is_empty() {
+                assert!(skip_label.is_none());
                 return kind;
             }
 
@@ -317,8 +320,24 @@ impl<'a> Compiler<'a> {
                 builder.append(DMString(field.clone().into()));
             }
 
+            let kind = EvalKind::Field(builder, last);
+
+            // If we had a skip label, we have to go on to the stack
+            let kind = match skip_label {
+                Some(skip_label) => {
+                    compiler.emit_move_to_stack(kind);
+                    compiler.emit_label(skip_label.clone());
+                    EvalKind::Stack
+                }
+
+                None => {
+                    kind
+                }
+            };
+
             field_chain.clear();
-            EvalKind::Field(builder, last)
+            *skip_label = None;
+            kind
         }
 
         for sub_expr in follow {
@@ -331,12 +350,30 @@ impl<'a> Compiler<'a> {
                             field_buffer.push(ident);
                         }
 
-                        other => return Err(CompileError::UnsupportedIndexKind(other)),
+                        // We just treat these as the same
+                        // TODO: Should we type check?
+                        // TODO: Generates kind of badly compared to BYOND.
+                        IndexKind::SafeDot | IndexKind::SafeColon => {
+                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
+                            self.emit_move_to_stack(kind);
+
+                            let label = format!("LAB_{:0>4X}", self.label_count);
+                            self.label_count += 1;
+
+                            self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+                            self.emit_ins(Instruction::GetVar(Variable::Cache));
+
+                            assert!(skip_label.is_none());
+                            field_buffer.push(ident);
+                            skip_label = Some(label);
+
+                            kind = EvalKind::Stack;
+                        }
                     }
                 }
 
                 Follow::Index(expr) => {
-                    kind = commit_field_buffer(self, kind, &mut field_buffer);
+                    kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
 
                     // Move base to the stack
                     self.emit_move_to_stack(kind);
@@ -379,7 +416,7 @@ impl<'a> Compiler<'a> {
                             let args_count = args.len() as u32;
 
                             // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(self, kind, &mut field_buffer);
+                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
                             self.emit_move_to_stack(kind);
 
                             // We'll need our src after pushing the parameters
@@ -409,7 +446,7 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        kind = commit_field_buffer(self, kind, &mut field_buffer);
+        kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
         Ok(kind)
     }
 
@@ -789,7 +826,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("findlasttext(a)", &["extools"]);
+    let expr = compile_expr("(b = a.d?.b) || (__cache)", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

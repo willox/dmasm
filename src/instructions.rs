@@ -440,7 +440,7 @@ instructions! {
 
     // Pops the value _only_ if the jump is performed
     // wait that might be backwards...
-    0x13D = JmpIfNull(destination: Label),
+    0x13D = SetCacheJmpIfNull(destination: Label),
 
     // Pops the value regardless of if the jump is performed
     0x13E = JmpIfNull2(destination: Label),
