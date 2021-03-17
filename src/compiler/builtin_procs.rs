@@ -177,6 +177,7 @@ simple_stack_procs! {
     /proc/params2list(params) => Instruction::Params2List,
     /proc/prob(val) => Instruction::Prob,
     /proc/range(dist = null, center = null) => Instruction::Range(operands::RangeParams),
+    /proc/ref(val) => Instruction::Ref,
     /proc/replacetext(haystack, needle, replacement, start = 1, end = null) => Instruction::ReplaceText,
     /proc/replacetext_char(haystack, needle, replacement, start = 1, end = null) => Instruction::ReplaceTextChar,
     /proc/replacetextEx(haystack, needle, replacement, start = 1, end = null) => Instruction::ReplaceTextEx,

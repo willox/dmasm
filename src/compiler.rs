@@ -783,7 +783,7 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a?[b]".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "\"\\n\"".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
