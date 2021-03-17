@@ -127,7 +127,6 @@ pub struct CompileData {
 #[derive(Debug)]
 pub enum CompileError {
     ParseError(dreammaker::DMError),
-    TernaryOpNotImplemented,
     UnsupportedExpressionTerm(dreammaker::ast::Term),
     UnsupportedIndexKind(dreammaker::ast::IndexKind),
     UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
@@ -485,7 +484,32 @@ impl<'a> Compiler<'a> {
 
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
-            Expression::TernaryOp { .. } => return Err(CompileError::TernaryOpNotImplemented),
+            Expression::TernaryOp { cond, if_: lhs, else_: rhs } => {
+                // Bring condition to stack
+                let cond = self.emit_expr(*cond)?;
+                self.emit_move_to_stack(cond);
+
+                let label_rhs = format!("LAB_RHS_{:0>4X}", self.label_count);
+                let label_end = format!("LAB_END_{:0>4X}", self.label_count);
+                self.label_count += 1;
+
+                self.emit_ins(Instruction::Test);
+                self.emit_ins(Instruction::Jz(Label(label_rhs.clone())));
+
+                // LHS
+                let lhs = self.emit_expr(*lhs)?;
+                self.emit_move_to_stack(lhs);
+                self.emit_ins(Instruction::Jmp(Label(label_end.clone())));
+
+                // RHS
+                self.emit_label(label_rhs);
+                let rhs = self.emit_expr(*rhs)?;
+                self.emit_move_to_stack(rhs);
+
+                // End
+                self.emit_label(label_end);
+                Ok(EvalKind::Stack)
+            }
 
             Expression::Base {
                 unary,
@@ -759,7 +783,7 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "1 !".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "a?[b]".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
