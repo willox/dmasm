@@ -128,7 +128,6 @@ pub struct CompileData {
 pub enum CompileError {
     ParseError(dreammaker::DMError),
     UnsupportedExpressionTerm(dreammaker::ast::Term),
-    UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
     UnsupportedAssignOp(dreammaker::ast::AssignOp),
     UnsupportedPrefabWithVars,
     ExpectedLValue,
@@ -146,7 +145,8 @@ pub enum CompileError {
     },
     UnsupportedBuiltin {
         proc: String,
-    }
+    },
+    UnexpectedRange
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -182,6 +182,8 @@ pub fn compile_expr(
             compiler.emit_ins(Instruction::ListGet);
         }
 
+        EvalKind::Range => return Err(CompileError::UnexpectedRange),
+
         EvalKind::Var(v) => {
             compiler.emit_ins(Instruction::GetVar(v));
         }
@@ -207,12 +209,19 @@ pub fn compile_expr(
 enum EvalKind {
     // The result of the expression will be on the top of the stack
     Stack,
+
     // The result of the expression is a list entry L[K] where the top of the stack is the index and the 2nd top of the stack is the list
     ListRef,
+
+    // The result of the expression is 2 values on the Stack due to the `To` operator
+    Range,
+
     // The result of the expression can be accessed using a Variable operand
     Var(Variable),
+
     // Similar to Var, but more state
     Field(VariableChainBuilder, String),
+
     // TODO: Eval?
 }
 
@@ -248,13 +257,15 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn emit_move_to_stack(&mut self, kind: EvalKind) -> EvalKind {
+    fn emit_move_to_stack(&mut self, kind: EvalKind) -> Result<EvalKind, CompileError> {
         match kind {
             EvalKind::Stack => {}
 
             EvalKind::ListRef => {
                 self.emit_ins(Instruction::ListGet);
             }
+
+            EvalKind::Range => return Err(CompileError::UnexpectedRange),
 
             EvalKind::Var(var) => {
                 self.emit_ins(Instruction::GetVar(var));
@@ -266,7 +277,7 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        EvalKind::Stack
+        Ok(EvalKind::Stack)
     }
 
     fn emit_follow(
@@ -287,10 +298,10 @@ impl<'a> Compiler<'a> {
             kind: EvalKind,
             field_chain: &mut Vec<String>,
             skip_label: &mut Option<String>,
-        ) -> EvalKind {
+        ) -> Result<EvalKind, CompileError> {
             if field_chain.is_empty() {
                 assert!(skip_label.is_none());
-                return kind;
+                return Ok(kind);
             }
 
             // We need a value
@@ -305,6 +316,8 @@ impl<'a> Compiler<'a> {
                     compiler.emit_ins(Instruction::SetVar(Variable::Cache));
                     VariableChainBuilder::begin(Variable::Cache)
                 }
+
+                EvalKind::Range => return Err(CompileError::UnexpectedRange),
 
                 EvalKind::Field(mut builder, field) => {
                     builder.append(DMString(field.into()));
@@ -325,7 +338,7 @@ impl<'a> Compiler<'a> {
             // If we had a skip label, we have to go on to the stack
             let kind = match skip_label {
                 Some(skip_label) => {
-                    compiler.emit_move_to_stack(kind);
+                    compiler.emit_move_to_stack(kind)?;
                     compiler.emit_label(skip_label.clone());
                     EvalKind::Stack
                 }
@@ -337,7 +350,7 @@ impl<'a> Compiler<'a> {
 
             field_chain.clear();
             *skip_label = None;
-            kind
+            Ok(kind)
         }
 
         for sub_expr in follow {
@@ -354,8 +367,8 @@ impl<'a> Compiler<'a> {
                         // TODO: Should we type check?
                         // TODO: Generates kind of badly compared to BYOND.
                         IndexKind::SafeDot | IndexKind::SafeColon => {
-                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
-                            self.emit_move_to_stack(kind);
+                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
+                            self.emit_move_to_stack(kind)?;
 
                             let label = format!("LAB_{:0>4X}", self.label_count);
                             self.label_count += 1;
@@ -373,10 +386,10 @@ impl<'a> Compiler<'a> {
                 }
 
                 Follow::Index(expr) => {
-                    kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
+                    kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
 
                     // Move base to the stack
-                    self.emit_move_to_stack(kind);
+                    self.emit_move_to_stack(kind)?;
 
                     // Handle inner expression and move it to the stack
                     match self.emit_expr(*expr)? {
@@ -385,6 +398,8 @@ impl<'a> Compiler<'a> {
                         EvalKind::ListRef => {
                             self.emit_ins(Instruction::ListGet);
                         }
+
+                        EvalKind::Range => return Err(CompileError::UnexpectedRange),
 
                         EvalKind::Var(var) => {
                             self.emit_ins(Instruction::GetVar(var));
@@ -416,8 +431,8 @@ impl<'a> Compiler<'a> {
                             let args_count = args.len() as u32;
 
                             // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
-                            self.emit_move_to_stack(kind);
+                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
+                            self.emit_move_to_stack(kind)?;
 
                             // We'll need our src after pushing the parameters
                             self.emit_ins(Instruction::SetVar(Variable::Cache));
@@ -426,7 +441,7 @@ impl<'a> Compiler<'a> {
                             // Push args to the stack
                             for arg in args {
                                 let arg = self.emit_expr(arg)?;
-                                self.emit_move_to_stack(arg);
+                                self.emit_move_to_stack(arg)?;
                             }
 
                             self.emit_ins(Instruction::PopCache);
@@ -442,8 +457,8 @@ impl<'a> Compiler<'a> {
                             let args_count = args.len() as u32;
 
                             // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
-                            self.emit_move_to_stack(kind);
+                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
+                            self.emit_move_to_stack(kind)?;
 
                             let label = format!("LAB_{:0>4X}", self.label_count);
                             self.label_count += 1;
@@ -455,7 +470,7 @@ impl<'a> Compiler<'a> {
                             // Push args to the stack
                             for arg in args {
                                 let arg = self.emit_expr(arg)?;
-                                self.emit_move_to_stack(arg);
+                                self.emit_move_to_stack(arg)?;
                             }
 
                             self.emit_ins(Instruction::PopCache);
@@ -475,7 +490,7 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
+        kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
         Ok(kind)
     }
 
@@ -497,7 +512,7 @@ impl<'a> Compiler<'a> {
                 // Simple unary ops
                 UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot => {
                     // These ops need the value on the stack
-                    compiler.emit_move_to_stack(kind);
+                    compiler.emit_move_to_stack(kind)?;
 
                     match op {
                         UnaryOp::Neg => compiler.emit_ins(Instruction::UnaryNeg),
@@ -553,7 +568,7 @@ impl<'a> Compiler<'a> {
             Expression::TernaryOp { cond, if_: lhs, else_: rhs } => {
                 // Bring condition to stack
                 let cond = self.emit_expr(*cond)?;
-                self.emit_move_to_stack(cond);
+                self.emit_move_to_stack(cond)?;
 
                 let label_rhs = format!("LAB_RHS_{:0>4X}", self.label_count);
                 let label_end = format!("LAB_END_{:0>4X}", self.label_count);
@@ -564,13 +579,13 @@ impl<'a> Compiler<'a> {
 
                 // LHS
                 let lhs = self.emit_expr(*lhs)?;
-                self.emit_move_to_stack(lhs);
+                self.emit_move_to_stack(lhs)?;
                 self.emit_ins(Instruction::Jmp(Label(label_end.clone())));
 
                 // RHS
                 self.emit_label(label_rhs);
                 let rhs = self.emit_expr(*rhs)?;
-                self.emit_move_to_stack(rhs);
+                self.emit_move_to_stack(rhs)?;
 
                 // End
                 self.emit_label(label_end);
@@ -652,7 +667,7 @@ impl<'a> Compiler<'a> {
                                 // Bring all arguments onto the stack
                                 for arg in args {
                                     let expr = self.emit_expr(arg)?;
-                                    self.emit_move_to_stack(expr);
+                                    self.emit_move_to_stack(expr)?;
                                 }
 
                                 // We're treating all Term::Call expressions as global calls
@@ -676,12 +691,12 @@ impl<'a> Compiler<'a> {
             }
 
             Expression::BinaryOp { op, lhs, rhs } => {
-                match op {
+                let kind = match op {
                     // Short circuiting logic ops
                     BinaryOp::And | BinaryOp::Or => {
                         // Bring LHS to stack
                         let lhs = self.emit_expr(*lhs)?;
-                        self.emit_move_to_stack(lhs);
+                        self.emit_move_to_stack(lhs)?;
 
                         let label = format!("LAB_{:0>4X}", self.label_count);
                         self.label_count += 1;
@@ -696,11 +711,13 @@ impl<'a> Compiler<'a> {
 
                         // Bring RHS to stack
                         let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs);
+                        self.emit_move_to_stack(rhs)?;
 
                         self.emit_label(label);
+                        EvalKind::Stack
                     }
 
+                    // Simple stack operations
                     BinaryOp::Add
                     | BinaryOp::Sub
                     | BinaryOp::Mul
@@ -719,15 +736,14 @@ impl<'a> Compiler<'a> {
                     | BinaryOp::BitXor
                     | BinaryOp::BitOr
                     | BinaryOp::LShift
-                    | BinaryOp::RShift
-                    | BinaryOp::In => {
+                    | BinaryOp::RShift => {
                         // Bring LHS to stack
                         let lhs = self.emit_expr(*lhs)?;
-                        self.emit_move_to_stack(lhs);
+                        self.emit_move_to_stack(lhs)?;
 
                         // Bring RHS to stack
                         let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs);
+                        self.emit_move_to_stack(rhs)?;
 
                         match op {
                             BinaryOp::Add => self.emit_ins(Instruction::Add),
@@ -754,27 +770,57 @@ impl<'a> Compiler<'a> {
                             BinaryOp::BitOr => self.emit_ins(Instruction::Bor),
                             BinaryOp::LShift => self.emit_ins(Instruction::LShift),
                             BinaryOp::RShift => self.emit_ins(Instruction::RShift),
-                            BinaryOp::In => {
-                                self.emit_ins(Instruction::IsIn(operands::IsInParams::Value));
-                                self.emit_ins(Instruction::GetFlag);
-                            }
+
+
 
                             // TODO: Sounds cursed
                             // BinaryOp::To
                             _ => unreachable!(),
                         }
+
+                        EvalKind::Stack
                     }
 
-                    other => return Err(CompileError::UnsupportedBinaryOp(other)),
-                }
+                    BinaryOp::In => {
+                        // Bring LHS to stack
+                        let lhs = self.emit_expr(*lhs)?;
+                        self.emit_move_to_stack(lhs)?;
 
-                Ok(EvalKind::Stack)
+                        // Special behaviour when RHS is `to`
+                        match self.emit_expr(*rhs)? {
+                            // TODO: We might need a specialised EvalKind for this
+                            EvalKind::Range => self.emit_ins(Instruction::IsIn(operands::IsInParams::Range)),
+
+                            other => {
+                                self.emit_move_to_stack(other)?;
+                                self.emit_ins(Instruction::IsIn(operands::IsInParams::Value));
+                            }
+                        }
+
+                        self.emit_ins(Instruction::GetFlag);
+                        EvalKind::Stack
+                    }
+
+                    BinaryOp::To => {
+                        // Bring LHS to stack
+                        let lhs = self.emit_expr(*lhs)?;
+                        self.emit_move_to_stack(lhs)?;
+
+                        // Bring RHS to stack
+                        let rhs = self.emit_expr(*rhs)?;
+                        self.emit_move_to_stack(rhs)?;
+
+                        EvalKind::Range
+                    }
+                };
+
+                Ok(kind)
             }
 
             Expression::AssignOp { op, lhs, rhs } => {
                 // RHS seems to evaluate before LHS here, but I haven't investigated it too heavily.
                 let rhs = self.emit_expr(*rhs)?;
-                self.emit_move_to_stack(rhs);
+                self.emit_move_to_stack(rhs)?;
 
                 let lhs = self.emit_expr(*lhs)?;
 

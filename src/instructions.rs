@@ -126,6 +126,7 @@ instructions! {
     0x0D = Test,
     0x0E = Not,
     0x0F = Jmp(destination: Label),
+    0x10 = Jnz(destination: Label),
     0x11 = Jz(destination: Label),
     0x12 = Ret,
     0x13 = IsLoc,

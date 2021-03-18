@@ -66,7 +66,7 @@ macro_rules! simple_stack_procs {
                             match args.get(arg_idx - 1) {
                                 Some(expr) => {
                                     let expr = compiler.emit_expr(expr.clone())?;
-                                    compiler.emit_move_to_stack(expr);
+                                    compiler.emit_move_to_stack(expr)?;
                                 }
 
                                 None => {
