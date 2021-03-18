@@ -441,8 +441,7 @@ impl<'a> Compiler<'a> {
 
                     match index_kind {
                         // Global call syntax `global.f()`
-                        IndexKind::Dot | IndexKind::Colon if matches!(kind, EvalKind::Global) => {
-                            assert!(field_buffer.is_empty());
+                        IndexKind::Dot | IndexKind::Colon if matches!(kind, EvalKind::Global) && field_buffer.is_empty() => {
                             assert!(skip_label.is_none());
 
                             let arg_count = args.len() as u32;
