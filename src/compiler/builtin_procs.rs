@@ -255,7 +255,6 @@ unsupported_procs! {
     /proc/gradient,
     /proc/icon,
     /proc/image,
-    /proc/initial,
     /proc/input,
     /proc/isarea,
     /proc/isloc,
