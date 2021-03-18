@@ -480,7 +480,7 @@ instructions! {
     0x157 = SplitTextChar,
     0x158 = Text2NumRadix,
     0x159 = Num2TextRadix,
-    // 0x15A
+    0x15A = AssignInto(var: Variable),
     // 0x15B
     // 0x15C
     0x15D = Time2TextTZ(arg_count: u32),

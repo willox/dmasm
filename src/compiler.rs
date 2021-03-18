@@ -213,6 +213,7 @@ enum EvalKind {
     Var(Variable),
     // Similar to Var, but more state
     Field(VariableChainBuilder, String),
+    // TODO: Eval?
 }
 
 struct Compiler<'a> {
@@ -813,6 +814,10 @@ impl<'a> Compiler<'a> {
                     }
                     AssignOp::ModAssign => {
                         self.emit_ins(Instruction::AugMod(var));
+                        self.emit_ins(Instruction::PushEval);
+                    }
+                    AssignOp::AssignInto => {
+                        self.emit_ins(Instruction::AssignInto(var));
                         self.emit_ins(Instruction::PushEval);
                     }
                     AssignOp::BitAndAssign => {
