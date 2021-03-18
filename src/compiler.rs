@@ -128,7 +128,6 @@ pub struct CompileData {
 pub enum CompileError {
     ParseError(dreammaker::DMError),
     UnsupportedExpressionTerm(dreammaker::ast::Term),
-    UnsupportedIndexKind(dreammaker::ast::IndexKind),
     UnsupportedBinaryOp(dreammaker::ast::BinaryOp),
     UnsupportedAssignOp(dreammaker::ast::AssignOp),
     UnsupportedPrefabWithVars,
@@ -438,7 +437,36 @@ impl<'a> Compiler<'a> {
                             ));
                         }
 
-                        other => return Err(CompileError::UnsupportedIndexKind(other)),
+                        IndexKind::SafeDot | IndexKind::SafeColon => {
+                            let args_count = args.len() as u32;
+
+                            // TODO: Can emit much cleaner code when no params
+                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label);
+                            self.emit_move_to_stack(kind);
+
+                            let label = format!("LAB_{:0>4X}", self.label_count);
+                            self.label_count += 1;
+
+                            // We'll need our src after pushing the parameters
+                            self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+                            self.emit_ins(Instruction::PushCache);
+
+                            // Push args to the stack
+                            for arg in args {
+                                let arg = self.emit_expr(arg)?;
+                                self.emit_move_to_stack(arg);
+                            }
+
+                            self.emit_ins(Instruction::PopCache);
+
+                            // Move base to the stack
+                            self.emit_ins(Instruction::Call(
+                                Variable::DynamicProc(DMString(ident.into())),
+                                args_count,
+                            ));
+
+                            self.emit_label(label);
+                        }
                     }
 
                     kind = EvalKind::Stack;
@@ -826,7 +854,7 @@ fn compile_test() {
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("(b = a.d?.b) || (__cache)", &["extools"]);
+    let expr = compile_expr("a.b?.c()", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
