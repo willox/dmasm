@@ -146,7 +146,8 @@ pub enum CompileError {
     UnsupportedBuiltin {
         proc: String,
     },
-    UnexpectedRange
+    UnexpectedRange,
+    UnexpectedGlobal
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -183,6 +184,7 @@ pub fn compile_expr(
         }
 
         EvalKind::Range => return Err(CompileError::UnexpectedRange),
+        EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
 
         EvalKind::Var(v) => {
             compiler.emit_ins(Instruction::GetVar(v));
@@ -215,6 +217,9 @@ enum EvalKind {
 
     // The result of the expression is 2 values on the Stack due to the `To` operator
     Range,
+
+    // The result of the expression is the `global` pseudo-object
+    Global,
 
     // The result of the expression can be accessed using a Variable operand
     Var(Variable),
@@ -251,6 +256,7 @@ impl<'a> Compiler<'a> {
             "src" => EvalKind::Var(Variable::Src),
             "args" => EvalKind::Var(Variable::Args),
             "world" => EvalKind::Var(Variable::World),
+            "global" => EvalKind::Global,
 
             // Anything else is treated as a global var
             _ => EvalKind::Var(Variable::Global(DMString(ident.into()))),
@@ -266,6 +272,7 @@ impl<'a> Compiler<'a> {
             }
 
             EvalKind::Range => return Err(CompileError::UnexpectedRange),
+            EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
 
             EvalKind::Var(var) => {
                 self.emit_ins(Instruction::GetVar(var));
@@ -318,6 +325,13 @@ impl<'a> Compiler<'a> {
                 }
 
                 EvalKind::Range => return Err(CompileError::UnexpectedRange),
+
+                // Bit hacky.
+                EvalKind::Global => {
+                    let name = field_chain.remove(0);
+                    let var = Variable::Global(DMString(name.into()));
+                    return commit_field_buffer(compiler, EvalKind::Var(var), field_chain, skip_label);
+                }
 
                 EvalKind::Field(mut builder, field) => {
                     builder.append(DMString(field.into()));
@@ -400,6 +414,7 @@ impl<'a> Compiler<'a> {
                         }
 
                         EvalKind::Range => return Err(CompileError::UnexpectedRange),
+                        EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
 
                         EvalKind::Var(var) => {
                             self.emit_ins(Instruction::GetVar(var));
@@ -425,10 +440,30 @@ impl<'a> Compiler<'a> {
                     }
 
                     match index_kind {
+                        // Global call syntax `global.f()`
+                        IndexKind::Dot | IndexKind::Colon if matches!(kind, EvalKind::Global) => {
+                            assert!(field_buffer.is_empty());
+                            assert!(skip_label.is_none());
+
+                            let arg_count = args.len() as u32;
+
+                            // Bring all arguments onto the stack
+                            for arg in args {
+                                let expr = self.emit_expr(arg)?;
+                                self.emit_move_to_stack(expr)?;
+                            }
+
+                            // We're treating all Term::Call expressions as global calls
+                            self.emit_ins(Instruction::CallGlob(
+                                arg_count,
+                                operands::Proc(format!("/proc/{}", ident)),
+                            ));
+                        }
+
                         // We just treat these as the same
                         // TODO: Should we type check?
                         IndexKind::Dot | IndexKind::Colon => {
-                            let args_count = args.len() as u32;
+                            let arg_count = args.len() as u32;
 
                             // TODO: Can emit much cleaner code when no params
                             kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
@@ -449,7 +484,7 @@ impl<'a> Compiler<'a> {
                             // Move base to the stack
                             self.emit_ins(Instruction::Call(
                                 Variable::DynamicProc(DMString(ident.into())),
-                                args_count,
+                                arg_count,
                             ));
                         }
 
@@ -899,13 +934,13 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "\"\\n\"".as_bytes());
+    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "global.f()".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a.b?.c()", &["extools"]);
+    let expr = compile_expr("global.f()", &["extools"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
