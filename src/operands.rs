@@ -113,7 +113,7 @@ impl Operand for Label {
 //
 // Proc
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Proc(pub String);
 
 impl Operand for Proc {
@@ -666,7 +666,7 @@ impl Operand for Value {
 //
 // Variable
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Variable {
     Null,
     World,
