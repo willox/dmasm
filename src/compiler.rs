@@ -11,6 +11,7 @@ use crate::Node;
 mod assignment;
 mod binary_ops;
 mod builtin_procs;
+mod unary;
 
 // TODO: Think
 fn is_l_value(var: &Variable) -> bool {
@@ -548,75 +549,6 @@ impl<'a> Compiler<'a> {
         Ok(kind)
     }
 
-    fn emit_unary_ops(
-        &mut self,
-        unary: Vec<UnaryOp>,
-        mut kind: EvalKind,
-    ) -> Result<EvalKind, CompileError> {
-        if unary.is_empty() {
-            return Ok(kind);
-        }
-
-        fn emit_unary_op(
-            compiler: &mut Compiler,
-            op: UnaryOp,
-            kind: EvalKind,
-        ) -> Result<EvalKind, CompileError> {
-            match op {
-                // Simple unary ops
-                UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot => {
-                    // These ops need the value on the stack
-                    compiler.emit_move_to_stack(kind)?;
-
-                    match op {
-                        UnaryOp::Neg => compiler.emit_ins(Instruction::UnaryNeg),
-                        UnaryOp::Not => compiler.emit_ins(Instruction::Not),
-                        UnaryOp::BitNot => compiler.emit_ins(Instruction::Bnot),
-                        _ => unreachable!(),
-                    }
-                }
-
-                // l-value mutating unary ops
-                UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr => {
-                    // These ops require an l-value
-                    let var = match kind {
-                        EvalKind::Var(var) if is_l_value(&var) => var,
-
-                        EvalKind::Field(builder, field) => {
-                            builder.get_field(DMString(field.into()))
-                        }
-
-                        EvalKind::ListRef => {
-                            compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
-                            compiler.emit_ins(Instruction::SetVar(Variable::Cache));
-                            Variable::CacheIndex
-                        }
-
-                        _ => return Err(CompileError::ExpectedLValue),
-                    };
-
-                    match op {
-                        UnaryOp::PreIncr => compiler.emit_ins(Instruction::PreInc(var)),
-                        UnaryOp::PostIncr => compiler.emit_ins(Instruction::PostInc(var)),
-                        UnaryOp::PreDecr => compiler.emit_ins(Instruction::PreDec(var)),
-                        UnaryOp::PostDecr => compiler.emit_ins(Instruction::PostDec(var)),
-                        _ => unreachable!(),
-                    }
-                }
-            }
-
-            Ok(EvalKind::Stack)
-        }
-
-        // Unary ops need our value on the stack
-
-        for op in unary.into_iter().rev() {
-            kind = emit_unary_op(self, op, kind)?;
-        }
-
-        return Ok(kind);
-    }
-
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
             Expression::TernaryOp {
@@ -743,9 +675,7 @@ impl<'a> Compiler<'a> {
                 };
 
                 let kind = self.emit_follow(follow, kind)?;
-                let kind = self.emit_unary_ops(unary, kind)?;
-
-                return Ok(kind);
+                unary::emit(self, unary, kind)
             }
 
             Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
