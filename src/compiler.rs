@@ -9,6 +9,7 @@ use crate::Instruction;
 use crate::Node;
 
 mod assignment;
+mod binary_ops;
 mod builtin_procs;
 
 // TODO: Think
@@ -747,133 +748,7 @@ impl<'a> Compiler<'a> {
                 return Ok(kind);
             }
 
-            Expression::BinaryOp { op, lhs, rhs } => {
-                let kind = match op {
-                    // Short circuiting logic ops
-                    BinaryOp::And | BinaryOp::Or => {
-                        // Bring LHS to stack
-                        let lhs = self.emit_expr(*lhs)?;
-                        self.emit_move_to_stack(lhs)?;
-
-                        let label = format!("LAB_{:0>4X}", self.label_count);
-                        self.label_count += 1;
-
-                        match op {
-                            BinaryOp::And => {
-                                self.emit_ins(Instruction::JmpAnd(Label(label.clone())))
-                            }
-                            BinaryOp::Or => self.emit_ins(Instruction::JmpOr(Label(label.clone()))),
-                            _ => unreachable!(),
-                        }
-
-                        // Bring RHS to stack
-                        let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs)?;
-
-                        self.emit_label(label);
-                        EvalKind::Stack
-                    }
-
-                    // Simple stack operations
-                    BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::Div
-                    | BinaryOp::Pow
-                    | BinaryOp::Mod
-                    | BinaryOp::Eq
-                    | BinaryOp::NotEq
-                    | BinaryOp::Less
-                    | BinaryOp::LessEq
-                    | BinaryOp::Greater
-                    | BinaryOp::GreaterEq
-                    | BinaryOp::Equiv
-                    | BinaryOp::NotEquiv
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitXor
-                    | BinaryOp::BitOr
-                    | BinaryOp::LShift
-                    | BinaryOp::RShift => {
-                        // Bring LHS to stack
-                        let lhs = self.emit_expr(*lhs)?;
-                        self.emit_move_to_stack(lhs)?;
-
-                        // Bring RHS to stack
-                        let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs)?;
-
-                        match op {
-                            BinaryOp::Add => self.emit_ins(Instruction::Add),
-                            BinaryOp::Sub => self.emit_ins(Instruction::Sub),
-                            BinaryOp::Mul => self.emit_ins(Instruction::Mul),
-                            BinaryOp::Div => self.emit_ins(Instruction::Div),
-                            BinaryOp::Pow => self.emit_ins(Instruction::Pow),
-                            BinaryOp::Mod => self.emit_ins(Instruction::Mod),
-                            BinaryOp::Eq => {
-                                // This is how DM compiles it. I wonder if it is necessary.
-                                self.emit_ins(Instruction::Teq);
-                                self.emit_ins(Instruction::Pop);
-                                self.emit_ins(Instruction::GetFlag);
-                            }
-                            BinaryOp::NotEq => self.emit_ins(Instruction::Tne),
-                            BinaryOp::Less => self.emit_ins(Instruction::Tl),
-                            BinaryOp::LessEq => self.emit_ins(Instruction::Tle),
-                            BinaryOp::Greater => self.emit_ins(Instruction::Tg),
-                            BinaryOp::GreaterEq => self.emit_ins(Instruction::Tge),
-                            BinaryOp::Equiv => self.emit_ins(Instruction::TestEquiv),
-                            BinaryOp::NotEquiv => self.emit_ins(Instruction::TestNotEquiv),
-                            BinaryOp::BitAnd => self.emit_ins(Instruction::Band),
-                            BinaryOp::BitXor => self.emit_ins(Instruction::Bxor),
-                            BinaryOp::BitOr => self.emit_ins(Instruction::Bor),
-                            BinaryOp::LShift => self.emit_ins(Instruction::LShift),
-                            BinaryOp::RShift => self.emit_ins(Instruction::RShift),
-
-                            // TODO: Sounds cursed
-                            // BinaryOp::To
-                            _ => unreachable!(),
-                        }
-
-                        EvalKind::Stack
-                    }
-
-                    BinaryOp::In => {
-                        // Bring LHS to stack
-                        let lhs = self.emit_expr(*lhs)?;
-                        self.emit_move_to_stack(lhs)?;
-
-                        // Special behaviour when RHS is `to`
-                        match self.emit_expr(*rhs)? {
-                            // TODO: We might need a specialised EvalKind for this
-                            EvalKind::Range => {
-                                self.emit_ins(Instruction::IsIn(operands::IsInParams::Range))
-                            }
-
-                            other => {
-                                self.emit_move_to_stack(other)?;
-                                self.emit_ins(Instruction::IsIn(operands::IsInParams::Value));
-                            }
-                        }
-
-                        self.emit_ins(Instruction::GetFlag);
-                        EvalKind::Stack
-                    }
-
-                    BinaryOp::To => {
-                        // Bring LHS to stack
-                        let lhs = self.emit_expr(*lhs)?;
-                        self.emit_move_to_stack(lhs)?;
-
-                        // Bring RHS to stack
-                        let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs)?;
-
-                        EvalKind::Range
-                    }
-                };
-
-                Ok(kind)
-            }
-
+            Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
             Expression::AssignOp { op, lhs, rhs } => assignment::emit(self, op, *lhs, *rhs),
         }
     }
