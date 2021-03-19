@@ -36,12 +36,6 @@ fn is_writable(var: &Variable) -> bool {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct CompileData {
-    pub line: u32,
-    pub column: u16,
-}
-
 #[derive(Debug)]
 pub enum CompileError {
     ParseError(dreammaker::DMError),
@@ -73,15 +67,12 @@ impl From<dreammaker::DMError> for CompileError {
     }
 }
 
-pub fn compile_expr(
-    code: &str,
-    params: &[&str],
-) -> Result<Vec<Node<Option<CompileData>>>, CompileError> {
+pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileError> {
     let mut compiler = Compiler {
         params,
         nodes: vec![Node::Instruction(
             Instruction::DbgFile(DMString(b"<dmasm expression>".to_vec())),
-            None,
+            (),
         )],
         label_count: 0,
     };
@@ -148,13 +139,13 @@ enum EvalKind {
 
 struct Compiler<'a> {
     params: &'a [&'a str],
-    nodes: Vec<Node<Option<CompileData>>>,
+    nodes: Vec<Node>,
     label_count: u32,
 }
 
 impl<'a> Compiler<'a> {
     fn emit_ins(&mut self, ins: Instruction) {
-        self.nodes.push(Node::Instruction(ins, None));
+        self.nodes.push(Node::Instruction(ins, ()));
     }
 
     fn emit_label(&mut self, label: String) {
@@ -238,12 +229,7 @@ fn compile_test() {
 
     if let Ok(expr) = expr {
         println!("{}", crate::format(&expr));
-
-        let stripped: Vec<Node> = expr
-            .into_iter()
-            .map(Node::<Option<CompileData>>::strip_debug_data)
-            .collect();
-        let code = crate::assembler::assemble(&stripped, &mut crate::TestAssembleEnv);
+        let code = crate::assembler::assemble(&expr, &mut crate::TestAssembleEnv);
         println!("{:#x?}", code);
     }
 }

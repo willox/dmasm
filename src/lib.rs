@@ -11,7 +11,6 @@ mod operands;
 mod operands_deserialize;
 mod parser;
 
-pub use compiler::CompileData;
 pub use disassembler::DebugData;
 pub use instructions::Instruction;
 
