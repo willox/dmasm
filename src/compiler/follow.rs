@@ -3,7 +3,7 @@ use crate::Instruction;
 
 pub(super) fn emit(
     compiler: &mut Compiler,
-    follow: Vec<Spanned<Follow>>,
+    follow: Vec<Follow>,
     kind: EvalKind,
 ) -> Result<EvalKind, CompileError> {
     let mut kind = kind;
@@ -13,7 +13,7 @@ pub(super) fn emit(
     let mut field_buffer = vec![];
 
     for sub_expr in follow {
-        match sub_expr.elem {
+        match sub_expr {
             Follow::Field(index_kind, ident) => {
                 match index_kind {
                     // We just treat these as the same
@@ -26,11 +26,7 @@ pub(super) fn emit(
                     // TODO: Should we type check?
                     // TODO: Generates kind of badly compared to BYOND.
                     IndexKind::SafeDot | IndexKind::SafeColon => {
-                        kind = commit_field_buffer(
-                            compiler,
-                            kind,
-                            &mut field_buffer
-                        )?;
+                        kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
 
                         let builder = compiler.emit_move_to_chain_builder(kind)?;
 
@@ -88,11 +84,7 @@ pub(super) fn emit(
                         let arg_count = args.len() as u32;
 
                         // TODO: Can emit much cleaner code when no params
-                        kind = commit_field_buffer(
-                            compiler,
-                            kind,
-                            &mut field_buffer
-                        )?;
+                        kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
 
                         // We'll need our src after pushing the parameters
@@ -119,11 +111,7 @@ pub(super) fn emit(
                         let args_count = args.len() as u32;
 
                         // TODO: Can emit much cleaner code when no params
-                        kind = commit_field_buffer(
-                            compiler,
-                            kind,
-                            &mut field_buffer
-                        )?;
+                        kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
 
                         let label = format!("LAB_{:0>4X}", compiler.label_count);
@@ -163,7 +151,7 @@ pub(super) fn emit(
 fn commit_field_buffer(
     compiler: &mut Compiler,
     kind: EvalKind,
-    field_chain: &mut Vec<String>
+    field_chain: &mut Vec<String>,
 ) -> Result<EvalKind, CompileError> {
     if field_chain.is_empty() {
         return Ok(kind);

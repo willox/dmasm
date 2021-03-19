@@ -1,8 +1,7 @@
+use dreammaker::ast::Expression;
 use dreammaker::ast::Follow;
 use dreammaker::ast::IndexKind;
-use dreammaker::ast::Term;
 use dreammaker::ast::{AssignOp, BinaryOp, UnaryOp};
-use dreammaker::ast::{Expression, Spanned};
 
 use crate::operands::{self, DMString, Label, Value, Variable};
 use crate::Instruction;
@@ -59,6 +58,7 @@ pub enum CompileError {
     },
     UnexpectedRange,
     UnexpectedGlobal,
+    UnsupportedImplicitNew,
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -120,7 +120,6 @@ enum EvalKind {
 
     // Similar to Field, but for `?.` accesses
     SafeField(ChainBuilder, String),
-
     // TODO: Eval?
 }
 
@@ -243,8 +242,9 @@ impl<'a> Compiler<'a> {
                 term,
                 follow,
             } => {
+                let unspanned_follows: Vec<Follow> = follow.into_iter().map(|f| f.elem).collect();
                 let kind = term::emit(self, term.elem)?;
-                let kind = follow::emit(self, follow, kind)?;
+                let kind = follow::emit(self, unspanned_follows, kind)?;
                 let kind = unary::emit(self, unary, kind)?;
                 Ok(kind)
             }
@@ -258,7 +258,7 @@ fn compile_test() {
     let lexer =
         dreammaker::lexer::Lexer::new(&context, Default::default(), "global.f()".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
-    let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
+    let _expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     // println!("{:#?}\n\n\n", expr);
 

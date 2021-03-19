@@ -579,6 +579,11 @@ impl Operand for Value {
                 return Ok(());
             }
 
+            Self::Path(path) => match asm.env.get_type(path) {
+                Some(t) => t,
+                None => return Err(AssembleError::TypeNotFound(path.clone())),
+            },
+
             // TODO: This _will_ bite me in the ass, implement assemble errors asap
             other => return Err(AssembleError::UnsupportedValue(other.clone())),
         };
