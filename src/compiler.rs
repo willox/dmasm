@@ -8,6 +8,7 @@ use crate::operands::{self, DMString, Label, Value, Variable};
 use crate::Instruction;
 use crate::Node;
 
+mod assignment;
 mod builtin_procs;
 
 // TODO: Think
@@ -146,7 +147,7 @@ pub enum CompileError {
         proc: String,
     },
     UnexpectedRange,
-    UnexpectedGlobal
+    UnexpectedGlobal,
 }
 
 impl From<dreammaker::DMError> for CompileError {
@@ -225,7 +226,6 @@ enum EvalKind {
 
     // Similar to Var, but more state
     Field(VariableChainBuilder, String),
-
     // TODO: Eval?
 }
 
@@ -329,7 +329,12 @@ impl<'a> Compiler<'a> {
                 EvalKind::Global => {
                     let name = field_chain.remove(0);
                     let var = Variable::Global(DMString(name.into()));
-                    return commit_field_buffer(compiler, EvalKind::Var(var), field_chain, skip_label);
+                    return commit_field_buffer(
+                        compiler,
+                        EvalKind::Var(var),
+                        field_chain,
+                        skip_label,
+                    );
                 }
 
                 EvalKind::Field(mut builder, field) => {
@@ -356,9 +361,7 @@ impl<'a> Compiler<'a> {
                     EvalKind::Stack
                 }
 
-                None => {
-                    kind
-                }
+                None => kind,
             };
 
             field_chain.clear();
@@ -380,7 +383,12 @@ impl<'a> Compiler<'a> {
                         // TODO: Should we type check?
                         // TODO: Generates kind of badly compared to BYOND.
                         IndexKind::SafeDot | IndexKind::SafeColon => {
-                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
+                            kind = commit_field_buffer(
+                                self,
+                                kind,
+                                &mut field_buffer,
+                                &mut skip_label,
+                            )?;
                             self.emit_move_to_stack(kind)?;
 
                             let label = format!("LAB_{:0>4X}", self.label_count);
@@ -440,7 +448,9 @@ impl<'a> Compiler<'a> {
 
                     match index_kind {
                         // Global call syntax `global.f()`
-                        IndexKind::Dot | IndexKind::Colon if matches!(kind, EvalKind::Global) && field_buffer.is_empty() => {
+                        IndexKind::Dot | IndexKind::Colon
+                            if matches!(kind, EvalKind::Global) && field_buffer.is_empty() =>
+                        {
                             assert!(skip_label.is_none());
 
                             let arg_count = args.len() as u32;
@@ -464,7 +474,12 @@ impl<'a> Compiler<'a> {
                             let arg_count = args.len() as u32;
 
                             // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
+                            kind = commit_field_buffer(
+                                self,
+                                kind,
+                                &mut field_buffer,
+                                &mut skip_label,
+                            )?;
                             self.emit_move_to_stack(kind)?;
 
                             // We'll need our src after pushing the parameters
@@ -490,7 +505,12 @@ impl<'a> Compiler<'a> {
                             let args_count = args.len() as u32;
 
                             // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
+                            kind = commit_field_buffer(
+                                self,
+                                kind,
+                                &mut field_buffer,
+                                &mut skip_label,
+                            )?;
                             self.emit_move_to_stack(kind)?;
 
                             let label = format!("LAB_{:0>4X}", self.label_count);
@@ -598,7 +618,11 @@ impl<'a> Compiler<'a> {
 
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
-            Expression::TernaryOp { cond, if_: lhs, else_: rhs } => {
+            Expression::TernaryOp {
+                cond,
+                if_: lhs,
+                else_: rhs,
+            } => {
                 // Bring condition to stack
                 let cond = self.emit_expr(*cond)?;
                 self.emit_move_to_stack(cond)?;
@@ -804,8 +828,6 @@ impl<'a> Compiler<'a> {
                             BinaryOp::LShift => self.emit_ins(Instruction::LShift),
                             BinaryOp::RShift => self.emit_ins(Instruction::RShift),
 
-
-
                             // TODO: Sounds cursed
                             // BinaryOp::To
                             _ => unreachable!(),
@@ -822,7 +844,9 @@ impl<'a> Compiler<'a> {
                         // Special behaviour when RHS is `to`
                         match self.emit_expr(*rhs)? {
                             // TODO: We might need a specialised EvalKind for this
-                            EvalKind::Range => self.emit_ins(Instruction::IsIn(operands::IsInParams::Range)),
+                            EvalKind::Range => {
+                                self.emit_ins(Instruction::IsIn(operands::IsInParams::Range))
+                            }
 
                             other => {
                                 self.emit_move_to_stack(other)?;
@@ -850,169 +874,7 @@ impl<'a> Compiler<'a> {
                 Ok(kind)
             }
 
-            Expression::AssignOp { op, lhs, rhs } => {
-
-                match op {
-                    AssignOp::Assign
-                    | AssignOp::AddAssign
-                    | AssignOp::SubAssign
-                    | AssignOp::MulAssign
-                    | AssignOp::DivAssign
-                    | AssignOp::ModAssign
-                    | AssignOp::AssignInto
-                    | AssignOp::BitAndAssign
-                    | AssignOp::BitOrAssign
-                    | AssignOp::BitXorAssign
-                    | AssignOp::LShiftAssign
-                    | AssignOp::RShiftAssign => {
-                        // RHS seems to evaluate before LHS here, but I haven't investigated it too heavily.
-                        let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs)?;
-
-                        let lhs = self.emit_expr(*lhs)?;
-
-                        // TODO: I'm compiling _way_ differently than byond for list sets here. Is that ok?
-                        // These ops require an l-value
-                        let var = match lhs {
-                            EvalKind::Var(var) if is_l_value(&var) => var,
-
-                            EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
-
-                            EvalKind::ListRef => {
-                                self.emit_ins(Instruction::SetVar(Variable::CacheKey));
-                                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                                Variable::CacheIndex
-                            }
-
-                            _ => return Err(CompileError::ExpectedLValue),
-                        };
-
-                        match op {
-                            AssignOp::Assign => self.emit_ins(Instruction::SetVarExpr(var)),
-                            AssignOp::AddAssign => {
-                                self.emit_ins(Instruction::AugAdd(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::SubAssign => {
-                                self.emit_ins(Instruction::AugSub(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::MulAssign => {
-                                self.emit_ins(Instruction::AugMul(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::DivAssign => {
-                                self.emit_ins(Instruction::AugDiv(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::ModAssign => {
-                                self.emit_ins(Instruction::AugMod(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::AssignInto => {
-                                self.emit_ins(Instruction::AssignInto(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::BitAndAssign => {
-                                self.emit_ins(Instruction::AugBand(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::BitOrAssign => {
-                                self.emit_ins(Instruction::AugBor(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::BitXorAssign => {
-                                self.emit_ins(Instruction::AugXor(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::LShiftAssign => {
-                                self.emit_ins(Instruction::AugLShift(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            AssignOp::RShiftAssign => {
-                                self.emit_ins(Instruction::AugRShift(var));
-                                self.emit_ins(Instruction::PushEval);
-                            }
-                            _ => unreachable!()
-                        };
-                    }
-
-                    AssignOp::AndAssign
-                    | AssignOp::OrAssign => {
-                        let label = format!("LAB_{:0>4X}", self.label_count);
-                        self.label_count += 1;
-
-                        // LHS first for this fucker
-                        let lhs = self.emit_expr(*lhs)?;
-
-                        enum CacheKind {
-                            Var(Variable),
-                            Field(String),
-                            ListRef
-                        }
-
-                        let test_ins = match op {
-                            AssignOp::AndAssign => Instruction::JmpAnd(Label(label.clone())),
-                            AssignOp::OrAssign => Instruction::JmpOr(Label(label.clone())),
-                            _ => unreachable!(),
-                        };
-
-                        // We need the l-value for later
-                        let assign_kind = match lhs {
-                            EvalKind::Var(var) if is_l_value(&var) => {
-                                self.emit_ins(Instruction::GetVar(var.clone()));
-                                self.emit_ins(test_ins);
-                                CacheKind::Var(var)
-                            }
-
-                            EvalKind::Field(builder, field) => {
-                                self.emit_ins(Instruction::GetVar(builder.get_field(DMString(field.clone().into()))));
-                                self.emit_ins(test_ins);
-                                self.emit_ins(Instruction::PushCache);
-                                CacheKind::Field(field)
-                            }
-
-                            EvalKind::ListRef => {
-                                self.emit_ins(Instruction::SetVar(Variable::CacheKey));
-                                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                                self.emit_ins(Instruction::GetVar(Variable::CacheIndex));
-                                self.emit_ins(test_ins);
-                                self.emit_ins(Instruction::PushCache);
-                                self.emit_ins(Instruction::PushCacheKey);
-                                CacheKind::ListRef
-                            }
-
-                            _ => return Err(CompileError::ExpectedLValue),
-                        };
-
-                        let rhs = self.emit_expr(*rhs)?;
-                        self.emit_move_to_stack(rhs)?;
-
-                        match assign_kind {
-                            CacheKind::Var(var) => {
-                                self.emit_ins(Instruction::SetVarExpr(var));
-                            },
-
-                            CacheKind::Field(field) => {
-                                self.emit_ins(Instruction::PopCache);
-                                self.emit_ins(Instruction::SetVarExpr(Variable::Field(DMString(field.into()))))
-                            }
-
-                            CacheKind::ListRef => {
-                                self.emit_ins(Instruction::PopCacheKey);
-                                self.emit_ins(Instruction::PopCache);
-                                self.emit_ins(Instruction::SetVarExpr(Variable::CacheIndex));
-                            }
-                        }
-
-                        self.emit_label(label);
-                    }
-                }
-
-
-
-                Ok(EvalKind::Stack)
-            }
+            Expression::AssignOp { op, lhs, rhs } => assignment::emit(self, op, *lhs, *rhs),
         }
     }
 }
@@ -1020,11 +882,12 @@ impl<'a> Compiler<'a> {
 #[test]
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
-    let lexer = dreammaker::lexer::Lexer::new(&context, Default::default(), "global.f()".as_bytes());
+    let lexer =
+        dreammaker::lexer::Lexer::new(&context, Default::default(), "global.f()".as_bytes());
     //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
     let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
-   // println!("{:#?}\n\n\n", expr);
+    // println!("{:#?}\n\n\n", expr);
 
     let expr = compile_expr("a &&= 2", &["a"]);
     println!("{:#?}", expr);

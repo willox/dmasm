@@ -1,8 +1,8 @@
 use dreammaker::ast::Expression;
 
 use crate::compiler::*;
-use crate::Instruction;
 use crate::operands;
+use crate::Instruction;
 
 #[allow(non_camel_case_types)]
 enum DefaultValue {
@@ -327,7 +327,6 @@ pub(super) fn eval(
     name: &str,
     args: &Vec<Expression>,
 ) -> Result<Option<EvalKind>, CompileError> {
-
     if is_unsupported_proc(name) {
         return Err(CompileError::UnsupportedBuiltin {
             proc: name.to_owned(),
