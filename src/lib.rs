@@ -119,6 +119,10 @@ impl assembler::AssembleEnv for TestAssembleEnv {
     fn get_proc_index(&mut self, _path: &str) -> Option<u32> {
         Some(1339)
     }
+
+    fn get_type(&mut self, _path: &str) -> Option<(u8, u32)> {
+        Some((0x09, 0x01))
+    }
 }
 
 impl disassembler::DisassembleEnv for TestDisassembleEnv {

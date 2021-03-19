@@ -6,6 +6,7 @@ pub trait AssembleEnv {
     fn get_string_index(&mut self, string: &[u8]) -> Option<u32>;
     fn get_variable_name_index(&mut self, name: &[u8]) -> Option<u32>;
     fn get_proc_index(&mut self, path: &str) -> Option<u32>;
+    fn get_type(&mut self, path: &str) -> Option<(u8, u32)>;
 }
 
 #[derive(Debug, PartialEq)]
@@ -13,6 +14,7 @@ pub enum AssembleError {
     UnsupportedValue(operands::Value),
     ProcNotFound,
     InvalidVariableName,
+    TypeNotFound(String),
 }
 
 pub struct Assembler<'a, E: AssembleEnv> {
