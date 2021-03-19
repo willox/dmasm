@@ -37,7 +37,7 @@ fn emit_single(
         UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr => {
             // These ops require an l-value
             let var = match kind {
-                EvalKind::Var(var) if is_l_value(&var) => var,
+                EvalKind::Var(var) if is_writable(&var) => var,
 
                 EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
 

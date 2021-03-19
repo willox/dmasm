@@ -206,13 +206,13 @@ fn commit_field_buffer(
     let mut builder = match kind {
         EvalKind::Stack => {
             compiler.emit_ins(Instruction::SetVar(Variable::Cache));
-            VariableChainBuilder::begin(Variable::Cache)
+            ChainBuilder::begin(Variable::Cache)
         }
 
         EvalKind::ListRef => {
             compiler.emit_ins(Instruction::ListGet);
             compiler.emit_ins(Instruction::SetVar(Variable::Cache));
-            VariableChainBuilder::begin(Variable::Cache)
+            ChainBuilder::begin(Variable::Cache)
         }
 
         EvalKind::Range => return Err(CompileError::UnexpectedRange),
@@ -229,7 +229,7 @@ fn commit_field_buffer(
             builder
         }
 
-        EvalKind::Var(var) => VariableChainBuilder::begin(var),
+        EvalKind::Var(var) => ChainBuilder::begin(var),
     };
 
     let last = field_chain.pop().unwrap();

@@ -322,7 +322,7 @@ unsupported_procs! {
     /proc/CRASH,
 }
 
-pub(super) fn eval(
+pub(super) fn emit(
     compiler: &mut Compiler<'_>,
     name: &str,
     args: &Vec<Expression>,

@@ -28,7 +28,7 @@ pub(super) fn emit(
 
             // These ops require an l-value
             let var = match compiler.emit_expr(lhs)? {
-                EvalKind::Var(var) if is_l_value(&var) => var,
+                EvalKind::Var(var) if is_writable(&var) => var,
 
                 EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
 
@@ -112,7 +112,7 @@ pub(super) fn emit(
 
             // We need the l-value for later
             let assign_kind = match lhs {
-                EvalKind::Var(var) if is_l_value(&var) => {
+                EvalKind::Var(var) if is_writable(&var) => {
                     compiler.emit_ins(Instruction::GetVar(var.clone()));
                     compiler.emit_ins(test_ins);
                     CacheKind::Var(var)

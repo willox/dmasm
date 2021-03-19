@@ -9,14 +9,19 @@ use crate::Instruction;
 use crate::Node;
 
 mod assignment;
+
 mod binary_ops;
 mod builtin_procs;
+mod chain_builder;
 mod follow;
+mod term;
 mod ternary;
 mod unary;
 
+use chain_builder::ChainBuilder;
+
 // TODO: Think
-fn is_l_value(var: &Variable) -> bool {
+fn is_writable(var: &Variable) -> bool {
     match var {
         // Does Field count? We probably don't hit that code path but it might count
         Variable::Usr
@@ -29,98 +34,6 @@ fn is_l_value(var: &Variable) -> bool {
         | Variable::Global { .. } => true,
         _ => false,
     }
-}
-
-#[derive(Debug, PartialEq)]
-struct VariableChainBuilder {
-    var: Variable,
-}
-
-impl VariableChainBuilder {
-    fn begin(base: Variable) -> Self {
-        let var = match base {
-            Variable::Cache => {
-                // We're already in the cache so there's nothing to do here
-                // This null gets replaced later
-                Variable::Null
-            }
-
-            other => Variable::SetCache(Box::new(other), Box::new(Variable::Null)),
-        };
-
-        Self { var }
-    }
-
-    fn last_setcache_rhs(&mut self) -> Option<&mut Box<Variable>> {
-        if let Variable::SetCache(_, rhs) = &mut self.var {
-            if let Variable::SetCache { .. } = **rhs {
-                return last_setcache_rhs(rhs.as_mut());
-            }
-
-            return Some(rhs);
-        }
-
-        None
-    }
-
-    fn append(&mut self, field: DMString) {
-        if let Some(rhs) = self.last_setcache_rhs() {
-            **rhs = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
-            return;
-        }
-
-        // This is the first SetCache - discard the current var (which should be null)
-        assert!(self.var == Variable::Null);
-        self.var = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
-    }
-
-    fn get_push_cache(mut self) -> Option<Variable> {
-        if let Some(_rhs) = self.last_setcache_rhs() {
-            return Some(self.var);
-        }
-
-        None
-    }
-
-    fn get_field(mut self, field: DMString) -> Variable {
-        if let Some(rhs) = self.last_setcache_rhs() {
-            **rhs = Variable::Field(field);
-            return self.var;
-        }
-
-        Variable::Field(field)
-    }
-
-    fn get_initial_field(mut self, field: DMString) -> Variable {
-        if let Some(rhs) = self.last_setcache_rhs() {
-            **rhs = Variable::Initial(Box::new(Variable::Field(field)));
-            return self.var;
-        }
-
-        Variable::Initial(Box::new(Variable::Field(field)))
-    }
-
-    fn get_dynamic_proc(mut self, proc: DMString) -> Variable {
-        if let Some(rhs) = self.last_setcache_rhs() {
-            **rhs = Variable::DynamicProc(proc);
-            return self.var;
-        }
-
-        Variable::DynamicProc(proc)
-    }
-}
-
-// TODO: dedupe
-fn last_setcache_rhs(var: &mut Variable) -> Option<&mut Box<Variable>> {
-    if let Variable::SetCache(_, rhs) = var {
-        if let Variable::SetCache { .. } = **rhs {
-            return last_setcache_rhs(rhs.as_mut());
-        }
-
-        return Some(rhs);
-    }
-
-    None
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -229,7 +142,7 @@ enum EvalKind {
     Var(Variable),
 
     // Similar to Var, but more state
-    Field(VariableChainBuilder, String),
+    Field(ChainBuilder, String),
     // TODO: Eval?
 }
 
@@ -293,7 +206,6 @@ impl<'a> Compiler<'a> {
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
             Expression::TernaryOp { cond, if_, else_ } => ternary::emit(self, *cond, *if_, *else_),
-
             Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
             Expression::AssignOp { op, lhs, rhs } => assignment::emit(self, op, *lhs, *rhs),
 
@@ -302,93 +214,7 @@ impl<'a> Compiler<'a> {
                 term,
                 follow,
             } => {
-                let kind = match term.elem {
-                    // Nested expression, probably something in brackets
-                    Term::Expr(expr) => self.emit_expr(*expr)?,
-
-                    // Simple stack pushes
-                    Term::Null => {
-                        self.emit_ins(Instruction::PushVal(Value::Null));
-                        EvalKind::Stack
-                    }
-                    Term::Int(i) => {
-                        self.emit_ins(Instruction::PushInt(i));
-                        EvalKind::Stack
-                    }
-                    Term::Float(f) => {
-                        self.emit_ins(Instruction::PushVal(Value::Number(f)));
-                        EvalKind::Stack
-                    }
-                    Term::String(str) => {
-                        self.emit_ins(Instruction::PushVal(Value::DMString(DMString(str.into()))));
-                        EvalKind::Stack
-                    }
-
-                    // Identifiers. These could be params or globals.
-                    Term::Ident(ident) => self.emit_find_var(ident),
-
-                    // Resources
-                    Term::Resource(resource) => {
-                        self.emit_ins(Instruction::PushVal(Value::Resource(resource)));
-                        EvalKind::Stack
-                    }
-
-                    // Type paths: We don't support the anonymous kind with variable declarations.
-                    Term::Prefab(prefab) => {
-                        if !prefab.vars.is_empty() {
-                            return Err(CompileError::UnsupportedPrefabWithVars);
-                        }
-
-                        let mut path = String::new();
-
-                        // TODO: Relative stuff
-                        for (op, part) in prefab.path {
-                            use std::fmt::Write;
-                            write!(&mut path, "{}{}", op, part).unwrap();
-                        }
-
-                        self.emit_ins(Instruction::PushVal(Value::Path(path)));
-                        EvalKind::Stack
-                    }
-
-                    Term::Call(ident, args) => {
-                        // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
-                        // We can implement this later...
-                        if args
-                            .iter()
-                            .any(|x| matches!(x, Expression::AssignOp { .. }))
-                        {
-                            return Err(CompileError::NamedArgumentsNotImplemented);
-                        }
-
-                        match builtin_procs::eval(self, &ident, &args)? {
-                            // Handled by builtin_procs
-                            Some(kind) => kind,
-
-                            // We've got to call a proc
-                            None => {
-                                let arg_count = args.len() as u32;
-
-                                // Bring all arguments onto the stack
-                                for arg in args {
-                                    let expr = self.emit_expr(arg)?;
-                                    self.emit_move_to_stack(expr)?;
-                                }
-
-                                // We're treating all Term::Call expressions as global calls
-                                self.emit_ins(Instruction::CallGlob(
-                                    arg_count,
-                                    operands::Proc(format!("/proc/{}", ident)),
-                                ));
-
-                                EvalKind::Stack
-                            }
-                        }
-                    }
-
-                    other => return Err(CompileError::UnsupportedExpressionTerm(other)),
-                };
-
+                let kind = term::emit(self, term.elem)?;
                 let kind = follow::emit(self, follow, kind)?;
                 let kind = unary::emit(self, unary, kind)?;
                 Ok(kind)
