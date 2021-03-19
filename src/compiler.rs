@@ -11,6 +11,8 @@ use crate::Node;
 mod assignment;
 mod binary_ops;
 mod builtin_procs;
+mod follow;
+mod ternary;
 mod unary;
 
 // TODO: Think
@@ -288,299 +290,12 @@ impl<'a> Compiler<'a> {
         Ok(EvalKind::Stack)
     }
 
-    fn emit_follow(
-        &mut self,
-        follow: Vec<Spanned<Follow>>,
-        mut kind: EvalKind,
-    ) -> Result<EvalKind, CompileError> {
-        if follow.is_empty() {
-            return Ok(kind);
-        }
-
-        // sequential field accessors (example: a.b.c) get buffered into a single operand
-        let mut field_buffer = vec![];
-        let mut skip_label = None;
-
-        fn commit_field_buffer(
-            compiler: &mut Compiler,
-            kind: EvalKind,
-            field_chain: &mut Vec<String>,
-            skip_label: &mut Option<String>,
-        ) -> Result<EvalKind, CompileError> {
-            if field_chain.is_empty() {
-                assert!(skip_label.is_none());
-                return Ok(kind);
-            }
-
-            // We need a value
-            let mut builder = match kind {
-                EvalKind::Stack => {
-                    compiler.emit_ins(Instruction::SetVar(Variable::Cache));
-                    VariableChainBuilder::begin(Variable::Cache)
-                }
-
-                EvalKind::ListRef => {
-                    compiler.emit_ins(Instruction::ListGet);
-                    compiler.emit_ins(Instruction::SetVar(Variable::Cache));
-                    VariableChainBuilder::begin(Variable::Cache)
-                }
-
-                EvalKind::Range => return Err(CompileError::UnexpectedRange),
-
-                // Bit hacky.
-                EvalKind::Global => {
-                    let name = field_chain.remove(0);
-                    let var = Variable::Global(DMString(name.into()));
-                    return commit_field_buffer(
-                        compiler,
-                        EvalKind::Var(var),
-                        field_chain,
-                        skip_label,
-                    );
-                }
-
-                EvalKind::Field(mut builder, field) => {
-                    builder.append(DMString(field.into()));
-                    builder
-                }
-
-                EvalKind::Var(var) => VariableChainBuilder::begin(var),
-            };
-
-            let last = field_chain.pop().unwrap();
-
-            for field in field_chain.iter() {
-                builder.append(DMString(field.clone().into()));
-            }
-
-            let kind = EvalKind::Field(builder, last);
-
-            // If we had a skip label, we have to go on to the stack
-            let kind = match skip_label {
-                Some(skip_label) => {
-                    compiler.emit_move_to_stack(kind)?;
-                    compiler.emit_label(skip_label.clone());
-                    EvalKind::Stack
-                }
-
-                None => kind,
-            };
-
-            field_chain.clear();
-            *skip_label = None;
-            Ok(kind)
-        }
-
-        for sub_expr in follow {
-            match sub_expr.elem {
-                Follow::Field(index_kind, ident) => {
-                    match index_kind {
-                        // We just treat these as the same
-                        // TODO: Should we type check?
-                        IndexKind::Dot | IndexKind::Colon => {
-                            field_buffer.push(ident);
-                        }
-
-                        // We just treat these as the same
-                        // TODO: Should we type check?
-                        // TODO: Generates kind of badly compared to BYOND.
-                        IndexKind::SafeDot | IndexKind::SafeColon => {
-                            kind = commit_field_buffer(
-                                self,
-                                kind,
-                                &mut field_buffer,
-                                &mut skip_label,
-                            )?;
-                            self.emit_move_to_stack(kind)?;
-
-                            let label = format!("LAB_{:0>4X}", self.label_count);
-                            self.label_count += 1;
-
-                            self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-                            self.emit_ins(Instruction::GetVar(Variable::Cache));
-
-                            assert!(skip_label.is_none());
-                            field_buffer.push(ident);
-                            skip_label = Some(label);
-
-                            kind = EvalKind::Stack;
-                        }
-                    }
-                }
-
-                Follow::Index(expr) => {
-                    kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
-
-                    // Move base to the stack
-                    self.emit_move_to_stack(kind)?;
-
-                    // Handle inner expression and move it to the stack
-                    match self.emit_expr(*expr)? {
-                        EvalKind::Stack => {}
-
-                        EvalKind::ListRef => {
-                            self.emit_ins(Instruction::ListGet);
-                        }
-
-                        EvalKind::Range => return Err(CompileError::UnexpectedRange),
-                        EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
-
-                        EvalKind::Var(var) => {
-                            self.emit_ins(Instruction::GetVar(var));
-                        }
-
-                        EvalKind::Field(builder, field) => {
-                            let var = builder.get_field(DMString(field.into()));
-                            self.emit_ins(Instruction::GetVar(var));
-                        }
-                    }
-
-                    kind = EvalKind::ListRef;
-                }
-
-                Follow::Call(index_kind, ident, args) => {
-                    // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
-                    // We can implement this later...
-                    if args
-                        .iter()
-                        .any(|x| matches!(x, Expression::AssignOp { .. }))
-                    {
-                        return Err(CompileError::NamedArgumentsNotImplemented);
-                    }
-
-                    match index_kind {
-                        // Global call syntax `global.f()`
-                        IndexKind::Dot | IndexKind::Colon
-                            if matches!(kind, EvalKind::Global) && field_buffer.is_empty() =>
-                        {
-                            assert!(skip_label.is_none());
-
-                            let arg_count = args.len() as u32;
-
-                            // Bring all arguments onto the stack
-                            for arg in args {
-                                let expr = self.emit_expr(arg)?;
-                                self.emit_move_to_stack(expr)?;
-                            }
-
-                            // We're treating all Term::Call expressions as global calls
-                            self.emit_ins(Instruction::CallGlob(
-                                arg_count,
-                                operands::Proc(format!("/proc/{}", ident)),
-                            ));
-                        }
-
-                        // We just treat these as the same
-                        // TODO: Should we type check?
-                        IndexKind::Dot | IndexKind::Colon => {
-                            let arg_count = args.len() as u32;
-
-                            // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(
-                                self,
-                                kind,
-                                &mut field_buffer,
-                                &mut skip_label,
-                            )?;
-                            self.emit_move_to_stack(kind)?;
-
-                            // We'll need our src after pushing the parameters
-                            self.emit_ins(Instruction::SetVar(Variable::Cache));
-                            self.emit_ins(Instruction::PushCache);
-
-                            // Push args to the stack
-                            for arg in args {
-                                let arg = self.emit_expr(arg)?;
-                                self.emit_move_to_stack(arg)?;
-                            }
-
-                            self.emit_ins(Instruction::PopCache);
-
-                            // Move base to the stack
-                            self.emit_ins(Instruction::Call(
-                                Variable::DynamicProc(DMString(ident.into())),
-                                arg_count,
-                            ));
-                        }
-
-                        IndexKind::SafeDot | IndexKind::SafeColon => {
-                            let args_count = args.len() as u32;
-
-                            // TODO: Can emit much cleaner code when no params
-                            kind = commit_field_buffer(
-                                self,
-                                kind,
-                                &mut field_buffer,
-                                &mut skip_label,
-                            )?;
-                            self.emit_move_to_stack(kind)?;
-
-                            let label = format!("LAB_{:0>4X}", self.label_count);
-                            self.label_count += 1;
-
-                            // We'll need our src after pushing the parameters
-                            self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-                            self.emit_ins(Instruction::PushCache);
-
-                            // Push args to the stack
-                            for arg in args {
-                                let arg = self.emit_expr(arg)?;
-                                self.emit_move_to_stack(arg)?;
-                            }
-
-                            self.emit_ins(Instruction::PopCache);
-
-                            // Move base to the stack
-                            self.emit_ins(Instruction::Call(
-                                Variable::DynamicProc(DMString(ident.into())),
-                                args_count,
-                            ));
-
-                            self.emit_label(label);
-                        }
-                    }
-
-                    kind = EvalKind::Stack;
-                }
-            }
-        }
-
-        kind = commit_field_buffer(self, kind, &mut field_buffer, &mut skip_label)?;
-        Ok(kind)
-    }
-
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
-            Expression::TernaryOp {
-                cond,
-                if_: lhs,
-                else_: rhs,
-            } => {
-                // Bring condition to stack
-                let cond = self.emit_expr(*cond)?;
-                self.emit_move_to_stack(cond)?;
+            Expression::TernaryOp { cond, if_, else_ } => ternary::emit(self, *cond, *if_, *else_),
 
-                let label_rhs = format!("LAB_RHS_{:0>4X}", self.label_count);
-                let label_end = format!("LAB_END_{:0>4X}", self.label_count);
-                self.label_count += 1;
-
-                self.emit_ins(Instruction::Test);
-                self.emit_ins(Instruction::Jz(Label(label_rhs.clone())));
-
-                // LHS
-                let lhs = self.emit_expr(*lhs)?;
-                self.emit_move_to_stack(lhs)?;
-                self.emit_ins(Instruction::Jmp(Label(label_end.clone())));
-
-                // RHS
-                self.emit_label(label_rhs);
-                let rhs = self.emit_expr(*rhs)?;
-                self.emit_move_to_stack(rhs)?;
-
-                // End
-                self.emit_label(label_end);
-                Ok(EvalKind::Stack)
-            }
+            Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
+            Expression::AssignOp { op, lhs, rhs } => assignment::emit(self, op, *lhs, *rhs),
 
             Expression::Base {
                 unary,
@@ -674,12 +389,10 @@ impl<'a> Compiler<'a> {
                     other => return Err(CompileError::UnsupportedExpressionTerm(other)),
                 };
 
-                let kind = self.emit_follow(follow, kind)?;
-                unary::emit(self, unary, kind)
+                let kind = follow::emit(self, follow, kind)?;
+                let kind = unary::emit(self, unary, kind)?;
+                Ok(kind)
             }
-
-            Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
-            Expression::AssignOp { op, lhs, rhs } => assignment::emit(self, op, *lhs, *rhs),
         }
     }
 }

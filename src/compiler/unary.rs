@@ -6,7 +6,6 @@ pub(super) fn emit(
     unary: Vec<UnaryOp>,
     kind: EvalKind,
 ) -> Result<EvalKind, CompileError> {
-
     let mut kind = kind;
     for op in unary.into_iter().rev() {
         kind = emit_single(compiler, op, kind)?;
@@ -40,9 +39,7 @@ fn emit_single(
             let var = match kind {
                 EvalKind::Var(var) if is_l_value(&var) => var,
 
-                EvalKind::Field(builder, field) => {
-                    builder.get_field(DMString(field.into()))
-                }
+                EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
 
                 EvalKind::ListRef => {
                     compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
