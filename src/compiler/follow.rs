@@ -11,7 +11,6 @@ pub(super) fn emit(
     // sequential field accessors (example: a.b.c) get buffered into a single operand
     // TODO: Move this state and the commit function into a struct!
     let mut field_buffer = vec![];
-    let mut skip_label = None;
 
     for sub_expr in follow {
         match sub_expr.elem {
@@ -30,52 +29,25 @@ pub(super) fn emit(
                         kind = commit_field_buffer(
                             compiler,
                             kind,
-                            &mut field_buffer,
-                            &mut skip_label,
+                            &mut field_buffer
                         )?;
-                        compiler.emit_move_to_stack(kind)?;
 
-                        let label = format!("LAB_{:0>4X}", compiler.label_count);
-                        compiler.label_count += 1;
+                        let builder = compiler.emit_move_to_chain_builder(kind)?;
 
-                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-                        compiler.emit_ins(Instruction::GetVar(Variable::Cache));
-
-                        assert!(skip_label.is_none());
-                        field_buffer.push(ident);
-                        skip_label = Some(label);
-
-                        kind = EvalKind::Stack;
+                        kind = EvalKind::SafeField(builder, ident);
                     }
                 }
             }
 
             Follow::Index(expr) => {
-                kind = commit_field_buffer(compiler, kind, &mut field_buffer, &mut skip_label)?;
+                kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
 
                 // Move base to the stack
                 compiler.emit_move_to_stack(kind)?;
 
-                // Handle inner expression and move it to the stack
-                match compiler.emit_expr(*expr)? {
-                    EvalKind::Stack => {}
-
-                    EvalKind::ListRef => {
-                        compiler.emit_ins(Instruction::ListGet);
-                    }
-
-                    EvalKind::Range => return Err(CompileError::UnexpectedRange),
-                    EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
-
-                    EvalKind::Var(var) => {
-                        compiler.emit_ins(Instruction::GetVar(var));
-                    }
-
-                    EvalKind::Field(builder, field) => {
-                        let var = builder.get_field(DMString(field.into()));
-                        compiler.emit_ins(Instruction::GetVar(var));
-                    }
-                }
+                // Move inner expression to stack
+                let expr = compiler.emit_expr(*expr)?;
+                compiler.emit_move_to_stack(expr)?;
 
                 kind = EvalKind::ListRef;
             }
@@ -95,8 +67,6 @@ pub(super) fn emit(
                     IndexKind::Dot | IndexKind::Colon
                         if matches!(kind, EvalKind::Global) && field_buffer.is_empty() =>
                     {
-                        assert!(skip_label.is_none());
-
                         let arg_count = args.len() as u32;
 
                         // Bring all arguments onto the stack
@@ -121,8 +91,7 @@ pub(super) fn emit(
                         kind = commit_field_buffer(
                             compiler,
                             kind,
-                            &mut field_buffer,
-                            &mut skip_label,
+                            &mut field_buffer
                         )?;
                         compiler.emit_move_to_stack(kind)?;
 
@@ -145,6 +114,7 @@ pub(super) fn emit(
                         ));
                     }
 
+                    // TODO: re-do this
                     IndexKind::SafeDot | IndexKind::SafeColon => {
                         let args_count = args.len() as u32;
 
@@ -152,8 +122,7 @@ pub(super) fn emit(
                         kind = commit_field_buffer(
                             compiler,
                             kind,
-                            &mut field_buffer,
-                            &mut skip_label,
+                            &mut field_buffer
                         )?;
                         compiler.emit_move_to_stack(kind)?;
 
@@ -187,22 +156,21 @@ pub(super) fn emit(
         }
     }
 
-    kind = commit_field_buffer(compiler, kind, &mut field_buffer, &mut skip_label)?;
+    kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
     Ok(kind)
 }
 
 fn commit_field_buffer(
     compiler: &mut Compiler,
     kind: EvalKind,
-    field_chain: &mut Vec<String>,
-    skip_label: &mut Option<String>,
+    field_chain: &mut Vec<String>
 ) -> Result<EvalKind, CompileError> {
     if field_chain.is_empty() {
-        assert!(skip_label.is_none());
         return Ok(kind);
     }
 
-    // We need a value
+    // We need a ChainBuilder
+    // TODO: Lots of repeated code from emit_move_to_chain_builder. We should call that for the non-specialized ones.
     let mut builder = match kind {
         EvalKind::Stack => {
             compiler.emit_ins(Instruction::SetVar(Variable::Cache));
@@ -221,12 +189,26 @@ fn commit_field_buffer(
         EvalKind::Global => {
             let name = field_chain.remove(0);
             let var = Variable::Global(DMString(name.into()));
-            return commit_field_buffer(compiler, EvalKind::Var(var), field_chain, skip_label);
+            return commit_field_buffer(compiler, EvalKind::Var(var), field_chain);
         }
 
         EvalKind::Field(mut builder, field) => {
             builder.append(DMString(field.into()));
             builder
+        }
+
+        EvalKind::SafeField(builder, field) => {
+            let label = format!("LAB_{:0>4X}", compiler.label_count);
+            compiler.label_count += 1;
+
+            let holder = builder.get().unwrap();
+            compiler.emit_ins(Instruction::GetVar(holder));
+            compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+            compiler.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
+            compiler.emit_label(label);
+
+            compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+            ChainBuilder::begin(Variable::Cache)
         }
 
         EvalKind::Var(var) => ChainBuilder::begin(var),
@@ -240,18 +222,6 @@ fn commit_field_buffer(
 
     let kind = EvalKind::Field(builder, last);
 
-    // If we had a skip label, we have to go on to the stack
-    let kind = match skip_label {
-        Some(skip_label) => {
-            compiler.emit_move_to_stack(kind)?;
-            compiler.emit_label(skip_label.clone());
-            EvalKind::Stack
-        }
-
-        None => kind,
-    };
-
     field_chain.clear();
-    *skip_label = None;
     Ok(kind)
 }

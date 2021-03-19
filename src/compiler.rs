@@ -84,25 +84,8 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
 
     // TODO: Error check expr
 
-    match compiler.emit_expr(expr)? {
-        EvalKind::Stack => {}
-
-        EvalKind::ListRef => {
-            compiler.emit_ins(Instruction::ListGet);
-        }
-
-        EvalKind::Range => return Err(CompileError::UnexpectedRange),
-        EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
-
-        EvalKind::Var(v) => {
-            compiler.emit_ins(Instruction::GetVar(v));
-        }
-
-        EvalKind::Field(builder, f) => {
-            let var = builder.get_field(DMString(f.into()));
-            compiler.emit_ins(Instruction::GetVar(var));
-        }
-    }
+    let kind = compiler.emit_expr(expr)?;
+    compiler.emit_move_to_stack(kind)?;
 
     let mut arg_id = 0;
     for _ in params {
@@ -134,6 +117,10 @@ enum EvalKind {
 
     // Similar to Var, but more state
     Field(ChainBuilder, String),
+
+    // Similar to Field, but for `?.` accesses
+    SafeField(ChainBuilder, String),
+
     // TODO: Eval?
 }
 
@@ -189,9 +176,60 @@ impl<'a> Compiler<'a> {
                 let var = builder.get_field(DMString(field.into()));
                 self.emit_ins(Instruction::GetVar(var));
             }
+
+            EvalKind::SafeField(builder, field) => {
+                let label = format!("LAB_{:0>4X}", self.label_count);
+                self.label_count += 1;
+
+                let holder = builder.get().unwrap();
+                self.emit_ins(Instruction::GetVar(holder));
+                self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+                self.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
+                self.emit_label(label);
+            }
         }
 
         Ok(EvalKind::Stack)
+    }
+
+    // TODO: lots of copied code from emit_move_to_stack
+    fn emit_move_to_chain_builder(&mut self, kind: EvalKind) -> Result<ChainBuilder, CompileError> {
+        match kind {
+            EvalKind::Stack => {
+                self.emit_ins(Instruction::SetVar(Variable::Cache));
+                Ok(ChainBuilder::begin(Variable::Cache))
+            }
+
+            EvalKind::ListRef => {
+                self.emit_ins(Instruction::ListGet);
+                self.emit_ins(Instruction::SetVar(Variable::Cache));
+                Ok(ChainBuilder::begin(Variable::Cache))
+            }
+
+            EvalKind::Range => Err(CompileError::UnexpectedRange),
+            EvalKind::Global => Err(CompileError::UnexpectedGlobal),
+
+            EvalKind::Field(mut builder, field) => {
+                builder.append(DMString(field.into()));
+                Ok(builder)
+            }
+
+            EvalKind::SafeField(builder, field) => {
+                let label = format!("LAB_{:0>4X}", self.label_count);
+                self.label_count += 1;
+
+                let holder = builder.get().unwrap();
+                self.emit_ins(Instruction::GetVar(holder));
+                self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+                self.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
+                self.emit_label(label);
+
+                self.emit_ins(Instruction::SetVar(Variable::Cache));
+                Ok(ChainBuilder::begin(Variable::Cache))
+            }
+
+            EvalKind::Var(var) => Ok(ChainBuilder::begin(var)),
+        }
     }
 
     fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {

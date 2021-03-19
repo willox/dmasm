@@ -439,8 +439,7 @@ instructions! {
     // Pushes the value at the top of the stack (it clones it)
     0x13C = PushTop,
 
-    // Pops the value _only_ if the jump is performed
-    // wait that might be backwards...
+    // Pops the value _only_ if the jump is not performed
     0x13D = SetCacheJmpIfNull(destination: Label),
 
     // Pops the value regardless of if the jump is performed

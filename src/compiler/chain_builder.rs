@@ -20,6 +20,45 @@ impl ChainBuilder {
         Self { var }
     }
 
+    fn resolve(&mut self) {
+        match &mut self.var {
+            Variable::Null => {
+                self.var = Variable::Cache;
+            }
+
+            Variable::SetCache(lhs, rhs) => {
+                match **rhs {
+                    Variable::SetCache {..} => {
+                        Self::resolve2(rhs);
+                    }
+                    _ => {
+                        self.var = (**lhs).clone();
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    // TODO: dedupe
+    fn resolve2(var: &mut Variable) {
+        match var {
+            Variable::SetCache(lhs, rhs) => {
+                match **rhs {
+                    Variable::SetCache {..} => {
+                        Self::resolve2(rhs);
+                    }
+                    _ => {
+                        *var = (**lhs).clone();
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
     fn last_setcache_rhs(&mut self) -> Option<&mut Box<Variable>> {
         if let Variable::SetCache(_, rhs) = &mut self.var {
             if let Variable::SetCache { .. } = **rhs {
@@ -56,12 +95,9 @@ impl ChainBuilder {
         self.var = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
     }
 
-    pub fn get_push_cache(mut self) -> Option<Variable> {
-        if let Some(_rhs) = self.last_setcache_rhs() {
-            return Some(self.var);
-        }
-
-        None
+    pub fn get(mut self) -> Option<Variable> {
+        self.resolve();
+        Some(self.var)
     }
 
     pub fn get_field(mut self, field: DMString) -> Variable {
