@@ -35,6 +35,12 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
+        // as() stuff. We might eventually change this to its own EvalKind so statements can act on them better.
+        Term::As(val) => {
+            compiler.emit_ins(Instruction::PushInt(val.bits() as i32));
+            Ok(EvalKind::Stack)
+        }
+
         // Type paths: We don't support the anonymous kind with variable declarations.
         Term::Prefab(prefab) => {
             if !prefab.vars.is_empty() {

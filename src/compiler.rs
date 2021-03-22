@@ -28,8 +28,10 @@ fn is_writable(var: &Variable) -> bool {
         | Variable::Args
         | Variable::Dot
         | Variable::CacheIndex
+        // TODO: These can be constant too.
         | Variable::Arg { .. }
         | Variable::Local { .. }
+        // TODO: Stuff like global.vars are constant and should return false here.
         | Variable::Global { .. } => true,
         _ => false,
     }
