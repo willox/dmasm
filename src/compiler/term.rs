@@ -97,10 +97,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         Term::DynamicCall(lhs, rhs) => {
             // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
             // We can implement this later...
-            if rhs
-                .iter()
-                .any(|x| matches!(x, Expression::AssignOp { .. }))
-            {
+            if rhs.iter().any(|x| matches!(x, Expression::AssignOp { .. })) {
                 return Err(CompileError::NamedArgumentsNotImplemented);
             }
 
@@ -135,13 +132,8 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             }
 
             match lhs_len {
-                1 => {
-                    compiler.emit_ins(Instruction::CallPath(rhs_len as u32));
-                }
-
-                2 => {
-                    compiler.emit_ins(Instruction::CallName(rhs_len as u32))
-                }
+                1 => compiler.emit_ins(Instruction::CallPath(rhs_len as u32)),
+                2 => compiler.emit_ins(Instruction::CallName(rhs_len as u32)),
 
                 _ => unreachable!(),
             }
@@ -149,7 +141,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
-        Term::SelfCall {..} | Term::ParentCall {..} => {
+        Term::SelfCall { .. } | Term::ParentCall { .. } => {
             // Can't implement these until we compile full procs
             // Well, maybe we could
             return Err(CompileError::UnsupportedRelativeCall);

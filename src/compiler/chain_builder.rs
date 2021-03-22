@@ -26,16 +26,14 @@ impl ChainBuilder {
                 self.var = Variable::Cache;
             }
 
-            Variable::SetCache(lhs, rhs) => {
-                match **rhs {
-                    Variable::SetCache {..} => {
-                        Self::resolve2(rhs);
-                    }
-                    _ => {
-                        self.var = (**lhs).clone();
-                    }
+            Variable::SetCache(lhs, rhs) => match **rhs {
+                Variable::SetCache { .. } => {
+                    Self::resolve2(rhs);
                 }
-            }
+                _ => {
+                    self.var = (**lhs).clone();
+                }
+            },
 
             _ => {}
         }
@@ -44,16 +42,14 @@ impl ChainBuilder {
     // TODO: dedupe
     fn resolve2(var: &mut Variable) {
         match var {
-            Variable::SetCache(lhs, rhs) => {
-                match **rhs {
-                    Variable::SetCache {..} => {
-                        Self::resolve2(rhs);
-                    }
-                    _ => {
-                        *var = (**lhs).clone();
-                    }
+            Variable::SetCache(lhs, rhs) => match **rhs {
+                Variable::SetCache { .. } => {
+                    Self::resolve2(rhs);
                 }
-            }
+                _ => {
+                    *var = (**lhs).clone();
+                }
+            },
 
             _ => {}
         }

@@ -9,7 +9,7 @@ fn peek_is_conditional(compiler: &Compiler<'_>, expr: &Expression) -> bool {
     let expr = expr.clone();
 
     if let Ok(expr) = compiler.emit_expr(expr) {
-        return matches!(expr, EvalKind::SafeField {..});
+        return matches!(expr, EvalKind::SafeField { .. });
     }
 
     false
@@ -22,9 +22,7 @@ fn emit_conditional(
     rhs: Expression,
 ) -> Result<EvalKind, CompileError> {
     let (builder, field) = match compiler.emit_expr(lhs)? {
-        EvalKind::SafeField(builder, field) => {
-            (builder, field)
-        }
+        EvalKind::SafeField(builder, field) => (builder, field),
 
         _ => unreachable!(),
     };
