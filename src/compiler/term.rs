@@ -147,30 +147,32 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             return Err(CompileError::UnsupportedRelativeCall);
         }
 
-        Term::New { type_, args } => match type_ {
-            NewType::Prefab(prefab) => {
-                if !prefab.vars.is_empty() {
-                    return Err(CompileError::UnsupportedPrefabWithVars);
+        Term::New { type_, args } => {
+            match type_ {
+                NewType::Prefab(prefab) => {
+                    if !prefab.vars.is_empty() {
+                        return Err(CompileError::UnsupportedPrefabWithVars);
+                    }
+
+                    let path = format!("{}", FormatTypePath(&prefab.path));
+                    let typeval = operands::Value::Path(path);
+                    compiler.emit_ins(Instruction::PushVal(typeval));
+
+                    emit_new(compiler, args)
                 }
 
-                let path = format!("{}", FormatTypePath(&prefab.path));
-                let typeval = operands::Value::Path(path);
-                compiler.emit_ins(Instruction::PushVal(typeval));
+                NewType::MiniExpr { ident, fields } => {
+                    let var = compiler.emit_find_var(ident);
+                    let follows: Vec<Follow> = fields.into_iter().map(|f| f.into()).collect();
 
-                emit_new(compiler, args)
+                    let kind = follow::emit(compiler, follows, var)?;
+                    compiler.emit_move_to_stack(kind)?;
+
+                    emit_new(compiler, args)
+                }
+
+                NewType::Implicit => Err(CompileError::UnsupportedImplicitNew),
             }
-
-            NewType::MiniExpr { ident, fields } => {
-                let var = compiler.emit_find_var(ident);
-                let follows: Vec<Follow> = fields.into_iter().map(|f| f.into()).collect();
-
-                let kind = follow::emit(compiler, follows, var)?;
-                compiler.emit_move_to_stack(kind)?;
-
-                emit_new(compiler, args)
-            }
-
-            NewType::Implicit => Err(CompileError::UnsupportedImplicitNew),
         },
 
         Term::Locate { args, in_list } => {
@@ -219,6 +221,14 @@ fn emit_new(
     compiler: &mut Compiler<'_>,
     args: Option<Vec<Expression>>,
 ) -> Result<EvalKind, CompileError> {
+    // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
+    // We can implement this later...
+    if let Some(args) = &args {
+        if args.iter().any(|x| matches!(x, Expression::AssignOp { .. })) {
+            return Err(CompileError::NamedArgumentsNotImplemented);
+        }
+    }
+
     let mut arg_count = 0;
     if let Some(args) = args {
         arg_count = args.len() as u32;
