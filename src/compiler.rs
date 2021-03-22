@@ -61,6 +61,7 @@ pub enum CompileError {
     UnexpectedRange,
     UnexpectedGlobal,
     UnsupportedImplicitNew,
+    UnsupportedRelativeCall,
 }
 
 impl From<dreammaker::DMError> for CompileError {

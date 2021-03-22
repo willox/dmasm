@@ -94,6 +94,12 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             }
         }
 
+        Term::SelfCall {..} | Term::ParentCall {..} => {
+            // Can't implement these until we compile full procs
+            // Well, maybe we could
+            return Err(CompileError::UnsupportedRelativeCall);
+        }
+
         Term::New { type_, args } => match type_ {
             NewType::Prefab(prefab) => {
                 if !prefab.vars.is_empty() {
