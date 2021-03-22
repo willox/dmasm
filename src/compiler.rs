@@ -49,6 +49,8 @@ pub enum CompileError {
     MissingArgument {
         proc: String,
         index: u32,
+
+        // TODO: Just remove this junk
         name: String,
     },
     TooManyArguments {
@@ -62,6 +64,8 @@ pub enum CompileError {
     UnexpectedGlobal,
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
+    UnsupportedImplicitLocate,
+    InvalidLocateArgs,
 }
 
 impl From<dreammaker::DMError> for CompileError {

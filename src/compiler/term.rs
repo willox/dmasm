@@ -173,6 +173,43 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             NewType::Implicit => Err(CompileError::UnsupportedImplicitNew),
         },
 
+        Term::Locate { args, in_list } => {
+            let args_len = args.len();
+
+            // Push everything first to simplify later code
+            for expr in args {
+                let kind = compiler.emit_expr(expr)?;
+                compiler.emit_move_to_stack(kind)?;
+            }
+
+            match args_len {
+                // locate()
+                0 => return Err(CompileError::UnsupportedImplicitLocate),
+
+                // locate(ref|type)
+                1 if in_list.is_none() => {
+                    compiler.emit_ins(Instruction::LocateRef);
+                }
+
+                // locate(type) in container
+                1 if in_list.is_some() => {
+                    let kind = compiler.emit_expr(*in_list.unwrap())?;
+                    compiler.emit_move_to_stack(kind)?;
+
+                    compiler.emit_ins(Instruction::LocateType);
+                }
+
+                // locate(X, Y, Z)
+                3 => {
+                    compiler.emit_ins(Instruction::LocatePos);
+                }
+
+                _ => return Err(CompileError::InvalidLocateArgs),
+            }
+
+            Ok(EvalKind::Stack)
+        }
+
         other => Err(CompileError::UnsupportedExpressionTerm(other)),
     }
 }
