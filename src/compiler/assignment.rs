@@ -3,12 +3,149 @@ use dreammaker::ast::Expression;
 use crate::compiler::*;
 use crate::Instruction;
 
+// This... really is a shame.
+fn peek_is_conditional(compiler: &Compiler<'_>, expr: &Expression) -> bool {
+    let mut compiler = compiler.to_owned();
+    let expr = expr.clone();
+
+    if let Ok(expr) = compiler.emit_expr(expr) {
+        return matches!(expr, EvalKind::SafeField {..});
+    }
+
+    false
+}
+
+fn emit_conditional(
+    compiler: &mut Compiler<'_>,
+    op: AssignOp,
+    lhs: Expression,
+    rhs: Expression,
+) -> Result<EvalKind, CompileError> {
+    let (builder, field) = match compiler.emit_expr(lhs)? {
+        EvalKind::SafeField(builder, field) => {
+            (builder, field)
+        }
+
+        _ => unreachable!(),
+    };
+
+    let label = format!("LAB_{:0>4X}", compiler.label_count);
+    compiler.label_count += 1;
+
+    let holder = builder.get();
+    compiler.emit_ins(Instruction::GetVar(holder));
+    compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+
+    let var = Variable::Field(DMString(field.into()));
+
+    match op {
+        AssignOp::Assign
+        | AssignOp::AddAssign
+        | AssignOp::SubAssign
+        | AssignOp::MulAssign
+        | AssignOp::DivAssign
+        | AssignOp::ModAssign
+        | AssignOp::AssignInto
+        | AssignOp::BitAndAssign
+        | AssignOp::BitOrAssign
+        | AssignOp::BitXorAssign
+        | AssignOp::LShiftAssign
+        | AssignOp::RShiftAssign => {
+            // Push holder - We'll need it later
+            compiler.emit_ins(Instruction::PushCache);
+
+            let rhs = compiler.emit_expr(rhs)?;
+            compiler.emit_move_to_stack(rhs)?;
+
+            // Pop holder
+            compiler.emit_ins(Instruction::PopCache);
+
+            match op {
+                AssignOp::Assign => compiler.emit_ins(Instruction::SetVarExpr(var)),
+                AssignOp::AddAssign => {
+                    compiler.emit_ins(Instruction::AugAdd(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::SubAssign => {
+                    compiler.emit_ins(Instruction::AugSub(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::MulAssign => {
+                    compiler.emit_ins(Instruction::AugMul(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::DivAssign => {
+                    compiler.emit_ins(Instruction::AugDiv(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::ModAssign => {
+                    compiler.emit_ins(Instruction::AugMod(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::AssignInto => {
+                    compiler.emit_ins(Instruction::AssignInto(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::BitAndAssign => {
+                    compiler.emit_ins(Instruction::AugBand(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::BitOrAssign => {
+                    compiler.emit_ins(Instruction::AugBor(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::BitXorAssign => {
+                    compiler.emit_ins(Instruction::AugXor(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::LShiftAssign => {
+                    compiler.emit_ins(Instruction::AugLShift(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::RShiftAssign => {
+                    compiler.emit_ins(Instruction::AugRShift(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                _ => unreachable!(),
+            };
+        }
+
+        AssignOp::AndAssign | AssignOp::OrAssign => {
+            let test_ins = match op {
+                AssignOp::AndAssign => Instruction::JmpAnd(Label(label.clone())),
+                AssignOp::OrAssign => Instruction::JmpOr(Label(label.clone())),
+                _ => unreachable!(),
+            };
+
+            compiler.emit_ins(Instruction::GetVar(var.clone()));
+            compiler.emit_ins(test_ins);
+
+            // Push holder - We'll need it later
+            compiler.emit_ins(Instruction::PushCache);
+
+            let rhs = compiler.emit_expr(rhs)?;
+            compiler.emit_move_to_stack(rhs)?;
+
+            compiler.emit_ins(Instruction::PopCache);
+            compiler.emit_ins(Instruction::SetVarExpr(var));
+        }
+    }
+
+    compiler.emit_label(label);
+    Ok(EvalKind::Stack)
+}
+
 pub(super) fn emit(
     compiler: &mut Compiler<'_>,
     op: AssignOp,
     lhs: Expression,
     rhs: Expression,
 ) -> Result<EvalKind, CompileError> {
+    // Conditional assignments (x?.y = z) take a different path
+    if peek_is_conditional(compiler, &lhs) {
+        return emit_conditional(compiler, op, lhs, rhs);
+    }
+
     match op {
         AssignOp::Assign
         | AssignOp::AddAssign

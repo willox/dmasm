@@ -123,6 +123,7 @@ enum EvalKind {
     // TODO: Eval?
 }
 
+#[derive(Clone)]
 struct Compiler<'a> {
     params: &'a [&'a str],
     nodes: Vec<Node>,
@@ -180,7 +181,7 @@ impl<'a> Compiler<'a> {
                 let label = format!("LAB_{:0>4X}", self.label_count);
                 self.label_count += 1;
 
-                let holder = builder.get().unwrap();
+                let holder = builder.get();
                 self.emit_ins(Instruction::GetVar(holder));
                 self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
                 self.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
@@ -217,7 +218,7 @@ impl<'a> Compiler<'a> {
                 let label = format!("LAB_{:0>4X}", self.label_count);
                 self.label_count += 1;
 
-                let holder = builder.get().unwrap();
+                let holder = builder.get();
                 self.emit_ins(Instruction::GetVar(holder));
                 self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
                 self.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
@@ -262,7 +263,7 @@ fn compile_test() {
     context.assert_success();
     // println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a &&= 2", &["a"]);
+    let expr = compile_expr("a?.b &&= 2", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {

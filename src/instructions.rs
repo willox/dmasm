@@ -16,7 +16,7 @@ macro_rules! instructions {
             $operand_name:ident: $operand_type:tt
         ),* $(,)? ) )?
     ),* $(,)? ) => {
-        #[derive(PartialEq, Debug)]
+        #[derive(PartialEq, Clone, Debug)]
         pub enum Instruction {
             $(
                 $name$( ( $( $operand_type, )* ) )?,
@@ -443,7 +443,7 @@ instructions! {
     0x13D = SetCacheJmpIfNull(destination: Label),
 
     // Pops the value regardless of if the jump is performed
-    0x13E = JmpIfNull2(destination: Label),
+    0x13E = SetCachePopJmpIfNull(destination: Label),
 
     // This one's a bit of a beast. It seems that instructions such as AugAdd cause the offset of their variable operand to be cached
     // This instruction then uses the operand at that offset to find what the "last" var was and push it.

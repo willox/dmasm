@@ -18,7 +18,7 @@ use std::fmt::Write;
 
 struct Proc {}
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Node<D = ()> {
     Comment(String),
     Label(String),

@@ -270,7 +270,7 @@ impl Operand for DMString {
 // This might actually be a combination of two instructions - but it doesn't really matter for our purposes.
 // (TODO: Use the debugger to single-step over this and know for sure.)
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct RangeParams;
 
 impl Operand for RangeParams {
@@ -303,7 +303,7 @@ impl Operand for RangeParams {
 //
 // IsInParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum IsInParams {
     Range,
     Value,
@@ -349,7 +349,7 @@ impl Operand for IsInParams {
 //
 // SwitchParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct SwitchParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -394,7 +394,7 @@ impl Operand for SwitchParams {
 //
 // PickSwitchParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct PickSwitchParams {
     pub default: Label,
     pub cases: Vec<(u32, Label)>,
@@ -440,7 +440,7 @@ impl Operand for PickSwitchParams {
 //
 // SwitchRangeParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct SwitchRangeParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -506,7 +506,7 @@ impl Operand for SwitchRangeParams {
 //
 // PickProbParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct PickProbParams {
     pub cases: Vec<Label>,
 }

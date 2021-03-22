@@ -189,7 +189,7 @@ fn commit_field_buffer(
             let label = format!("LAB_{:0>4X}", compiler.label_count);
             compiler.label_count += 1;
 
-            let holder = builder.get().unwrap();
+            let holder = builder.get();
             compiler.emit_ins(Instruction::GetVar(holder));
             compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
             compiler.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));

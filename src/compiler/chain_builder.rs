@@ -95,9 +95,9 @@ impl ChainBuilder {
         self.var = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
     }
 
-    pub fn get(mut self) -> Option<Variable> {
+    pub fn get(mut self) -> Variable {
         self.resolve();
-        Some(self.var)
+        self.var
     }
 
     pub fn get_field(mut self, field: DMString) -> Variable {
