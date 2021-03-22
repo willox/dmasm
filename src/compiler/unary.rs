@@ -35,11 +35,21 @@ fn emit_single(
 
         // l-value mutating unary ops
         UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr => {
+            let label = format!("LAB_{:0>4X}", compiler.label_count);
+            compiler.label_count += 1;
+
             // These ops require an l-value
             let var = match kind {
                 EvalKind::Var(var) if is_writable(&var) => var,
 
                 EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
+
+                EvalKind::SafeField(builder, field) => {
+                    let holder = builder.get();
+                    compiler.emit_ins(Instruction::GetVar(holder));
+                    compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
+                    Variable::Field(DMString(field.into()))
+                }
 
                 EvalKind::ListRef => {
                     compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
@@ -57,6 +67,8 @@ fn emit_single(
                 UnaryOp::PostDecr => compiler.emit_ins(Instruction::PostDec(var)),
                 _ => unreachable!(),
             }
+
+            compiler.emit_label(label);
         }
     }
 

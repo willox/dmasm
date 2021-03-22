@@ -263,7 +263,7 @@ fn compile_test() {
     context.assert_success();
     // println!("{:#?}\n\n\n", expr);
 
-    let expr = compile_expr("a?.b &&= 2", &["a"]);
+    let expr = compile_expr("a?.b++", &["a"]);
     println!("{:#?}", expr);
 
     if let Ok(expr) = expr {
