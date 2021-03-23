@@ -62,6 +62,7 @@ pub enum CompileError {
     },
     UnexpectedRange,
     UnexpectedGlobal,
+    UnexpectedNamedArguments,
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
     UnsupportedImplicitLocate,

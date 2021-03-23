@@ -176,6 +176,11 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         },
 
         Term::Locate { args, in_list } => {
+            // No named args
+            if args.iter().any(|x| matches!(x, Expression::AssignOp { .. })) {
+                return Err(CompileError::UnexpectedNamedArguments);
+            }
+
             let args_len = args.len();
 
             // Push everything first to simplify later code
