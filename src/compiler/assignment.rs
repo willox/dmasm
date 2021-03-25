@@ -3,13 +3,39 @@ use dreammaker::ast::Expression;
 use crate::compiler::*;
 use crate::Instruction;
 
-// This... really is a shame.
-fn peek_is_conditional(compiler: &Compiler<'_>, expr: &Expression) -> bool {
-    let mut compiler = compiler.to_owned();
-    let expr = expr.clone();
+// This is not meant to be recursive through all of the sub-expressions!
+// We only care if the LHS of an assignment would result in the RHS potentially be skipped!
+fn peek_is_conditional(expr: &Expression) -> bool {
+    match expr {
+        Expression::Base {
+            unary,
+            term,
+            follow,
+        } => {
+            for follow in follow {
+                match follow.elem {
+                    Follow::Index(kind, _) => match kind {
+                        dreammaker::ast::ListAccessKind::Normal => {}
+                        dreammaker::ast::ListAccessKind::Safe => return true,
+                    },
 
-    if let Ok(expr) = compiler.emit_expr(expr) {
-        return matches!(expr, EvalKind::SafeField { .. });
+                    Follow::Field(kind, _) => match kind {
+                        PropertyAccessKind::Dot | PropertyAccessKind::Colon => {}
+                        PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => return true,
+                    },
+
+                    // We can't assign to a call's result, but I'm adding this to make the function correct anyway.
+                    Follow::Call(kind, _, _) => match kind {
+                        PropertyAccessKind::Dot | PropertyAccessKind::Colon => {}
+                        PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => return true,
+                    },
+                }
+            }
+        }
+
+        Expression::BinaryOp { .. } => {}
+        Expression::AssignOp { .. } => {}
+        Expression::TernaryOp { .. } => {}
     }
 
     false
@@ -21,20 +47,24 @@ fn emit_conditional(
     lhs: Expression,
     rhs: Expression,
 ) -> Result<EvalKind, CompileError> {
-    let (builder, field) = match compiler.emit_expr(lhs)? {
-        EvalKind::SafeField(builder, field) => (builder, field),
+    let var = match compiler.emit_inner_expr(lhs)? {
+        EvalKind::Field(builder, field) => {
+            let holder = builder.get();
+            compiler.emit_ins(Instruction::GetVar(holder));
+            compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+
+            Variable::Field(DMString(field.into()))
+        }
+
+        EvalKind::ListRef => {
+            compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
+            compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+
+            Variable::CacheIndex
+        }
 
         _ => unreachable!(),
     };
-
-    let label = format!("LAB_{:0>4X}", compiler.label_count);
-    compiler.label_count += 1;
-
-    let holder = builder.get();
-    compiler.emit_ins(Instruction::GetVar(holder));
-    compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-
-    let var = Variable::Field(DMString(field.into()));
 
     match op {
         AssignOp::Assign
@@ -51,11 +81,13 @@ fn emit_conditional(
         | AssignOp::RShiftAssign => {
             // Push holder - We'll need it later
             compiler.emit_ins(Instruction::PushCache);
+            compiler.emit_ins(Instruction::PushCacheKey);
 
             let rhs = compiler.emit_expr(rhs)?;
             compiler.emit_move_to_stack(rhs)?;
 
             // Pop holder
+            compiler.emit_ins(Instruction::PopCacheKey);
             compiler.emit_ins(Instruction::PopCache);
 
             match op {
@@ -109,6 +141,9 @@ fn emit_conditional(
         }
 
         AssignOp::AndAssign | AssignOp::OrAssign => {
+            let label = format!("LAB_{:0>4X}", compiler.label_count);
+            compiler.label_count += 1;
+
             let test_ins = match op {
                 AssignOp::AndAssign => Instruction::JmpAnd(Label(label.clone())),
                 AssignOp::OrAssign => Instruction::JmpOr(Label(label.clone())),
@@ -120,16 +155,19 @@ fn emit_conditional(
 
             // Push holder - We'll need it later
             compiler.emit_ins(Instruction::PushCache);
+            compiler.emit_ins(Instruction::PushCacheKey);
 
             let rhs = compiler.emit_expr(rhs)?;
             compiler.emit_move_to_stack(rhs)?;
 
+            compiler.emit_ins(Instruction::PopCacheKey);
             compiler.emit_ins(Instruction::PopCache);
             compiler.emit_ins(Instruction::SetVarExpr(var));
+
+            compiler.emit_label(label);
         }
     }
 
-    compiler.emit_label(label);
     Ok(EvalKind::Stack)
 }
 
@@ -140,7 +178,7 @@ pub(super) fn emit(
     rhs: Expression,
 ) -> Result<EvalKind, CompileError> {
     // Conditional assignments (x?.y = z) take a different path
-    if peek_is_conditional(compiler, &lhs) {
+    if peek_is_conditional(&lhs) {
         return emit_conditional(compiler, op, lhs, rhs);
     }
 

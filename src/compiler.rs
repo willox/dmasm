@@ -84,6 +84,7 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
             (),
         )],
         label_count: 0,
+        short_circuit_labels: vec![],
     };
 
     // Expression begin
@@ -126,9 +127,6 @@ enum EvalKind {
 
     // Similar to Var, but more state
     Field(ChainBuilder, String),
-
-    // Similar to Field, but for `?.` accesses
-    SafeField(ChainBuilder, String),
     // TODO: Eval?
 }
 
@@ -137,6 +135,7 @@ struct Compiler<'a> {
     params: &'a [&'a str],
     nodes: Vec<Node>,
     label_count: u32,
+    short_circuit_labels: Vec<(String, bool)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -185,17 +184,6 @@ impl<'a> Compiler<'a> {
                 let var = builder.get_field(DMString(field.into()));
                 self.emit_ins(Instruction::GetVar(var));
             }
-
-            EvalKind::SafeField(builder, field) => {
-                let label = format!("LAB_{:0>4X}", self.label_count);
-                self.label_count += 1;
-
-                let holder = builder.get();
-                self.emit_ins(Instruction::GetVar(holder));
-                self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-                self.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
-                self.emit_label(label);
-            }
         }
 
         Ok(EvalKind::Stack)
@@ -223,25 +211,17 @@ impl<'a> Compiler<'a> {
                 Ok(builder)
             }
 
-            EvalKind::SafeField(builder, field) => {
-                let label = format!("LAB_{:0>4X}", self.label_count);
-                self.label_count += 1;
-
-                let holder = builder.get();
-                self.emit_ins(Instruction::GetVar(holder));
-                self.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-                self.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
-                self.emit_label(label);
-
-                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                Ok(ChainBuilder::begin(Variable::Cache))
-            }
-
             EvalKind::Var(var) => Ok(ChainBuilder::begin(var)),
         }
     }
 
-    fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
+    fn short_circuit(&mut self) -> String {
+        let label = self.short_circuit_labels.last_mut().unwrap();
+        label.1 = true;
+        label.0.to_owned()
+    }
+
+    fn emit_inner_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         match expr {
             Expression::TernaryOp { cond, if_, else_ } => ternary::emit(self, *cond, *if_, *else_),
             Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
@@ -259,6 +239,25 @@ impl<'a> Compiler<'a> {
                 Ok(kind)
             }
         }
+    }
+
+    fn emit_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
+        let label = format!("LAB_{:0>4X}", self.label_count);
+        self.label_count += 1;
+        self.short_circuit_labels.push((label, false));
+
+        let kind = self.emit_inner_expr(expr)?;
+
+        let (label, used) = self.short_circuit_labels.pop().unwrap();
+
+        // We only care if the label was actually used
+        if used {
+            self.emit_move_to_stack(kind)?;
+            self.emit_label(label);
+            return Ok(EvalKind::Stack);
+        }
+
+        Ok(kind)
     }
 }
 

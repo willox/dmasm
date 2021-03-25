@@ -26,9 +26,12 @@ pub(super) fn emit(
 
                     PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+                        compiler.emit_move_to_stack(kind)?;
 
-                        let builder = compiler.emit_move_to_chain_builder(kind)?;
-                        kind = EvalKind::SafeField(builder, ident);
+                        let short_circuit = compiler.short_circuit();
+                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
+
+                        kind = EvalKind::Field(ChainBuilder::begin(Variable::Cache), ident);
                     }
                 }
             }
@@ -48,7 +51,22 @@ pub(super) fn emit(
                         kind = EvalKind::ListRef;
                     }
 
-                    ListAccessKind::Safe => return Err(CompileError::UnsupportedSafeListAccess),
+                    ListAccessKind::Safe => {
+                        // Move base to the stack
+                        compiler.emit_move_to_stack(kind)?;
+
+                        // Short-circuit if base is null
+                        // TODO: Can we do this without using cache?
+                        let short_circuit = compiler.short_circuit();
+                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
+                        compiler.emit_ins(Instruction::GetVar(Variable::Cache));
+
+                        // Move inner expression to stack
+                        let expr = compiler.emit_expr(*expr)?;
+                        compiler.emit_move_to_stack(expr)?;
+
+                        kind = EvalKind::ListRef;
+                    }
                 }
             }
 
@@ -187,20 +205,6 @@ fn commit_field_buffer(
         EvalKind::Field(mut builder, field) => {
             builder.append(DMString(field.into()));
             builder
-        }
-
-        EvalKind::SafeField(builder, field) => {
-            let label = format!("LAB_{:0>4X}", compiler.label_count);
-            compiler.label_count += 1;
-
-            let holder = builder.get();
-            compiler.emit_ins(Instruction::GetVar(holder));
-            compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-            compiler.emit_ins(Instruction::GetVar(Variable::Field(DMString(field.into()))));
-            compiler.emit_label(label);
-
-            compiler.emit_ins(Instruction::SetVar(Variable::Cache));
-            ChainBuilder::begin(Variable::Cache)
         }
 
         EvalKind::Var(var) => ChainBuilder::begin(var),

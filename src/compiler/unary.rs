@@ -44,13 +44,6 @@ fn emit_single(
 
                 EvalKind::Field(builder, field) => builder.get_field(DMString(field.into())),
 
-                EvalKind::SafeField(builder, field) => {
-                    let holder = builder.get();
-                    compiler.emit_ins(Instruction::GetVar(holder));
-                    compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
-                    Variable::Field(DMString(field.into()))
-                }
-
                 EvalKind::ListRef => {
                     compiler.emit_ins(Instruction::SetVar(Variable::CacheKey));
                     compiler.emit_ins(Instruction::SetVar(Variable::Cache));
