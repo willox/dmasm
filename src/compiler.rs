@@ -1,6 +1,6 @@
 use dreammaker::ast::Expression;
 use dreammaker::ast::Follow;
-use dreammaker::ast::IndexKind;
+use dreammaker::ast::PropertyAccessKind;
 use dreammaker::ast::{AssignOp, BinaryOp, UnaryOp};
 
 use crate::operands::{self, DMString, Label, Value, Variable};
@@ -66,6 +66,7 @@ pub enum CompileError {
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
     UnsupportedImplicitLocate,
+    UnsupportedSafeListAccess,
     InvalidLocateArgs,
 }
 
@@ -265,11 +266,10 @@ impl<'a> Compiler<'a> {
 fn compile_test() {
     let context: dreammaker::Context = Default::default();
     let lexer =
-        dreammaker::lexer::Lexer::new(&context, Default::default(), "global.f()".as_bytes());
-    //let code = dreammaker::indents::IndentProcessor::new(&context, lexer);
-    let _expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
+        dreammaker::lexer::Lexer::new(&context, Default::default(), "pick(1;;2,3;4)".as_bytes());
+    let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
-    // println!("{:#?}\n\n\n", expr);
+    println!("{:#?}\n\n\n", expr);
 
     let expr = compile_expr("a?.b++", &["a"]);
     println!("{:#?}", expr);

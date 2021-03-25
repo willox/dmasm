@@ -45,7 +45,6 @@ dependencies = [
 [[package]]
 name = "builtins-proc-macro"
 version = "0.0.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM#635434f8ee63cc9fcf1c2bc9bdb45d9282f306b3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -71,6 +70,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "color_space"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3776b2bcc4e914db501bb9be9572dd706e344b9eb8f882894f3daa651d281381"
+
+[[package]]
 name = "crc32fast"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -91,10 +96,10 @@ dependencies = [
 [[package]]
 name = "dreammaker"
 version = "0.1.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM#635434f8ee63cc9fcf1c2bc9bdb45d9282f306b3"
 dependencies = [
  "bitflags",
  "builtins-proc-macro",
+ "color_space",
  "guard",
  "interval-tree",
  "linked-hash-map",
@@ -163,7 +168,6 @@ dependencies = [
 [[package]]
 name = "interval-tree"
 version = "0.8.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM#635434f8ee63cc9fcf1c2bc9bdb45d9282f306b3"
 
 [[package]]
 name = "lexical-core"

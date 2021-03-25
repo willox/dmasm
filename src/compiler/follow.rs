@@ -1,3 +1,5 @@
+use dreammaker::ast::ListAccessKind;
+
 use crate::compiler::*;
 use crate::Instruction;
 
@@ -8,44 +10,46 @@ pub(super) fn emit(
 ) -> Result<EvalKind, CompileError> {
     let mut kind = kind;
 
-    // sequential field accessors (example: a.b.c) get buffered into a single operand
+    // sequential field accessors (example: a.b.c) get buffered into a single operation
     // TODO: Move this state and the commit function into a struct!
     let mut field_buffer = vec![];
 
     for sub_expr in follow {
         match sub_expr {
-            Follow::Field(index_kind, ident) => {
-                match index_kind {
-                    // We just treat these as the same
-                    // TODO: Should we type check?
-                    IndexKind::Dot | IndexKind::Colon => {
+            Follow::Field(access_kind, ident) => {
+                // We currently treat `.` and `:` as the same
+                // TODO: Should we type check?
+                match access_kind {
+                    PropertyAccessKind::Dot | PropertyAccessKind::Colon => {
                         field_buffer.push(ident);
                     }
 
-                    // We just treat these as the same
-                    // TODO: Should we type check?
-                    // TODO: Generates kind of badly compared to BYOND.
-                    IndexKind::SafeDot | IndexKind::SafeColon => {
+                    PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
 
                         let builder = compiler.emit_move_to_chain_builder(kind)?;
-
                         kind = EvalKind::SafeField(builder, ident);
                     }
                 }
             }
 
-            Follow::Index(expr) => {
+            Follow::Index(access_kind, expr) => {
                 kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
 
-                // Move base to the stack
-                compiler.emit_move_to_stack(kind)?;
+                match access_kind {
+                    ListAccessKind::Normal => {
+                        // Move base to the stack
+                        compiler.emit_move_to_stack(kind)?;
 
-                // Move inner expression to stack
-                let expr = compiler.emit_expr(*expr)?;
-                compiler.emit_move_to_stack(expr)?;
+                        // Move inner expression to stack
+                        let expr = compiler.emit_expr(*expr)?;
+                        compiler.emit_move_to_stack(expr)?;
 
-                kind = EvalKind::ListRef;
+                        kind = EvalKind::ListRef;
+                    }
+
+                    ListAccessKind::Safe => return Err(CompileError::UnsupportedSafeListAccess),
+                }
             }
 
             Follow::Call(index_kind, ident, args) => {
@@ -60,7 +64,7 @@ pub(super) fn emit(
 
                 match index_kind {
                     // Global call syntax `global.f()`
-                    IndexKind::Dot | IndexKind::Colon
+                    PropertyAccessKind::Dot | PropertyAccessKind::Colon
                         if matches!(kind, EvalKind::Global) && field_buffer.is_empty() =>
                     {
                         let arg_count = args.len() as u32;
@@ -80,7 +84,7 @@ pub(super) fn emit(
 
                     // We just treat these as the same
                     // TODO: Should we type check?
-                    IndexKind::Dot | IndexKind::Colon => {
+                    PropertyAccessKind::Dot | PropertyAccessKind::Colon => {
                         let arg_count = args.len() as u32;
 
                         // TODO: Can emit much cleaner code when no params
@@ -107,7 +111,7 @@ pub(super) fn emit(
                     }
 
                     // TODO: re-do this
-                    IndexKind::SafeDot | IndexKind::SafeColon => {
+                    PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
                         let args_count = args.len() as u32;
 
                         // TODO: Can emit much cleaner code when no params
@@ -202,14 +206,12 @@ fn commit_field_buffer(
         EvalKind::Var(var) => ChainBuilder::begin(var),
     };
 
-    let last = field_chain.pop().unwrap();
+    let last_field = field_chain.pop().unwrap();
 
     for field in field_chain.iter() {
         builder.append(DMString(field.clone().into()));
     }
 
-    let kind = EvalKind::Field(builder, last);
-
     field_chain.clear();
-    Ok(kind)
+    Ok(EvalKind::Field(builder, last_field))
 }
