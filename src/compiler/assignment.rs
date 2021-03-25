@@ -63,7 +63,8 @@ fn emit_conditional(
             Variable::CacheIndex
         }
 
-        _ => unreachable!(),
+        // Could be a conditional call
+        _ => return Err(CompileError::ExpectedLValue),
     };
 
     match op {

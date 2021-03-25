@@ -88,7 +88,6 @@ macro_rules! simple_stack_procs {
                                             return Err(CompileError::MissingArgument {
                                                 proc: stringify!($proc_name).to_owned(),
                                                 index: arg_idx as u32,
-                                                name: stringify!($param_name).to_owned(),
                                             });
                                         }
                                     }

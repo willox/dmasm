@@ -49,9 +49,6 @@ pub enum CompileError {
     MissingArgument {
         proc: String,
         index: u32,
-
-        // TODO: Just remove this junk
-        name: String,
     },
     TooManyArguments {
         proc: String,

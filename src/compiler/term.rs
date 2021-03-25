@@ -108,7 +108,6 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                 return Err(CompileError::MissingArgument {
                     proc: "call".to_owned(),
                     index: 1,
-                    name: "ProcRef/Object/LibName".to_owned(),
                 });
             }
 
