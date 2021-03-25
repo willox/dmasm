@@ -128,7 +128,6 @@ pub(super) fn emit(
                         ));
                     }
 
-                    // TODO: re-do this
                     PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
                         let args_count = args.len() as u32;
 
@@ -136,11 +135,10 @@ pub(super) fn emit(
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
 
-                        let label = format!("LAB_{:0>4X}", compiler.label_count);
-                        compiler.label_count += 1;
+                        let short_circuit = compiler.short_circuit();
+                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
 
                         // We'll need our src after pushing the parameters
-                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(label.clone())));
                         compiler.emit_ins(Instruction::PushCache);
 
                         // Push args to the stack
@@ -156,8 +154,6 @@ pub(super) fn emit(
                             Variable::DynamicProc(DMString(ident.into())),
                             args_count,
                         ));
-
-                        compiler.emit_label(label);
                     }
                 }
 
