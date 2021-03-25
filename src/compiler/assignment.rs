@@ -8,8 +8,8 @@ use crate::Instruction;
 fn peek_is_conditional(expr: &Expression) -> bool {
     match expr {
         Expression::Base {
-            unary,
-            term,
+            unary: _,
+            term: _,
             follow,
         } => {
             for follow in follow {
