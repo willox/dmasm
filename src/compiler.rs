@@ -46,17 +46,9 @@ pub enum CompileError {
     ExpectedFieldReference,
     NamedArgumentsNotImplemented,
     IncorrectArgCount(String),
-    MissingArgument {
-        proc: String,
-        index: u32,
-    },
-    TooManyArguments {
-        proc: String,
-        expected: u32,
-    },
-    UnsupportedBuiltin {
-        proc: String,
-    },
+    MissingArgument { proc: String, index: u32 },
+    TooManyArguments { proc: String, expected: u32 },
+    UnsupportedBuiltin { proc: String },
     UnexpectedRange,
     UnexpectedGlobal,
     UnexpectedNamedArguments,

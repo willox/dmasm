@@ -512,8 +512,14 @@ pub struct PickProbParams {
 }
 
 impl Operand for PickProbParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        unimplemented!();
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        asm.emit(self.cases.len() as u32);
+
+        for case in &self.cases {
+            case.assemble(asm)?;
+        }
+
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
