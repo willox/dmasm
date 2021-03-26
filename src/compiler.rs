@@ -51,6 +51,7 @@ pub enum CompileError {
     UnsupportedBuiltin { proc: String },
     UnexpectedRange,
     UnexpectedGlobal,
+    UnexpectedProbability,
     UnexpectedNamedArguments,
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,

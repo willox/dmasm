@@ -218,43 +218,70 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
-        Term::Pick(args) => {
-            let label_end = format!("LAB_{:0>4X}", compiler.label_count);
-            compiler.label_count += 1;
-
-            let mut branches = vec![];
-
-            for (lhs, rhs) in args {
-                match lhs {
-                    Some(lhs) => {
-                        let kind = compiler.emit_expr(lhs)?;
-                        compiler.emit_move_to_stack(kind)?;
-                    }
-
-                    None => compiler.emit_ins(Instruction::PushInt(100)),
+        Term::Pick(mut args) => {
+            match args.len() {
+                // prob()
+                0 => {
+                    return Err(CompileError::MissingArgument {
+                        proc: "pick".to_owned(),
+                        index: 1,
+                    })
                 }
 
-                branches.push((format!("LAB_{:0>4X}", compiler.label_count), rhs));
-                compiler.label_count += 1;
+                // prob(L)
+                1 => {
+                    let (lhs, rhs) = args.pop().unwrap();
+
+                    if let Some(_) = lhs {
+                        return Err(CompileError::UnexpectedProbability);
+                    }
+
+                    let kind = compiler.emit_expr(rhs)?;
+                    compiler.emit_move_to_stack(kind)?;
+                    compiler.emit_ins(Instruction::Pick);
+                }
+
+                // prob(x, y; z, ...)
+                _ => {
+                    let label_end = format!("LAB_{:0>4X}", compiler.label_count);
+                    compiler.label_count += 1;
+
+                    let mut branches = vec![];
+
+                    for (lhs, rhs) in args {
+                        match lhs {
+                            Some(lhs) => {
+                                let kind = compiler.emit_expr(lhs)?;
+                                compiler.emit_move_to_stack(kind)?;
+                            }
+
+                            None => compiler.emit_ins(Instruction::PushInt(100)),
+                        }
+
+                        branches.push((format!("LAB_{:0>4X}", compiler.label_count), rhs));
+                        compiler.label_count += 1;
+                    }
+
+                    compiler.emit_ins(Instruction::PickProb(PickProbParams {
+                        cases: branches
+                            .iter()
+                            .map(|(label, _)| Label(label.to_owned()))
+                            .collect(),
+                    }));
+
+                    for (label, expr) in branches {
+                        compiler.emit_label(label);
+
+                        let kind = compiler.emit_expr(expr)?;
+                        compiler.emit_move_to_stack(kind)?;
+
+                        compiler.emit_ins(Instruction::Jmp(Label(label_end.clone())));
+                    }
+
+                    compiler.emit_label(label_end);
+                }
             }
 
-            compiler.emit_ins(Instruction::PickProb(PickProbParams {
-                cases: branches
-                    .iter()
-                    .map(|(label, _)| Label(label.to_owned()))
-                    .collect(),
-            }));
-
-            for (label, expr) in branches {
-                compiler.emit_label(label);
-
-                let kind = compiler.emit_expr(expr)?;
-                compiler.emit_move_to_stack(kind)?;
-
-                compiler.emit_ins(Instruction::Jmp(Label(label_end.clone())));
-            }
-
-            compiler.emit_label(label_end);
             Ok(EvalKind::Stack)
         }
 
