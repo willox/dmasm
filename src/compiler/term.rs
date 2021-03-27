@@ -92,12 +92,6 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         }
 
         Term::DynamicCall(lhs, rhs) => {
-            // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
-            // We can implement this later...
-            if rhs.iter().any(|x| matches!(x, Expression::AssignOp { .. })) {
-                return Err(CompileError::NamedArgumentsNotImplemented);
-            }
-
             let lhs_len = lhs.len();
             let rhs_len = rhs.len();
 
@@ -122,16 +116,24 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             }
 
             // Push RHS
-            for expr in rhs {
-                let kind = compiler.emit_expr(expr)?;
-                compiler.emit_move_to_stack(kind)?;
-            }
+            match args::emit(compiler, args::ArgsContext::List, rhs)? {
+                args::ArgsResult::Normal => match lhs_len {
+                    1 => compiler.emit_ins(Instruction::CallPath(rhs_len as u32)),
+                    2 => compiler.emit_ins(Instruction::CallName(rhs_len as u32)),
 
-            match lhs_len {
-                1 => compiler.emit_ins(Instruction::CallPath(rhs_len as u32)),
-                2 => compiler.emit_ins(Instruction::CallName(rhs_len as u32)),
+                    _ => unreachable!(),
+                },
 
-                _ => unreachable!(),
+                args::ArgsResult::Assoc => {
+                    compiler.emit_ins(Instruction::NewAssocList(rhs_len as u32));
+
+                    match lhs_len {
+                        1 => compiler.emit_ins(Instruction::CallPathArgList),
+                        2 => compiler.emit_ins(Instruction::CallNameArgList),
+
+                        _ => unreachable!(),
+                    }
+                }
             }
 
             Ok(EvalKind::Stack)
