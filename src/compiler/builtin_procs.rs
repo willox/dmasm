@@ -59,43 +59,39 @@ macro_rules! simple_stack_procs {
                 $(
                     stringify!($proc_name) => {
                         let mut arg_idx = 0;
+                        let arg_count = args.len();
+
+                        args::emit_normal(compiler, args::ArgsContext::Proc, args.to_owned())?;
 
                         $(
                             arg_idx = arg_idx + 1;
 
-                            match args.get(arg_idx - 1) {
-                                Some(expr) => {
-                                    let expr = compiler.emit_expr(expr.clone())?;
-                                    compiler.emit_move_to_stack(expr)?;
-                                }
+                            if arg_count < arg_idx {
+                                #[allow(unused)]
+                                let mut default: Option<DefaultValue> = None;
 
-                                None => {
-                                    #[allow(unused)]
-                                    let mut default: Option<DefaultValue> = None;
+                                $(
+                                    #[allow(unused_imports)]
+                                    use DefaultValue::null;
+                                    default = Some(DefaultValue::from($param_default));
+                                )?
 
-                                    $(
-                                        #[allow(unused_imports)]
-                                        use DefaultValue::null;
-                                        default = Some(DefaultValue::from($param_default));
-                                    )?
+                                match default {
+                                    Some(default) => {
+                                        compiler.emit_ins(Instruction::PushVal(default.into_value()));
+                                    }
 
-                                    match default {
-                                        Some(default) => {
-                                            compiler.emit_ins(Instruction::PushVal(default.into_value()));
-                                        }
-
-                                        None => {
-                                            return Err(CompileError::MissingArgument {
-                                                proc: stringify!($proc_name).to_owned(),
-                                                index: arg_idx as u32,
-                                            });
-                                        }
+                                    None => {
+                                        return Err(CompileError::MissingArgument {
+                                            proc: stringify!($proc_name).to_owned(),
+                                            index: arg_idx as u32,
+                                        });
                                     }
                                 }
                             }
                         )*
 
-                        if args.len() > arg_idx {
+                        if arg_count > arg_idx {
                             return Err(CompileError::TooManyArguments {
                                 proc: stringify!($proc_name).to_owned(),
                                 expected: arg_idx as u32,

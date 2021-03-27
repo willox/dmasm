@@ -61,15 +61,6 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         }
 
         Term::Call(ident, args) => {
-            // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
-            // We can implement this later...
-            if args
-                .iter()
-                .any(|x| matches!(x, Expression::AssignOp { .. }))
-            {
-                return Err(CompileError::NamedArgumentsNotImplemented);
-            }
-
             match builtin_procs::emit(compiler, &ident, &args)? {
                 // Handled by builtin_procs
                 Some(kind) => Ok(kind),
@@ -78,17 +69,22 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                 None => {
                     let arg_count = args.len() as u32;
 
-                    // Bring all arguments onto the stack
-                    for arg in args {
-                        let expr = compiler.emit_expr(arg)?;
-                        compiler.emit_move_to_stack(expr)?;
-                    }
+                    match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                        args::ArgsResult::Normal => {
+                            // We're treating all Term::Call expressions as global calls
+                            compiler.emit_ins(Instruction::CallGlob(
+                                arg_count,
+                                operands::Proc(format!("/proc/{}", ident)),
+                            ));
+                        }
 
-                    // We're treating all Term::Call expressions as global calls
-                    compiler.emit_ins(Instruction::CallGlob(
-                        arg_count,
-                        operands::Proc(format!("/proc/{}", ident)),
-                    ));
+                        args::ArgsResult::Assoc => {
+                            compiler.emit_ins(Instruction::NewAssocList(arg_count));
+                            compiler.emit_ins(Instruction::CallGlobalArgList(operands::Proc(
+                                format!("/proc/{}", ident),
+                            )));
+                        }
+                    }
 
                     Ok(EvalKind::Stack)
                 }
@@ -174,21 +170,9 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         },
 
         Term::Locate { args, in_list } => {
-            // No named args
-            if args
-                .iter()
-                .any(|x| matches!(x, Expression::AssignOp { .. }))
-            {
-                return Err(CompileError::UnexpectedNamedArguments);
-            }
-
             let args_len = args.len();
 
-            // Push everything first to simplify later code
-            for expr in args {
-                let kind = compiler.emit_expr(expr)?;
-                compiler.emit_move_to_stack(kind)?;
-            }
+            args::emit_normal(compiler, args::ArgsContext::Proc, args)?;
 
             match args_len {
                 // locate()
@@ -285,6 +269,22 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
+        Term::List(args) => {
+            let arg_count = args.len();
+
+            match args::emit(compiler, args::ArgsContext::List, args)? {
+                args::ArgsResult::Normal => {
+                    compiler.emit_ins(Instruction::NewList(arg_count as u32));
+                }
+
+                args::ArgsResult::Assoc => {
+                    compiler.emit_ins(Instruction::NewAssocList(arg_count as u32));
+                }
+            }
+
+            Ok(EvalKind::Stack)
+        }
+
         other => Err(CompileError::UnsupportedExpressionTerm(other)),
     }
 }
@@ -294,26 +294,19 @@ fn emit_new(
     compiler: &mut Compiler<'_>,
     args: Option<Vec<Expression>>,
 ) -> Result<EvalKind, CompileError> {
-    // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
-    // We can implement this later...
-    if let Some(args) = &args {
-        if args
-            .iter()
-            .any(|x| matches!(x, Expression::AssignOp { .. }))
-        {
-            return Err(CompileError::NamedArgumentsNotImplemented);
+    let args = args.unwrap_or_else(|| vec![]);
+    let arg_count = args.len() as u32;
+
+    match args::emit(compiler, args::ArgsContext::Proc, args)? {
+        args::ArgsResult::Normal => {
+            compiler.emit_ins(Instruction::New(arg_count));
+        }
+
+        args::ArgsResult::Assoc => {
+            compiler.emit_ins(Instruction::NewAssocList(arg_count));
+            compiler.emit_ins(Instruction::NewArgList);
         }
     }
 
-    let mut arg_count = 0;
-    if let Some(args) = args {
-        arg_count = args.len() as u32;
-        for arg in args {
-            let expr = compiler.emit_expr(arg)?;
-            compiler.emit_move_to_stack(expr)?;
-        }
-    }
-
-    compiler.emit_ins(Instruction::New(arg_count));
     Ok(EvalKind::Stack)
 }

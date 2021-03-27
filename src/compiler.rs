@@ -9,6 +9,7 @@ use crate::Node;
 
 mod assignment;
 
+mod args;
 mod binary_ops;
 mod builtin_procs;
 mod chain_builder;
@@ -52,11 +53,12 @@ pub enum CompileError {
     UnexpectedRange,
     UnexpectedGlobal,
     UnexpectedProbability,
-    UnexpectedNamedArguments,
+    UnexpectedAssocArguments,
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
     UnsupportedImplicitLocate,
     UnsupportedSafeListAccess,
+    AmbiguousListConstructor,
     InvalidLocateArgs,
 }
 
@@ -241,6 +243,7 @@ impl<'a> Compiler<'a> {
         let (label, used) = self.short_circuit_labels.pop().unwrap();
 
         // We only care if the label was actually used
+        // TODO: BYOND would put this jump destination before any unary ops (if this is Expression::Base), idk if that is sane.
         if used {
             self.emit_move_to_stack(kind)?;
             self.emit_label(label);
