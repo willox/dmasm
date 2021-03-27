@@ -12,7 +12,7 @@ pub trait AssembleEnv {
 #[derive(Debug, PartialEq)]
 pub enum AssembleError {
     UnsupportedValue(operands::Value),
-    ProcNotFound,
+    ProcNotFound(String),
     InvalidVariableName,
     TypeNotFound(String),
 }

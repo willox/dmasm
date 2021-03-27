@@ -121,7 +121,7 @@ impl Operand for Proc {
         let idx = asm
             .env
             .get_proc_index(&self.0)
-            .ok_or(AssembleError::ProcNotFound)?;
+            .ok_or(AssembleError::ProcNotFound(self.0.to_owned()))?;
         asm.emit(idx);
         Ok(())
     }
