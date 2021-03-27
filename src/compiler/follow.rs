@@ -71,40 +71,34 @@ pub(super) fn emit(
             }
 
             Follow::Call(index_kind, ident, args) => {
-                // If any of the arguments are a Expression:AssignOp, byond does _crazy_ not-so-well defined things.
-                // We can implement this later...
-                if args
-                    .iter()
-                    .any(|x| matches!(x, Expression::AssignOp { .. }))
-                {
-                    return Err(CompileError::NamedArgumentsNotImplemented);
-                }
+                let arg_count = args.len() as u32;
 
                 match index_kind {
                     // Global call syntax `global.f()`
                     PropertyAccessKind::Dot | PropertyAccessKind::Colon
                         if matches!(kind, EvalKind::Global) && field_buffer.is_empty() =>
                     {
-                        let arg_count = args.len() as u32;
+                        match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                            args::ArgsResult::Normal => {
+                                // We're treating all Term::Call expressions as global calls
+                                compiler.emit_ins(Instruction::CallGlob(
+                                    arg_count,
+                                    operands::Proc(format!("/proc/{}", ident)),
+                                ));
+                            }
 
-                        // Bring all arguments onto the stack
-                        for arg in args {
-                            let expr = compiler.emit_expr(arg)?;
-                            compiler.emit_move_to_stack(expr)?;
+                            args::ArgsResult::Assoc => {
+                                compiler.emit_ins(Instruction::NewAssocList(arg_count));
+                                compiler.emit_ins(Instruction::CallGlobalArgList(operands::Proc(
+                                    format!("/proc/{}", ident),
+                                )));
+                            }
                         }
-
-                        // We're treating all Term::Call expressions as global calls
-                        compiler.emit_ins(Instruction::CallGlob(
-                            arg_count,
-                            operands::Proc(format!("/proc/{}", ident)),
-                        ));
                     }
 
                     // We just treat these as the same
                     // TODO: Should we type check?
                     PropertyAccessKind::Dot | PropertyAccessKind::Colon => {
-                        let arg_count = args.len() as u32;
-
                         // TODO: Can emit much cleaner code when no params
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
@@ -113,19 +107,29 @@ pub(super) fn emit(
                         compiler.emit_ins(Instruction::SetVar(Variable::Cache));
                         compiler.emit_ins(Instruction::PushCache);
 
-                        // Push args to the stack
-                        for arg in args {
-                            let arg = compiler.emit_expr(arg)?;
-                            compiler.emit_move_to_stack(arg)?;
+                        match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                            args::ArgsResult::Normal => {
+                                compiler.emit_ins(Instruction::PopCache);
+
+                                compiler.emit_ins(Instruction::Call(
+                                    Variable::DynamicProc(DMString(ident.into())),
+                                    arg_count,
+                                ));
+                            }
+
+                            args::ArgsResult::Assoc => {
+                                compiler.emit_ins(Instruction::NewAssocList(arg_count));
+
+                                compiler.emit_ins(Instruction::PopCache);
+
+                                compiler.emit_ins(Instruction::Call(
+                                    Variable::DynamicProc(DMString(ident.into())),
+                                    65535, // TODO: remove hardcoded value
+                                ));
+                            }
                         }
 
-                        compiler.emit_ins(Instruction::PopCache);
-
                         // Move base to the stack
-                        compiler.emit_ins(Instruction::Call(
-                            Variable::DynamicProc(DMString(ident.into())),
-                            arg_count,
-                        ));
                     }
 
                     PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {

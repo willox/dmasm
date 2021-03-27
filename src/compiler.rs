@@ -45,7 +45,6 @@ pub enum CompileError {
     UnsupportedPrefabWithVars,
     ExpectedLValue,
     ExpectedFieldReference,
-    NamedArgumentsNotImplemented,
     IncorrectArgCount(String),
     MissingArgument { proc: String, index: u32 },
     TooManyArguments { proc: String, expected: u32 },
