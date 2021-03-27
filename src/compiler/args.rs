@@ -159,6 +159,14 @@ pub(super) fn emit(
     do_normal(compiler, args)
 }
 
+pub(super) fn emit_single_normal(
+    compiler: &mut Compiler,
+    context: ArgsContext,
+    arg: Expression,
+) -> Result<(), CompileError> {
+    emit_normal(compiler, context, vec![arg])
+}
+
 pub(super) fn emit_normal(
     compiler: &mut Compiler,
     context: ArgsContext,

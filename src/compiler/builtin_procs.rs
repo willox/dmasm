@@ -239,7 +239,6 @@ unsupported_procs! {
     /proc/text2num,
 
     // Snowflake procs
-    /proc/addtext,
     /proc/animate,
     /proc/cmptext,
     /proc/cmptextEx,
@@ -339,9 +338,18 @@ pub(super) fn emit(
                 return Err(CompileError::IncorrectArgCount(name.to_owned()));
             }
 
-            let kind = compiler.emit_expr(args[0].clone())?;
-            compiler.emit_move_to_stack(kind)?;
+            args::emit_single_normal(compiler, args::ArgsContext::Proc, args[0].clone())?;
             Ok(Some(EvalKind::ArgList))
+        }
+
+        "addtext" => {
+            if arg_count < 2 {
+                return Err(CompileError::IncorrectArgCount(name.to_owned()));
+            }
+
+            args::emit_normal(compiler, args::ArgsContext::Proc, args.clone())?;
+            compiler.emit_ins(Instruction::AddText(arg_count));
+            Ok(Some(EvalKind::Stack))
         }
 
         "initial" => {
