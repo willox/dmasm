@@ -239,7 +239,6 @@ unsupported_procs! {
     /proc/text2num,
 
     // Snowflake procs
-    /proc/arglist,
     /proc/addtext,
     /proc/animate,
     /proc/cmptext,
@@ -335,6 +334,16 @@ pub(super) fn emit(
     let arg_count = args.len() as u32;
 
     match name {
+        "arglist" => {
+            if arg_count != 1 {
+                return Err(CompileError::IncorrectArgCount(name.to_owned()));
+            }
+
+            let kind = compiler.emit_expr(args[0].clone())?;
+            compiler.emit_move_to_stack(kind)?;
+            Ok(Some(EvalKind::ArgList))
+        }
+
         "initial" => {
             if arg_count != 1 {
                 return Err(CompileError::IncorrectArgCount(name.to_owned()));

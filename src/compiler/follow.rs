@@ -93,6 +93,12 @@ pub(super) fn emit(
                                     format!("/proc/{}", ident),
                                 )));
                             }
+
+                            args::ArgsResult::ArgList => {
+                                compiler.emit_ins(Instruction::CallGlobalArgList(operands::Proc(
+                                    format!("/proc/{}", ident),
+                                )));
+                            }
                         }
                     }
 
@@ -120,6 +126,15 @@ pub(super) fn emit(
                             args::ArgsResult::Assoc => {
                                 compiler.emit_ins(Instruction::NewAssocList(arg_count));
 
+                                compiler.emit_ins(Instruction::PopCache);
+
+                                compiler.emit_ins(Instruction::Call(
+                                    Variable::DynamicProc(DMString(ident.into())),
+                                    65535, // TODO: remove hardcoded value
+                                ));
+                            }
+
+                            args::ArgsResult::ArgList => {
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
@@ -194,6 +209,7 @@ fn commit_field_buffer(
         }
 
         EvalKind::Range => return Err(CompileError::UnexpectedRange),
+        EvalKind::ArgList => return Err(CompileError::UnexpectedArgList),
 
         // Bit hacky.
         EvalKind::Global => {

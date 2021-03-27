@@ -142,6 +142,9 @@ pub(super) enum ArgsResult {
 
     // Each argument has its key pushed on the stack followed by its value
     Assoc,
+
+    // Similar to assoc, except the arg list itself has been pushed to the stack
+    ArgList,
 }
 
 pub(super) fn emit(
@@ -150,12 +153,10 @@ pub(super) fn emit(
     args: Vec<Expression>,
 ) -> Result<ArgsResult, CompileError> {
     if has_assoc_argument(context, &args)? {
-        do_assoc(compiler, args)?;
-        return Ok(ArgsResult::Assoc);
+        return do_assoc(compiler, args);
     }
 
-    do_normal(compiler, args)?;
-    Ok(ArgsResult::Normal)
+    do_normal(compiler, args)
 }
 
 pub(super) fn emit_normal(
@@ -167,20 +168,31 @@ pub(super) fn emit_normal(
 
     match result {
         ArgsResult::Normal => Ok(()),
-        ArgsResult::Assoc => Err(CompileError::UnexpectedAssocArguments),
+        ArgsResult::Assoc => Err(CompileError::UnexpectedNamedArguments),
+        ArgsResult::ArgList => Err(CompileError::UnexpectedArgList),
     }
 }
 
-fn do_normal(compiler: &mut Compiler, args: Vec<Expression>) -> Result<(), CompileError> {
+fn do_normal(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult, CompileError> {
+    let args_len = args.len();
+
     for arg in args {
         let expr = compiler.emit_expr(arg)?;
+
+        // If our param is an arg list and it's the only param, we're an arg list!
+        if let EvalKind::ArgList = expr {
+            if args_len == 1 {
+                return Ok(ArgsResult::ArgList);
+            }
+        }
+
         compiler.emit_move_to_stack(expr)?;
     }
 
-    Ok(())
+    Ok(ArgsResult::Normal)
 }
 
-fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<(), CompileError> {
+fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult, CompileError> {
     // TODO: Lots of cloning in here :(
     for (idx, arg) in args.into_iter().enumerate() {
         let idx = idx + 1;
@@ -241,5 +253,5 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<(), Compil
         }
     }
 
-    Ok(())
+    Ok(ArgsResult::Assoc)
 }

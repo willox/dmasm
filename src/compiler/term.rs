@@ -84,6 +84,12 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                                 format!("/proc/{}", ident),
                             )));
                         }
+
+                        args::ArgsResult::ArgList => {
+                            compiler.emit_ins(Instruction::CallGlobalArgList(operands::Proc(
+                                format!("/proc/{}", ident),
+                            )));
+                        }
                     }
 
                     Ok(EvalKind::Stack)
@@ -134,6 +140,13 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                         _ => unreachable!(),
                     }
                 }
+
+                args::ArgsResult::ArgList => match lhs_len {
+                    1 => compiler.emit_ins(Instruction::CallPathArgList),
+                    2 => compiler.emit_ins(Instruction::CallNameArgList),
+
+                    _ => unreachable!(),
+                },
             }
 
             Ok(EvalKind::Stack)
@@ -282,6 +295,8 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                 args::ArgsResult::Assoc => {
                     compiler.emit_ins(Instruction::NewAssocList(arg_count as u32));
                 }
+
+                args::ArgsResult::ArgList => return Err(CompileError::UnexpectedArgList),
             }
 
             Ok(EvalKind::Stack)
@@ -306,6 +321,10 @@ fn emit_new(
 
         args::ArgsResult::Assoc => {
             compiler.emit_ins(Instruction::NewAssocList(arg_count));
+            compiler.emit_ins(Instruction::NewArgList);
+        }
+
+        args::ArgsResult::ArgList => {
             compiler.emit_ins(Instruction::NewArgList);
         }
     }

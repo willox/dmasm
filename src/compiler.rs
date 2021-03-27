@@ -51,8 +51,9 @@ pub enum CompileError {
     UnsupportedBuiltin { proc: String },
     UnexpectedRange,
     UnexpectedGlobal,
+    UnexpectedArgList,
     UnexpectedProbability,
-    UnexpectedAssocArguments,
+    UnexpectedNamedArguments,
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
     UnsupportedImplicitLocate,
@@ -113,6 +114,9 @@ enum EvalKind {
     // The result of the expression is the `global` pseudo-object
     Global,
 
+    // The result of the expression is an arglist (which is on the top of the stack)
+    ArgList,
+
     // The result of the expression can be accessed using a Variable operand
     Var(Variable),
 
@@ -166,6 +170,7 @@ impl<'a> Compiler<'a> {
 
             EvalKind::Range => return Err(CompileError::UnexpectedRange),
             EvalKind::Global => return Err(CompileError::UnexpectedGlobal),
+            EvalKind::ArgList => return Err(CompileError::UnexpectedArgList),
 
             EvalKind::Var(var) => {
                 self.emit_ins(Instruction::GetVar(var));
@@ -196,6 +201,7 @@ impl<'a> Compiler<'a> {
 
             EvalKind::Range => Err(CompileError::UnexpectedRange),
             EvalKind::Global => Err(CompileError::UnexpectedGlobal),
+            EvalKind::ArgList => return Err(CompileError::UnexpectedArgList),
 
             EvalKind::Field(mut builder, field) => {
                 builder.append(DMString(field.into()));
