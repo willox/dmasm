@@ -58,6 +58,7 @@ macro_rules! simple_stack_procs {
             match name {
                 $(
                     stringify!($proc_name) => {
+                        #[allow(unused_mut)]
                         let mut arg_idx = 0;
                         let arg_count = args.len();
 
@@ -199,6 +200,77 @@ simple_stack_procs! {
     /proc/view(dist = null, center = null) => Instruction::View,
     /proc/winexists(player, control_id) => Instruction::WinExists,
     /proc/winget(player, control_id, params) => Instruction::WinGet,
+    /proc/_dm_db_new_query() => Instruction::DbNewQuery,
+    /proc/_dm_db_execute(a, b, c, d, e) => Instruction::DbExecute,
+    /proc/_dm_db_next_row(a, b, c) => Instruction::DbNextRow,
+    /proc/_dm_db_rows_affected(a) => Instruction::DbRowsAffected,
+    /proc/_dm_db_row_count(a) => Instruction::DbRowCount,
+    /proc/_dm_db_error_msg(a) => Instruction::DbErrorMsg,
+    /proc/_dm_db_columns(a, b) => Instruction::DbColumns,
+    /proc/_dm_db_close(a) => Instruction::DbClose,
+    /proc/_dm_db_new_con() => Instruction::DbNewConnection,
+    /proc/_dm_db_connect(a, b, c, d, e, f) => Instruction::DbConnect,
+    /proc/_dm_db_quote(a, b) => Instruction::DbQuote,
+    /proc/_dm_db_is_connected(a) => Instruction::DbIsConnected,
+}
+
+macro_rules! simple_vararg_procs {
+    (
+        $(
+            /proc/$proc_name:ident
+            (
+                $($min_args:literal)?
+                $(..= $max_args:literal)?
+            ) => $instruction:expr
+        ),* $(,)?
+    ) => {
+        fn eval_simple_vararg_procs(
+            compiler: &mut Compiler<'_>,
+            name: &str,
+            args: &Vec<Expression>,
+        ) -> Result<Option<EvalKind>, CompileError> {
+            let args_len = args.len() as u32;
+
+            match name {
+                $(
+                    stringify!($proc_name) => {
+                        $(
+                            if args_len < $min_args {
+                                return Err(CompileError::IncorrectArgCount(name.to_owned()));
+                            }
+                        )?
+
+                        $(
+                            if args_len > $max_args {
+                                return Err(CompileError::IncorrectArgCount(name.to_owned()));
+                            }
+                        )?
+
+                        args::emit_normal(compiler, args::ArgsContext::Proc, args.clone())?;
+                        compiler.emit_ins($instruction(args_len));
+                        Ok(Some(EvalKind::Stack))
+                    }
+                )*
+
+                _ => Ok(None),
+            }
+        }
+    }
+}
+
+simple_vararg_procs! {
+    /proc/addtext(2) => Instruction::AddText,
+    /proc/bounds(..=5) => Instruction::Bounds,
+    /proc/matrix(..=6) => Instruction::MatrixNew,
+    /proc/max(1) => Instruction::Max,
+    /proc/min(1) => Instruction::Min,
+    /proc/obounds(..=5) => Instruction::OBounds,
+    /proc/regex() => Instruction::RegexNew, // TODO: Byond doesn't error on arg count for regex(), but we could
+    /proc/sorttext(2) => Instruction::SortText,
+    /proc/sortText(2) => Instruction::SortTextEx,
+    /proc/sorttextex(2) => Instruction::SortTextEx,
+    /proc/startup(1) => Instruction::Startup,
+    /proc/typesof(1) => Instruction::TypesOf,
 }
 
 // # Unsupported Procs
@@ -224,9 +296,14 @@ macro_rules! unsupported_procs {
 }
 
 unsupported_procs! {
+    // Should be unreachable asthe parser turns these into their own terms
+    /proc/list,
+    /proc/locate,
+    /proc/pick,
+    /proc/input,
+
     // Overloaded Procs
     /proc/arctan,
-    /proc/bounds,
     /proc/icon_states,
     /proc/ispath,
     /proc/log,
@@ -242,13 +319,11 @@ unsupported_procs! {
     /proc/animate,
     /proc/cmptext,
     /proc/cmptextEx,
-    /proc/copytext,
     /proc/file,
     /proc/filter,
     /proc/gradient,
     /proc/icon,
     /proc/image,
-    /proc/input,
     /proc/isarea,
     /proc/isloc,
     /proc/ismob,
@@ -256,48 +331,23 @@ unsupported_procs! {
     /proc/isobj,
     /proc/issaved,
     /proc/isturf,
-    /proc/link,
-    /proc/list,
-    /proc/locate,
-    /proc/matrix,
-    /proc/max,
-    /proc/min,
     /proc/newlist,
-    /proc/obounds,
-    /proc/pick,
-    /proc/regex,
     /proc/rgb,
-    /proc/sorttext,
-    /proc/sorttextEx,
     /proc/sound,
-    /proc/startup,
     /proc/step,
     /proc/step_away,
     /proc/step_rand,
     /proc/step_to,
     /proc/step_towards,
     /proc/text,
-    /proc/typesof,
-    /proc/_dm_db_new_query,
-    /proc/_dm_db_execute,
-    /proc/_dm_db_enxt_row,
-    /proc/_dm_db_rows_affected,
-    /proc/_dm_db_row_count,
-    /proc/_dm_db_error_msg,
-    /proc/_dm_db_columns,
-    /proc/_dm_db_close,
-    /proc/_dm_db_new_con,
-    /proc/_dm_db_connect,
-    /proc/_dm_db_quote,
-    /proc/_dm_db_is_connected,
 
     // Not actually procs
     /proc/browse,
     /proc/browse_rsc,
     /proc/flick,
     /proc/ftp,
+    /proc/link,
     /proc/load_resource,
-    /proc/penis,
     /proc/output,
     /proc/rand_seed,
     /proc/run,
@@ -330,6 +380,10 @@ pub(super) fn emit(
         return Ok(Some(res));
     }
 
+    if let Some(res) = eval_simple_vararg_procs(compiler, name, args)? {
+        return Ok(Some(res));
+    }
+
     let arg_count = args.len() as u32;
 
     match name {
@@ -340,16 +394,6 @@ pub(super) fn emit(
 
             args::emit_single_normal(compiler, args::ArgsContext::Proc, args[0].clone())?;
             Ok(Some(EvalKind::ArgList))
-        }
-
-        "addtext" => {
-            if arg_count < 2 {
-                return Err(CompileError::IncorrectArgCount(name.to_owned()));
-            }
-
-            args::emit_normal(compiler, args::ArgsContext::Proc, args.clone())?;
-            compiler.emit_ins(Instruction::AddText(arg_count));
-            Ok(Some(EvalKind::Stack))
         }
 
         "initial" => {
