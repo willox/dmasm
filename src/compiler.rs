@@ -104,7 +104,7 @@ impl fmt::Display for CompileError {
                 write!(f, "expected end (received more code than expected)")
             }
             CompileError::UnexpectedRange => write!(f, "unexpected range"),
-            CompileError::UnexpectedGlobal => write!(f, "unexpected 'global'"),
+            CompileError::UnexpectedGlobal => write!(f, "unexpected global"),
             CompileError::UnexpectedArgList => write!(f, "unexpected arglist"),
             CompileError::UnexpectedProbability => write!(f, "unexpected prob()"),
             CompileError::UnexpectedNamedArguments => write!(f, "unexpected named arguments"),
