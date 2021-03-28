@@ -143,13 +143,9 @@ pub(super) fn emit(
                                 ));
                             }
                         }
-
-                        // Move base to the stack
                     }
 
                     PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
-                        let args_count = args.len() as u32;
-
                         // TODO: Can emit much cleaner code when no params
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
@@ -160,19 +156,36 @@ pub(super) fn emit(
                         // We'll need our src after pushing the parameters
                         compiler.emit_ins(Instruction::PushCache);
 
-                        // Push args to the stack
-                        for arg in args {
-                            let arg = compiler.emit_expr(arg)?;
-                            compiler.emit_move_to_stack(arg)?;
+                        match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                            args::ArgsResult::Normal => {
+                                compiler.emit_ins(Instruction::PopCache);
+
+                                compiler.emit_ins(Instruction::Call(
+                                    Variable::DynamicProc(DMString(ident.into())),
+                                    arg_count,
+                                ));
+                            }
+
+                            args::ArgsResult::Assoc => {
+                                compiler.emit_ins(Instruction::NewAssocList(arg_count));
+
+                                compiler.emit_ins(Instruction::PopCache);
+
+                                compiler.emit_ins(Instruction::Call(
+                                    Variable::DynamicProc(DMString(ident.into())),
+                                    65535, // TODO: remove hardcoded value
+                                ));
+                            }
+
+                            args::ArgsResult::ArgList => {
+                                compiler.emit_ins(Instruction::PopCache);
+
+                                compiler.emit_ins(Instruction::Call(
+                                    Variable::DynamicProc(DMString(ident.into())),
+                                    65535, // TODO: remove hardcoded value
+                                ));
+                            }
                         }
-
-                        compiler.emit_ins(Instruction::PopCache);
-
-                        // Move base to the stack
-                        compiler.emit_ins(Instruction::Call(
-                            Variable::DynamicProc(DMString(ident.into())),
-                            args_count,
-                        ));
                     }
                 }
 
