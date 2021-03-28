@@ -1,7 +1,7 @@
 use crate::operands::Operand;
 use crate::parser;
 use crate::{
-    assembler::{AssembleEnv, Assembler},
+    assembler::{AssembleEnv, AssembleError, Assembler},
     disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
     list_operands::*,
     operands::*,
@@ -16,7 +16,7 @@ macro_rules! instructions {
             $operand_name:ident: $operand_type:tt
         ),* $(,)? ) )?
     ),* $(,)? ) => {
-        #[derive(PartialEq, Debug)]
+        #[derive(PartialEq, Clone, Debug)]
         pub enum Instruction {
             $(
                 $name$( ( $( $operand_type, )* ) )?,
@@ -24,15 +24,17 @@ macro_rules! instructions {
         }
 
         impl Instruction {
-            pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) {
+            pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) -> Result<(), AssembleError> {
                 match self {
                     $(
                         Self::$name$( ( $( $operand_name, )* ) )? => {
                             asm.emit($opcode);
-                            $( $( $operand_name.assemble(asm); )* )?
+                            $( $( $operand_name.assemble(asm)?; )* )?
                         }
                     )*
                 }
+
+                Ok(())
             }
 
             pub fn disassemble<'a, E: DisassembleEnv>(
@@ -124,6 +126,7 @@ instructions! {
     0x0D = Test,
     0x0E = Not,
     0x0F = Jmp(destination: Label),
+    0x10 = Jnz(destination: Label),
     0x11 = Jz(destination: Label),
     0x12 = Ret,
     0x13 = IsLoc,
@@ -148,7 +151,7 @@ instructions! {
     0x27 = BrowseRsc,
     0x28 = IsIcon,
     0x29 = Call(proc: Variable, arg_count: u32),
-    0x2A = CallNoReturn(proc: Variable, arg_count: u32),
+    0x2A = CallStatement(proc: Variable, arg_count: u32),
     0x2B = CallPath(arg_count: u32),
     0x2C = CallParent,
     0x2D = CallParentArgs(arg_count: u32),
@@ -326,7 +329,7 @@ instructions! {
     // It's identical to running an invalid opcode
     // 0xD8 = BadInstruction,
 
-    // 0xD9
+    0xD9 = ShellAllowed,
     0xDA = RandSeed,
     0xDB = Text2Ascii,
     0xDC = Ascii2Text,
@@ -342,18 +345,19 @@ instructions! {
     0xE6 = OViewers,
     0xE7 = Hearers,
     0xE8 = OHearers,
-    // 0xE9
+    0xE9 = DbNewConnection,
     // 0xEA
-    // 0xEB
-    // 0xEC
-    // 0xED
-    // 0xEE
-    // 0xEF
-    // 0xF0
-    // 0xF1
-    // 0xF2
-    // 0xF3
-    // 0xF4
+    0xEA = DbNewQuery,
+    0xEB = DbConnect,
+    0xEC = DbExecute,
+    0xED = DbNextRow,
+    0xEE = DbErrorMsg,
+    0xEF = DbClose,
+    0xF0 = DbIsConnected,
+    0xF1 = DbRowsAffected,
+    0xF2 = DbRowCount,
+    0xF3 = DbQuote,
+    0xF4 = DbColumns,
     0xF5 = IsPath,
     0xF6 = IsSubPath,
     0xF7 = FExists,
@@ -435,19 +439,18 @@ instructions! {
     // Pushes the value at the top of the stack (it clones it)
     0x13C = PushTop,
 
-    // Pops the value _only_ if the jump is performed
-    // wait that might be backwards...
-    0x13D = JmpIfNull(destination: Label),
+    // Pops the value _only_ if the jump is not performed
+    0x13D = SetCacheJmpIfNull(destination: Label),
 
     // Pops the value regardless of if the jump is performed
-    0x13E = JmpIfNull2(destination: Label),
+    0x13E = SetCachePopJmpIfNull(destination: Label),
 
     // This one's a bit of a beast. It seems that instructions such as AugAdd cause the offset of their variable operand to be cached
     // This instruction then uses the operand at that offset to find what the "last" var was and push it.
     // I haven't confirmed if anything but Aug* instructions set this value yet.
     0x13F = PushEval,
 
-    // 0x140
+    0x140 = TestEquiv,
     0x141 = TestNotEquiv,
 
     // These instructions interact with a separate stack than the other ones (although both stacks share the same memory allocation.)
@@ -477,6 +480,15 @@ instructions! {
     0x157 = SplitTextChar,
     0x158 = Text2NumRadix,
     0x159 = Num2TextRadix,
+    0x15A = AssignInto(var: Variable),
+    0x15B = PushCacheKey,
+    0x15C = PopCacheKey,
+    0x15D = Time2TextTZ(arg_count: u32),
+    // 0x15E
+    0x15F = SpliceText,
+    0x160 = SpliceTextChar,
+    // 0x161
+    0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
 
     0x1337 = AuxtoolsDebugBreak,
     0x1338 = AuxtoolsDebugBreakNop,

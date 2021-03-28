@@ -1,9 +1,20 @@
-use crate::Node;
+use crate::{operands, Node};
 use std::collections::HashMap;
 
 pub trait AssembleEnv {
     /// Converts a rust string into the correct string identifier for the destination context
-    fn get_string_index(&mut self, string: &[u8]) -> u32;
+    fn get_string_index(&mut self, string: &[u8]) -> Option<u32>;
+    fn get_variable_name_index(&mut self, name: &[u8]) -> Option<u32>;
+    fn get_proc_index(&mut self, path: &str) -> Option<u32>;
+    fn get_type(&mut self, path: &str) -> Option<(u8, u32)>;
+}
+
+#[derive(Debug, PartialEq)]
+pub enum AssembleError {
+    UnsupportedValue(operands::Value),
+    ProcNotFound(String),
+    InvalidVariableName,
+    TypeNotFound(String),
 }
 
 pub struct Assembler<'a, E: AssembleEnv> {
@@ -35,7 +46,7 @@ impl<'a, E: AssembleEnv> Assembler<'a, E> {
     }
 }
 
-pub fn assemble<E: AssembleEnv>(nodes: &[Node], env: &mut E) -> Vec<u32> {
+pub fn assemble<E: AssembleEnv>(nodes: &[Node], env: &mut E) -> Result<Vec<u32>, AssembleError> {
     let mut state = Assembler::new(nodes, env);
 
     for node in nodes {
@@ -48,7 +59,7 @@ pub fn assemble<E: AssembleEnv>(nodes: &[Node], env: &mut E) -> Vec<u32> {
 
             Node::Comment(_) => (),
 
-            Node::Instruction(ins, _) => ins.assemble(&mut state),
+            Node::Instruction(ins, _) => ins.assemble(&mut state)?,
         }
     }
 
@@ -56,5 +67,5 @@ pub fn assemble<E: AssembleEnv>(nodes: &[Node], env: &mut E) -> Vec<u32> {
         state.bytecode[src.0] = state.jump_destinations[&src.1];
     }
 
-    state.bytecode
+    Ok(state.bytecode)
 }

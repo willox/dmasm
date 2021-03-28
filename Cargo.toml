@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 nom = "6.0.1"
 bitflags = "1.2.1"
+dreammaker = { git = "https://github.com/willox/SpacemanDMM", branch = "fixes" }

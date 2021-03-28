@@ -1,11 +1,11 @@
 use crate::{
-    assembler::{AssembleEnv, Assembler},
+    assembler::{AssembleEnv, AssembleError, Assembler},
     disassembler::{DisassembleEnv, DisassembleError, Disassembler},
 };
 use std::fmt;
 
 pub trait Operand: Sized {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>);
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError>;
     fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>)
         -> Result<Self, DisassembleError>;
 
@@ -24,8 +24,9 @@ pub trait OperandDeserialize: Sized {
 // u32
 //
 impl Operand for u32 {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         asm.emit(*self);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -43,8 +44,9 @@ impl Operand for u32 {
 // i32
 //
 impl Operand for i32 {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         asm.emit(unsafe { std::mem::transmute(*self) });
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -64,14 +66,14 @@ impl Operand for i32 {
 // TODO: Split the behaviour into two traits?
 //
 impl Operand for f32 {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
-        unimplemented!()
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        unreachable!()
     }
 
     fn disassemble<E: DisassembleEnv>(
         _dism: &mut Disassembler<E>,
     ) -> Result<Self, DisassembleError> {
-        unimplemented!()
+        unreachable!()
     }
 
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -82,12 +84,13 @@ impl Operand for f32 {
 //
 // Label
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Label(pub String);
 
 impl Operand for Label {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
-        asm.emit_label_operand(&self.0)
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        asm.emit_label_operand(&self.0);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -110,12 +113,17 @@ impl Operand for Label {
 //
 // Proc
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Proc(pub String);
 
 impl Operand for Proc {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
-        panic!("TODO");
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        let idx = asm
+            .env
+            .get_proc_index(&self.0)
+            .ok_or(AssembleError::ProcNotFound(self.0.to_owned()))?;
+        asm.emit(idx);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -141,13 +149,20 @@ impl Operand for Proc {
 //
 // DMString
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct DMString(pub Vec<u8>);
 
+impl DMString {
+    fn get_string_index<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> u32 {
+        asm.env.get_string_index(&self.0).unwrap()
+    }
+}
+
 impl Operand for DMString {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
-        let index = asm.env.get_string_index(&self.0);
-        asm.emit(index);
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        let idx = self.get_string_index(asm);
+        asm.emit(idx);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -255,12 +270,13 @@ impl Operand for DMString {
 // This might actually be a combination of two instructions - but it doesn't really matter for our purposes.
 // (TODO: Use the debugger to single-step over this and know for sure.)
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct RangeParams;
 
 impl Operand for RangeParams {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         asm.emit(0xAE);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -287,18 +303,20 @@ impl Operand for RangeParams {
 //
 // IsInParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum IsInParams {
     Range,
     Value,
 }
 
 impl Operand for IsInParams {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         match self {
             Self::Range => asm.emit(0x0B),
             Self::Value => asm.emit(0x05),
         }
+
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -331,14 +349,14 @@ impl Operand for IsInParams {
 //
 // SwitchParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct SwitchParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
 }
 
 impl Operand for SwitchParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         unimplemented!();
     }
 
@@ -376,14 +394,14 @@ impl Operand for SwitchParams {
 //
 // PickSwitchParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct PickSwitchParams {
     pub default: Label,
     pub cases: Vec<(u32, Label)>,
 }
 
 impl Operand for PickSwitchParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         unimplemented!();
     }
 
@@ -422,7 +440,7 @@ impl Operand for PickSwitchParams {
 //
 // SwitchRangeParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct SwitchRangeParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -430,7 +448,7 @@ pub struct SwitchRangeParams {
 }
 
 impl Operand for SwitchRangeParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
+    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
         unimplemented!();
     }
 
@@ -488,14 +506,20 @@ impl Operand for SwitchRangeParams {
 //
 // PickProbParams
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct PickProbParams {
     pub cases: Vec<Label>,
 }
 
 impl Operand for PickProbParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
-        unimplemented!();
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        asm.emit(self.cases.len() as u32);
+
+        for case in &self.cases {
+            case.assemble(asm)?;
+        }
+
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -523,7 +547,7 @@ impl Operand for PickProbParams {
 //
 // Value
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Value {
     Null,
     Number(f32),
@@ -546,37 +570,34 @@ pub enum Value {
 }
 
 impl Operand for Value {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) {
-        // TODO: WRONG!
-        match self {
-            Self::Null => {
-                asm.emit(0x00);
-                asm.emit(0x00);
-            }
-            Self::Raw { tag, data } => {
-                asm.emit(*tag as u32);
-                asm.emit(*data);
-            }
-            Self::DMString(value) => {
-                asm.emit(0x06);
-                value.assemble(asm);
-            }
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        let (tag, data): (u8, u32) = match self {
+            Self::Null => (0x00, 0x00),
+            Self::Raw { tag, data } => (*tag, *data),
+            Self::DMString(value) => (0x06, value.get_string_index(asm)),
 
-            Self::Number(value) => {
+            // Numbers are a special case. They use an extra operand.
+            Self::Number(num) => {
+                let bits = num.to_bits();
                 asm.emit(0x2A);
-                // Numbers store their data portion in the lower 16-bits of two operands
-                // TODO: test code
-                let bits = value.to_bits();
                 asm.emit((bits >> 16) & 0xFFFF);
                 asm.emit(bits & 0xFFFF);
+                return Ok(());
             }
 
-            Self::Path(..) | Self::Resource(..) | Self::File => {
-                // TODO: This _will_ bite me in the ass, implement assemble errors asap
-                asm.emit(0x00);
-                asm.emit(0x00);
-            }
-        }
+            Self::Path(path) => match asm.env.get_type(path) {
+                Some(t) => t,
+                None => return Err(AssembleError::TypeNotFound(path.clone())),
+            },
+
+            // TODO: This _will_ bite me in the ass, implement assemble errors asap
+            other => return Err(AssembleError::UnsupportedValue(other.clone())),
+        };
+
+        // The top 8 bits of data live in tag
+        asm.emit((tag as u32) | ((data & 0xFF0000) >> 8));
+        asm.emit(data & 0xFFFF);
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -656,7 +677,7 @@ impl Operand for Value {
 //
 // Variable
 //
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Variable {
     Null,
     World,
@@ -683,8 +704,94 @@ pub enum Variable {
 }
 
 impl Operand for Variable {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) {
-        panic!("TODO")
+    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+        use crate::access_modifiers;
+
+        fn write_variable_name<E: AssembleEnv>(
+            asm: &mut Assembler<E>,
+            name: &DMString,
+        ) -> Result<(), AssembleError> {
+            let id = asm
+                .env
+                .get_variable_name_index(&name.0)
+                .ok_or(AssembleError::InvalidVariableName)?;
+            asm.emit(id);
+            Ok(())
+        }
+
+        match self {
+            Variable::Null => asm.emit(access_modifiers::Null),
+            Variable::World => asm.emit(access_modifiers::World),
+            Variable::Usr => asm.emit(access_modifiers::Usr),
+            Variable::Src => asm.emit(access_modifiers::Src),
+            Variable::Args => asm.emit(access_modifiers::Args),
+            Variable::Dot => asm.emit(access_modifiers::Dot),
+            Variable::Cache => asm.emit(access_modifiers::Cache),
+            Variable::CacheKey => asm.emit(access_modifiers::CacheKey),
+            Variable::CacheIndex => asm.emit(access_modifiers::CacheIndex),
+            Variable::Field(name) => name.assemble(asm)?,
+            Variable::Arg(idx) => {
+                asm.emit(access_modifiers::Arg);
+                asm.emit(*idx);
+            }
+            Variable::Local(idx) => {
+                asm.emit(access_modifiers::Local);
+                asm.emit(*idx);
+            }
+            Variable::Global(name) => {
+                asm.emit(access_modifiers::Global);
+                write_variable_name(asm, name)?;
+            }
+            Variable::SetCache(lhs, rhs) => {
+                asm.emit(access_modifiers::SetCache);
+                lhs.assemble(asm)?;
+                rhs.assemble(asm)?;
+            }
+            Variable::Initial(rhs) => {
+                asm.emit(access_modifiers::Initial);
+                rhs.assemble(asm)?;
+            }
+            Variable::IsSaved(rhs) => {
+                asm.emit(access_modifiers::IsSaved);
+                rhs.assemble(asm)?;
+            }
+            Variable::DynamicProc(name) => {
+                asm.emit(access_modifiers::DynamicProc);
+
+                // TODO: Improve
+                let mut name = name.clone();
+                for character in &mut name.0 {
+                    if *character == b'_' {
+                        *character = b' ';
+                    }
+                }
+
+                name.assemble(asm)?;
+            }
+            Variable::DynamicVerb(name) => {
+                asm.emit(access_modifiers::DynamicVerb);
+
+                // TODO: Improve
+                let mut name = name.clone();
+                for character in &mut name.0 {
+                    if *character == b'_' {
+                        *character = b' ';
+                    }
+                }
+
+                name.assemble(asm)?;
+            }
+            Variable::StaticProc(proc) => {
+                asm.emit(access_modifiers::StaticProc);
+                proc.assemble(asm)?;
+            }
+            Variable::StaticVerb(proc) => {
+                asm.emit(access_modifiers::StaticVerb);
+                proc.assemble(asm)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -692,7 +799,7 @@ impl Operand for Variable {
     ) -> Result<Self, DisassembleError> {
         use crate::access_modifiers;
 
-        pub fn read_variable_name<E: DisassembleEnv>(
+        fn read_variable_name<E: DisassembleEnv>(
             dism: &mut Disassembler<E>,
         ) -> Result<DMString, DisassembleError> {
             let id = dism.read_u32()?;

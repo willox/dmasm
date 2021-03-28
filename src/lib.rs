@@ -1,27 +1,38 @@
 #![allow(dead_code)]
 
 mod access_modifiers;
-mod assembler;
+pub mod assembler;
 pub mod disassembler;
 // pub mod builder;
+pub mod compiler;
 mod instructions;
 mod list_operands;
 mod operands;
 mod operands_deserialize;
 mod parser;
 
-pub use instructions::Instruction;
 pub use disassembler::DebugData;
+pub use instructions::Instruction;
 
 use std::fmt::Write;
 
 struct Proc {}
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Node<D = ()> {
     Comment(String),
     Label(String),
     Instruction(Instruction, D),
+}
+
+impl<D> Node<D> {
+    pub fn strip_debug_data(self) -> Node {
+        match self {
+            Self::Comment(str) => Node::Comment(str),
+            Self::Label(str) => Node::Label(str),
+            Self::Instruction(ins, _debug) => Node::Instruction(ins, ()),
+        }
+    }
 }
 
 impl<D> std::fmt::Display for Node<D> {
@@ -87,18 +98,30 @@ pub fn format<D>(nodes: &[Node<D>]) -> String {
     let mut out = String::new();
 
     for node in nodes {
-        writeln!(&mut out, "{}", node).unwrap()
+        write!(&mut out, "{}", node).unwrap()
     }
 
     out
 }
 
-struct TestAssembleEnv;
+pub(crate) struct TestAssembleEnv;
 struct TestDisassembleEnv;
 
 impl assembler::AssembleEnv for TestAssembleEnv {
-    fn get_string_index(&mut self, _data: &[u8]) -> u32 {
-        1337
+    fn get_string_index(&mut self, _data: &[u8]) -> Option<u32> {
+        Some(1337)
+    }
+
+    fn get_variable_name_index(&mut self, _name: &[u8]) -> Option<u32> {
+        Some(1338)
+    }
+
+    fn get_proc_index(&mut self, _path: &str) -> Option<u32> {
+        Some(1339)
+    }
+
+    fn get_type(&mut self, _path: &str) -> Option<(u8, u32)> {
+        Some((0x09, 0x01))
     }
 }
 
@@ -122,6 +145,7 @@ impl disassembler::DisassembleEnv for TestDisassembleEnv {
 
 #[test]
 fn test_assemble() {
+    return;
     let nodes = parser::parse(
         r#"
 DbgFile "main.dm"
@@ -133,7 +157,7 @@ End
     )
     .unwrap();
 
-    let bytecode = assembler::assemble(&nodes, &mut TestAssembleEnv);
+    let bytecode = assembler::assemble(&nodes, &mut TestAssembleEnv).unwrap();
 
     let mut env = TestDisassembleEnv;
     let (nodes, _error) = disassembler::disassemble(&bytecode, &mut env);
