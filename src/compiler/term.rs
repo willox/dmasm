@@ -23,7 +23,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
         Term::String(str) => {
-            compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(str.into()))));
+            compiler.emit_ins(Instruction::PushVal(Value::DMString(strings::parse(&str)?)));
             Ok(EvalKind::Stack)
         }
 

@@ -14,6 +14,7 @@ mod binary_ops;
 mod builtin_procs;
 mod chain_builder;
 mod follow;
+mod strings;
 mod term;
 mod ternary;
 mod unary;
@@ -41,6 +42,7 @@ fn is_writable(var: &Variable) -> bool {
 #[derive(Debug)]
 pub enum CompileError {
     ParseError(dreammaker::DMError),
+    StringError(strings::StringError),
     UnsupportedExpressionTerm(dreammaker::ast::Term),
     UnsupportedPrefabWithVars,
     ExpectedLValue,
@@ -60,6 +62,12 @@ pub enum CompileError {
     UnsupportedSafeListAccess,
     AmbiguousListConstructor,
     InvalidLocateArgs,
+}
+
+impl From<strings::StringError> for CompileError {
+    fn from(err: strings::StringError) -> Self {
+        Self::StringError(err)
+    }
 }
 
 impl From<dreammaker::DMError> for CompileError {
