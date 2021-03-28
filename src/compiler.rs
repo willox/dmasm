@@ -158,12 +158,16 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
 
     // Expression begin
     let ctx = dreammaker::Context::default();
+
     let mut lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
-    let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), &mut lexer)?;
+    let mut indents = dreammaker::indents::IndentProcessor::new(&ctx, &mut lexer);
+    let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), &mut indents)?;
 
     if !lexer.remaining().is_empty() {
         return Err(CompileError::ExpectedEnd);
     }
+
+    // TODO: Make sure we've consumed the whole buffer
 
     for err in ctx.errors().iter() {
         if err.severity() >= Severity::Error {
