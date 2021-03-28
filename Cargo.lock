@@ -45,6 +45,7 @@ dependencies = [
 [[package]]
 name = "builtins-proc-macro"
 version = "0.0.0"
+source = "git+https://github.com/willox/SpacemanDMM?branch=fixes#6e6620cabc9e1cb23e3286eeadb5e679f285a13d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -96,6 +97,7 @@ dependencies = [
 [[package]]
 name = "dreammaker"
 version = "0.1.0"
+source = "git+https://github.com/willox/SpacemanDMM?branch=fixes#6e6620cabc9e1cb23e3286eeadb5e679f285a13d"
 dependencies = [
  "bitflags",
  "builtins-proc-macro",
@@ -168,6 +170,7 @@ dependencies = [
 [[package]]
 name = "interval-tree"
 version = "0.8.0"
+source = "git+https://github.com/willox/SpacemanDMM?branch=fixes#6e6620cabc9e1cb23e3286eeadb5e679f285a13d"
 
 [[package]]
 name = "lexical-core"
