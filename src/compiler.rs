@@ -43,25 +43,32 @@ fn is_writable(var: &Variable) -> bool {
 pub enum CompileError {
     ParseError(dreammaker::DMError),
     StringError(strings::StringError),
-    UnsupportedExpressionTerm(dreammaker::ast::Term),
-    UnsupportedPrefabWithVars,
+
     ExpectedLValue,
     ExpectedFieldReference,
-    IncorrectArgCount(String),
-    MissingArgument { proc: String, index: u32 },
-    TooManyArguments { proc: String, expected: u32 },
-    UnsupportedBuiltin { proc: String },
+
     UnexpectedRange,
     UnexpectedGlobal,
     UnexpectedArgList,
     UnexpectedProbability,
     UnexpectedNamedArguments,
+
+    UnsupportedPrefabWithVars,
+    UnsupportedBuiltin { proc: String },
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
     UnsupportedImplicitLocate,
     UnsupportedSafeListAccess,
+    UnsupportedStringInterpolation,
+    UnsupportedInput,
+
     AmbiguousListConstructor,
     InvalidLocateArgs,
+
+    // TODO: Merge these
+    IncorrectArgCount(String),
+    MissingArgument { proc: String, index: u32 },
+    TooManyArguments { proc: String, expected: u32 },
 }
 
 impl From<strings::StringError> for CompileError {

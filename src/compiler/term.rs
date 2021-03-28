@@ -302,7 +302,12 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
-        other => Err(CompileError::UnsupportedExpressionTerm(other)),
+        Term::InterpString(_, _) => return Err(CompileError::UnsupportedStringInterpolation),
+        Term::Input {
+            args: _,
+            input_type: _,
+            in_list: _,
+        } => return Err(CompileError::UnsupportedInput),
     }
 }
 
