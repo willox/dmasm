@@ -1,3 +1,5 @@
+use std::fmt;
+
 use dreammaker::ast::Follow;
 use dreammaker::ast::PropertyAccessKind;
 use dreammaker::ast::{AssignOp, BinaryOp, UnaryOp};
@@ -61,7 +63,6 @@ pub enum CompileError {
     UnsupportedImplicitNew,
     UnsupportedRelativeCall,
     UnsupportedImplicitLocate,
-    UnsupportedSafeListAccess,
     UnsupportedStringInterpolation,
     UnsupportedInput,
 
@@ -83,6 +84,64 @@ impl From<strings::StringError> for CompileError {
 impl From<dreammaker::DMError> for CompileError {
     fn from(err: dreammaker::DMError) -> Self {
         Self::ParseError(err)
+    }
+}
+
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompileError::ParseError(err) => {
+                write!(f, "parser error: {}", err)
+            }
+
+            CompileError::StringError(err) => {
+                write!(f, "string error: {}", err)
+            }
+
+            CompileError::ExpectedLValue => write!(f, "expected l-value"),
+            CompileError::ExpectedFieldReference => write!(f, "expected field reference"),
+            CompileError::ExpectedEnd => {
+                write!(f, "expected end (received more code than expected)")
+            }
+            CompileError::UnexpectedRange => write!(f, "unexpected range"),
+            CompileError::UnexpectedGlobal => write!(f, "unexpected 'global'"),
+            CompileError::UnexpectedArgList => write!(f, "unexpected arglist"),
+            CompileError::UnexpectedProbability => write!(f, "unexpected prob()"),
+            CompileError::UnexpectedNamedArguments => write!(f, "unexpected named arguments"),
+            CompileError::UnsupportedPrefabWithVars => {
+                write!(f, "prefabs with variable overrides are not supported")
+            }
+            CompileError::UnsupportedBuiltin { proc } => {
+                write!(f, "unsupported built-in proc: {}", proc)
+            }
+            CompileError::UnsupportedImplicitNew => {
+                write!(f, "implicit new() calls are not supported")
+            }
+            CompileError::UnsupportedRelativeCall => write!(f, "relative calls are not supported"),
+            CompileError::UnsupportedImplicitLocate => {
+                write!(f, "implicit locate() calls are not supported")
+            }
+            CompileError::UnsupportedStringInterpolation => {
+                write!(f, "interpolated strings are not supported")
+            }
+            CompileError::UnsupportedInput => write!(f, "unsupported built-in proc: input"),
+            CompileError::AmbiguousListConstructor => write!(
+                f,
+                "provided list constructor (or named parameters) are ambiguous"
+            ),
+            CompileError::InvalidLocateArgs => write!(f, "invalid arguments for locate()"),
+            CompileError::IncorrectArgCount(proc) => {
+                write!(f, "incorrect amount of arguments for: {}", proc)
+            }
+            CompileError::MissingArgument { proc, index: _ } => {
+                write!(f, "missing argument(s) for: {}", proc)
+            }
+            CompileError::TooManyArguments { proc, expected } => write!(
+                f,
+                "too many argument(s) for: {} (expected {})",
+                proc, expected
+            ),
+        }
     }
 }
 
@@ -149,6 +208,20 @@ enum EvalKind {
     // Similar to Var, but more state
     Field(ChainBuilder, String),
     // TODO: Eval?
+}
+
+impl fmt::Display for EvalKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EvalKind::Stack => write!(f, "stack value"),
+            EvalKind::ListRef => write!(f, "list access"),
+            EvalKind::Range => write!(f, "range"),
+            EvalKind::Global => write!(f, "global"),
+            EvalKind::ArgList => write!(f, "arglist"),
+            EvalKind::Var(_) => write!(f, "variable"),
+            EvalKind::Field(_, _) => write!(f, "field access"),
+        }
+    }
 }
 
 #[derive(Clone)]

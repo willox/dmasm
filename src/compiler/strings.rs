@@ -1,9 +1,20 @@
+use std::fmt;
+
 use crate::operands::DMString;
 
 #[derive(Debug)]
 pub enum StringError {
     UnexpectedEnd,
     UnsupportedEscapeSequence,
+}
+
+impl fmt::Display for StringError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StringError::UnexpectedEnd => write!(f, "unexpected end"),
+            StringError::UnsupportedEscapeSequence => write!(f, "unsupported escape sequence"),
+        }
+    }
 }
 
 pub(super) fn parse(data: &str) -> Result<DMString, StringError> {
