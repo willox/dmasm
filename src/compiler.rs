@@ -1,7 +1,7 @@
-use dreammaker::ast::Expression;
 use dreammaker::ast::Follow;
 use dreammaker::ast::PropertyAccessKind;
 use dreammaker::ast::{AssignOp, BinaryOp, UnaryOp};
+use dreammaker::{ast::Expression, Severity};
 
 use crate::operands::{self, DMString, Label, Value, Variable};
 use crate::Instruction;
@@ -46,6 +46,9 @@ pub enum CompileError {
 
     ExpectedLValue,
     ExpectedFieldReference,
+
+    // This is sort of snowflake
+    ExpectedEnd,
 
     UnexpectedRange,
     UnexpectedGlobal,
@@ -96,10 +99,18 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
 
     // Expression begin
     let ctx = dreammaker::Context::default();
-    let lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
-    let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), lexer)?;
+    let mut lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
+    let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), &mut lexer)?;
 
-    // TODO: Error check expr
+    if !lexer.remaining().is_empty() {
+        return Err(CompileError::ExpectedEnd);
+    }
+
+    for err in ctx.errors().iter() {
+        if err.severity() >= Severity::Error {
+            return Err(err.clone().into());
+        }
+    }
 
     let kind = compiler.emit_expr(expr)?;
     compiler.emit_move_to_stack(kind)?;
