@@ -487,7 +487,7 @@ instructions! {
     // 0x15E
     0x15F = SpliceText,
     0x160 = SpliceTextChar,
-    // 0x161
+    0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
 
     0x1337 = AuxtoolsDebugBreak,
