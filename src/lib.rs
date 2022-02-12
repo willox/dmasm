@@ -5,6 +5,7 @@ pub mod assembler;
 pub mod disassembler;
 // pub mod builder;
 pub mod compiler;
+pub mod dmb;
 mod instructions;
 mod list_operands;
 mod operands;
