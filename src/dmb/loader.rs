@@ -16,36 +16,17 @@ use nom::{
 };
 
 #[derive(Debug)]
-pub struct VariableId(u32);
-
-#[derive(Debug)]
-pub struct StringId(u32);
-
-#[derive(Debug)]
-pub struct MiscId(u32);
-
-#[derive(Debug)]
-pub struct BytecodeId(MiscId);
-
-#[derive(Debug)]
-pub struct LocalsId(MiscId);
-
-#[derive(Debug)]
-pub struct ParametersId(MiscId);
-
-#[derive(Debug)]
-pub struct ProcEntry {
-    path: StringId,
-    name: StringId,
-    bytecode: BytecodeId,
-    locals: LocalsId,
-    parameters: ParametersId,
-}
-
-#[derive(Debug)]
 pub struct DmbFile {
-    strings: Vec<DMString>,
-    procs: Vec<ProcEntry>,
+    grid: Grid,
+    class_table: Vec<Class>,
+    mob_table: Vec<Mob>,
+    string_table: Vec<DMString>,
+    misc_table: Vec<Misc>,
+    proc_table: Vec<Proc>,
+    variable_table: Vec<Variable>,
+    some_proc_table: Vec<u32>,
+    instance_table: Vec<Instance>,
+    map_data_table: Vec<MapData>,
 }
 
 #[derive(Debug)]
@@ -116,6 +97,64 @@ struct Proc {
     parameters: u32,
 }
 
+#[derive(Debug)]
+struct Variable {
+    kind: u8,
+    value: u32,
+    name: u32,
+}
+
+#[derive(Debug)]
+struct Instance {
+    kind: u8,
+    value: u32,
+    initializer: Option<u32>,
+}
+
+#[derive(Debug)]
+struct MapData {
+    offset: u16,
+    instance: Option<u32>,
+}
+
+#[derive(Debug)]
+struct World {
+    mob: Option<u32>,
+    turf: Option<u32>,
+    area: Option<u32>,
+    procs: Option<u32>,
+    initializer: Option<u32>,
+    unk_0: Option<u32>,
+    name: u32,
+    unk_1: Option<u32>,
+    tick_lag: u32, // probably
+    client: u32,
+    image: Option<u32>,
+    unk_2: u8,
+    unk_3: u8,
+    unk_4: Option<u16>,
+    unk_5: u8,
+    unk_6: Option<u32>,
+    unk_7: Vec<u32>,
+    unk_8: Option<u32>,
+    unk_9: Option<u16>,
+    unk_a: Option<u16>,
+    unk_b: Option<u16>,
+    hub_password: Option<u32>,
+    server_name: Option<u32>,
+    unk_c: Option<u32>,
+    unk_d: Option<u32>,
+    unk_e: Option<u16>,
+    unk_f: Option<u32>,
+    unk_g: Option<u32>,
+    hub: Option<u32>,
+    channel: Option<u32>,
+    unk_h: Option<u32>,
+    icon_size_x: Option<u16>,
+    icon_size_y: Option<u16>,
+    unk_i: Option<u16>,
+}
+
 #[derive(Copy, Clone, Debug)]
 struct Parser<'a> {
     data: &'a [u8],
@@ -140,14 +179,13 @@ impl<'a> Parser<'a> {
         let (i, strings) = parser.strings(i).unwrap();
         let (i, misc_table) = parser.misc_table(i).unwrap();
         let (i, proc_table) = parser.proc_table(i).unwrap();
+        let (i, variable_table) = parser.variable_table(i).unwrap();
+        let (i, some_proc_table) = parser.some_proc_table(i).unwrap();
+        let (i, instance_table) = parser.instance_table(i).unwrap();
+        let (i, map_data_table) = parser.map_data_table(i).unwrap();
+        let (i, world) = parser.world(i).unwrap();
 
-        for proc in proc_table {
-            let path = &strings[proc.path.unwrap_or_default() as usize];
-            println!("{:?}", String::from_utf8_lossy(&path.data));
-
-            let bytecode = &misc_table[proc.bytecode as usize];
-            println!("{:x?}", bytecode.entries);
-        }
+        panic!("{:?}", world);
 
         parser
     }
@@ -586,6 +624,299 @@ impl<'a> Parser<'a> {
             parameters,
         }))
     }
+
+    fn variable_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Variable>> {
+        let (i, count) = self.object(i)?;
+
+        println!("loading {:?} variables", count);
+
+        let mut variables = vec![];
+        variables.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, proc) = self.variable(i)?;
+            variables.push(proc);
+            i = inner_i;
+        }
+
+        let (i, unk_0) = if self.header.major >= 512 && self.header.lhs >= 512 {
+            let (i, unk_0) = le_u32(i)?;
+            (i, Some(unk_0))
+        } else {
+            (i, None)
+        };
+
+        println!("ignoring {:?}", unk_0);
+
+        Ok((i, variables))
+    }
+
+    fn variable(&self, i: &'a [u8]) -> IResult<&'a [u8], Variable> {
+        let (i, kind) = le_u8(i)?;
+        let (i, value) = le_u32(i)?;
+        let (i, name) = self.object(i)?;
+
+        Ok((i, Variable {
+            kind,
+            value,
+            name,
+        }))
+    }
+
+    fn some_proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<u32>> {
+        let (i, count) = self.object(i)?;
+
+        println!("loading {:?} some_procs", count);
+
+        let mut variables = vec![];
+        variables.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, proc) = self.object(i)?;
+            variables.push(proc);
+            i = inner_i;
+        }
+
+        Ok((i, variables))
+    }
+
+    fn instance_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Instance>> {
+        let (i, count) = self.object(i)?;
+
+        println!("loading {:?} instances", count);
+
+        let mut instances = vec![];
+        instances.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, instance) = self.instance(i)?;
+            instances.push(instance);
+            i = inner_i;
+        }
+
+        Ok((i, instances))
+    }
+
+    fn instance(&self, i: &'a [u8]) -> IResult<&'a [u8], Instance> {
+        let (i, kind) = le_u8(i)?;
+        let (i, value) = le_u32(i)?;
+        let (i, initializer) = self.optional_object(i)?;
+
+        Ok((i, Instance {
+            kind,
+            value,
+            initializer,
+        }))
+    }
+
+    fn map_data_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<MapData>> {
+        let (i, count) = le_u32(i)?;
+
+        println!("loading {:?} map datas", count);
+
+        let mut map_datas = vec![];
+        map_datas.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, map_data) = self.map_data(i)?;
+            map_datas.push(map_data);
+            i = inner_i;
+        }
+
+        Ok((i, map_datas))
+    }
+
+    fn map_data(&self, i: &'a [u8]) -> IResult<&'a [u8], MapData> {
+        let (i, offset) = le_u16(i)?;
+        let (i, instance) = self.optional_object(i)?;
+
+        Ok((i, MapData {
+            offset,
+            instance,
+        }))
+    }
+
+    fn world(&self, i: &'a [u8]) -> IResult<&'a [u8], World> {
+        let (i, mob) = self.optional_object(i)?;
+        let (i, turf) = self.optional_object(i)?;
+        let (i, area) = self.optional_object(i)?;
+        let (i, procs) = self.optional_object(i)?;
+        let (i, initializer) = self.optional_object(i)?;
+        let (i, unk_0) = self.optional_object(i)?;
+        let (i, name) = self.object(i)?;
+
+        let (i, unk_1) = if self.header.major < 368 {
+            let (i, unk_1) = self.object(i)?;
+            (i, Some(unk_1))
+        } else {
+            (i, None)
+        };
+
+        let (i, tick_lag) = le_u32(i)?;
+        let (i, client) = self.object(i)?;
+
+        let (i, image) = if self.header.major >= 308 {
+            let (i, image) = self.object(i)?;
+            (i, Some(image))
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_2) = le_u8(i)?;
+        let (i, unk_3) = le_u8(i)?;
+
+        let (i, unk_4) = if self.header.major >= 415 {
+            let (i, unk_4) = le_u16(i)?;
+            (i, Some(unk_4))
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_5) = le_u8(i)?;
+
+        let (i, unk_6) = if self.header.major >= 230 {
+            let (i, unk_6) = self.object(i)?;
+            (i, Some(unk_6))
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_7) = if self.header.major >= 507 {
+            let (i, count) = le_u16(i)?;
+            let mut unk_7 = vec![];
+            unk_7.reserve(count as usize);
+
+            let mut i = i;
+            for idx in 0..count {
+                let res = self.object(i)?;
+                i = res.0;
+                unk_7.push(res.1);
+            }
+
+            (i, unk_7)
+        } else {
+            (i, vec![])
+        };
+
+        let (i, unk_8) = if self.header.major < 507 {
+            self.optional_object(i)?
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_9) = if self.header.major >= 232 {
+            let (i, unk_9) = le_u16(i)?;
+            (i, Some(unk_9))
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_a) = if self.header.major >= 235 && self.header.major < 368 {
+            let (i, unk_a) = le_u16(i)?;
+            (i, Some(unk_a))
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_b) = if self.header.major >= 236 && self.header.major < 368 {
+            let (i, unk_b) = le_u16(i)?;
+            (i, Some(unk_b))
+        } else {
+            (i, None)
+        };
+
+        let (i, hub_password) = if self.header.major >= 341 {
+            self.optional_object(i)?
+        } else {
+            (i, None)
+        };
+
+        let (i, server_name, unk_c, unk_d) = if self.header.major >= 266 {
+            let (i, server_name) = self.optional_object(i)?;
+            let (i, unk_c) = le_u32(i)?;
+            let (i, unk_d) = le_u32(i)?;
+            (i, server_name, Some(unk_c), Some(unk_d))
+        } else {
+            (i, None, None, None)
+        };
+
+        let (i, unk_e, unk_f, unk_g) = if self.header.major >= 272 {
+            let (i, unk_e) = le_u16(i)?;
+            let (i, unk_f) = self.optional_object(i)?;
+            let (i, unk_g) = self.optional_object(i)?;
+            (i, Some(unk_e), unk_f, unk_g)
+        } else {
+            (i, None, None, None)
+        };
+
+        let (i, hub) = if self.header.major >= 276 {
+            self.optional_object(i)?
+        } else {
+            (i, None)
+        };
+
+        let (i, channel) = if self.header.major >= 305 {
+            self.optional_object(i)?
+        } else {
+            (i, None)
+        };
+
+        let (i, unk_h) = if self.header.major >= 360 {
+            self.optional_object(i)?
+        } else {
+            (i, None)
+        };
+
+        let (i, icon_size_x, icon_size_y, unk_i) = if self.header.major >= 272 {
+            let (i, icon_size_x) = le_u16(i)?;
+            let (i, icon_size_y) = le_u16(i)?;
+            let (i, unk_i) = le_u16(i)?;
+            (i, Some(icon_size_x), Some(icon_size_y), Some(unk_i))
+        } else {
+            (i, None, None, None)
+        };
+
+        Ok((i, World {
+            mob,
+            turf,
+            area,
+            procs,
+            initializer,
+            unk_0,
+            name,
+            unk_1,
+            tick_lag,
+            client,
+            image,
+            unk_2,
+            unk_3,
+            unk_4,
+            unk_5,
+            unk_6,
+            unk_7,
+            unk_8,
+            unk_9,
+            unk_a,
+            unk_b,
+            hub_password,
+            server_name,
+            unk_c,
+            unk_d,
+            unk_e,
+            unk_f,
+            unk_g,
+            hub,
+            channel,
+            unk_h,
+            icon_size_x,
+            icon_size_y,
+            unk_i,
+        }))
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -647,9 +978,9 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 
 #[cfg(test)]
 mod tests {
-     const EXAMPLE_DMB: &'static [u8] =
-         include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-    //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+     //const EXAMPLE_DMB: &'static [u8] =
+     //    include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+    const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
 
     #[test]
     fn it_works() {
