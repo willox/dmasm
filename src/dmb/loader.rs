@@ -791,7 +791,7 @@ impl<'a> Parser<'a> {
             unk_7.reserve(count as usize);
 
             let mut i = i;
-            for idx in 0..count {
+            for _ in 0..count {
                 let res = self.object(i)?;
                 i = res.0;
                 unk_7.push(res.1);
