@@ -27,6 +27,7 @@ pub struct DmbFile {
     some_proc_table: Vec<u32>,
     instance_table: Vec<Instance>,
     map_data_table: Vec<MapData>,
+    file_table: Vec<File>,
 }
 
 #[derive(Debug)]
@@ -155,6 +156,12 @@ struct World {
     unk_i: Option<u16>,
 }
 
+#[derive(Debug)]
+struct File {
+    id: u32,
+    kind: u8,
+}
+
 #[derive(Copy, Clone, Debug)]
 struct Parser<'a> {
     data: &'a [u8],
@@ -184,8 +191,7 @@ impl<'a> Parser<'a> {
         let (i, instance_table) = parser.instance_table(i).unwrap();
         let (i, map_data_table) = parser.map_data_table(i).unwrap();
         let (i, world) = parser.world(i).unwrap();
-
-        panic!("{:?}", world);
+        let (i, file_table) = parser.file_table(i).unwrap();
 
         parser
     }
@@ -915,6 +921,34 @@ impl<'a> Parser<'a> {
             icon_size_x,
             icon_size_y,
             unk_i,
+        }))
+    }
+
+    fn file_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<File>> {
+        let (i, count) = self.object(i)?;
+
+        println!("loading {:?} files", count);
+
+        let mut files = vec![];
+        files.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, file) = self.file(i)?;
+            files.push(file);
+            i = inner_i;
+        }
+
+        Ok((i, files))
+    }
+
+    fn file(&self, i: &'a [u8]) -> IResult<&'a [u8], File> {
+        let (i, id) = le_u32(i)?;
+        let (i, kind) = le_u8(i)?;
+
+        Ok((i, File {
+            id,
+            kind,
         }))
     }
 }
