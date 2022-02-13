@@ -1,13 +1,12 @@
 mod nqcrc;
 mod xorjump;
 
-use std::{convert::TryInto, io::Read};
+use std::{convert::TryInto};
 
 use nom::{
     branch::alt,
     bytes::{complete::{take_while, take}, streaming::tag},
     character::{
-        complete::{digit1, space0},
         is_digit,
     },
     combinator::{map, map_res},
@@ -159,7 +158,6 @@ impl<'a> Parser<'a> {
         let (i, z_height) = le_u16(i)?;
         let (i, z_count) = le_u16(i)?;
 
-        let mut skipping = 0;
         let mut count = z_width as u64 * z_height as u64 * z_count as u64;
 
         let mut i = i;
@@ -188,7 +186,6 @@ impl<'a> Parser<'a> {
 
         let mut i = i;
         for _ in 0..count {
-            let offset = self.offset(i);
             let (inner_i, class) = self.class(i)?;
             classes.push(class);
             i = inner_i;
@@ -209,12 +206,11 @@ impl<'a> Parser<'a> {
 
         let (i, interface) = {
             let mut i = i;
-            let mut interface: u32 = 0;
 
             if self.header.major >= 307 {
                 let res = le_u8(i)?;
                 i = res.0;
-                interface = res.1 as u32;
+                let mut interface = res.1 as u32;
 
                 if interface == 0x0F {
                     let res = le_u32(i)?;
