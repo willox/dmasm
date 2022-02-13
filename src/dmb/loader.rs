@@ -91,8 +91,29 @@ struct Mob {
 }
 
 #[derive(Debug)]
-pub struct DMString {
+struct DMString {
     data: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct Misc {
+    entries: Vec<u32>,
+}
+
+#[derive(Debug)]
+struct Proc {
+    path: Option<u32>,
+    name: Option<u32>,
+    unk_0: Option<u32>,
+    category: Option<u32>,
+    unk_1: u8,
+    unk_2: u8,
+    unk_3: u8,
+    unk_4: Option<u32>,
+    unk_5: Option<u8>,
+    bytecode: u32,
+    locals: u32,
+    parameters: u32,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -116,8 +137,17 @@ impl<'a> Parser<'a> {
         let (i, string_bytes) = parser.string_bytes(i).unwrap();
         let (i, classes) = parser.classes(i).unwrap();
         let (i, mobs) = parser.mobs(i).unwrap();
-
         let (i, strings) = parser.strings(i).unwrap();
+        let (i, misc_table) = parser.misc_table(i).unwrap();
+        let (i, proc_table) = parser.proc_table(i).unwrap();
+
+        for proc in proc_table {
+            let path = &strings[proc.path.unwrap_or_default() as usize];
+            println!("{:?}", String::from_utf8_lossy(&path.data));
+
+            let bytecode = &misc_table[proc.bytecode as usize];
+            println!("{:x?}", bytecode.entries);
+        }
 
         parser
     }
@@ -177,7 +207,7 @@ impl<'a> Parser<'a> {
     }
 
     fn classes(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Class>> {
-        let (i, count) = self.object(i)?; // should be u32?
+        let (i, count) = self.object(i)?;
 
         println!("Loading {} classes", count);
 
@@ -461,6 +491,101 @@ impl<'a> Parser<'a> {
             data
         }))
     }
+
+    fn misc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Misc>> {
+        let (i, count) = self.object(i)?;
+
+        println!("loading {:?} miscs", count);
+
+        let mut miscs = vec![];
+        miscs.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, misc) = self.misc(i)?;
+            miscs.push(misc);
+            i = inner_i;
+        }
+
+        Ok((i, miscs))
+    }
+
+    fn misc(&self, i: &'a [u8]) -> IResult<&'a [u8], Misc> {
+        let (i, count) = le_u16(i)?;
+        let mut entries = vec![];
+        entries.reserve(count as usize);
+
+        let mut i = i;
+        for _ in 0..count {
+            let res = self.object(i)?;
+            i = res.0;
+            entries.push(res.1);
+        }
+
+        Ok((i, Misc {
+            entries,
+        }))
+    }
+
+    fn proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Proc>> {
+        let (i, count) = self.object(i)?;
+
+        println!("loading {:?} procs", count);
+
+        let mut procs = vec![];
+        procs.reserve(count.try_into().unwrap());
+
+        let mut i = i;
+        for _ in 0..count {
+            let (inner_i, proc) = self.proc(i)?;
+            procs.push(proc);
+            i = inner_i;
+        }
+
+        Ok((i, procs))
+    }
+
+    fn proc(&self, i: &'a [u8]) -> IResult<&'a [u8], Proc> {
+        let (i, path) = if self.header.flags.large_object_ids || self.header.major >= 224 {
+            self.optional_object(i)?
+        } else {
+            (i, None)
+        };
+
+        let (i, name) = self.optional_object(i)?;
+        let (i, unk_0) = self.optional_object(i)?;
+        let (i, category) = self.optional_object(i)?;
+        let (i, unk_1) = le_u8(i)?;
+        let (i, unk_2) = le_u8(i)?;
+        let (i, unk_3) = le_u8(i)?;
+
+        let (i, unk_4, unk_5) = if (unk_3 & 0x80) != 0 {
+            let (i, unk_4) = le_u32(i)?;
+            let (i, unk_5) = le_u8(i)?;
+            (i, Some(unk_4), Some(unk_5))
+        } else {
+            (i, None, None)
+        };
+
+        let (i, bytecode) = self.object(i)?;
+        let (i, locals) = self.object(i)?;
+        let (i, parameters) = self.object(i)?;
+
+        Ok((i, Proc {
+            path,
+            name,
+            unk_0,
+            category,
+            unk_1,
+            unk_2,
+            unk_3,
+            unk_4,
+            unk_5,
+            bytecode,
+            locals,
+            parameters,
+        }))
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -522,9 +647,9 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 
 #[cfg(test)]
 mod tests {
-    // const EXAMPLE_DMB: &'static [u8] =
-    //     include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-    const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+     const EXAMPLE_DMB: &'static [u8] =
+         include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+    //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
 
     #[test]
     fn it_works() {
