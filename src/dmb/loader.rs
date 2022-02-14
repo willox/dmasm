@@ -19,7 +19,7 @@ use nom::{
 #[derive(Debug)]
 pub struct Dmb {
     grid: Grid,
-    class_table: Vec<Class>,
+    path_table: Vec<Path>,
     mob_table: Vec<Mob>,
     string_table: Vec<DMString>,
     misc_table: Vec<Misc>,
@@ -59,7 +59,7 @@ macro_rules! define_object_kind {
     };
 }
 
-define_object_kind!(ClassId);
+define_object_kind!(PathId);
 define_object_kind!(MobId);
 define_object_kind!(StringId);
 define_object_kind!(MiscId);
@@ -71,9 +71,9 @@ define_object_kind!(FileId);
 struct Grid;
 
 #[derive(Debug)]
-struct Class {
+struct Path {
     path: StringId,
-    parent: Option<ClassId>,
+    parent: Option<PathId>,
     name: Option<StringId>,
     desc: Option<StringId>,
     icon: Option<FileId>,
@@ -101,7 +101,7 @@ struct Class {
 
 #[derive(Debug)]
 struct Mob {
-    class: ClassId,
+    path: PathId,
     key: Option<StringId>,
     sight_flags: u8,
     sight_flags_ex: Option<u32>,
@@ -158,16 +158,16 @@ struct MapData {
 #[derive(Debug)]
 struct World {
     mob: Option<MobId>,
-    turf: Option<ClassId>,
-    area: Option<ClassId>,
+    turf: Option<PathId>,
+    area: Option<PathId>,
     procs: Option<MiscId>,
     initializer: Option<ProcId>,
     unk_0: Option<ObjectId>,
     name: StringId,
     unk_1: Option<ObjectId>,
     tick_lag: u32, // probably??? fps more likely
-    client: ClassId,
-    image: Option<ClassId>,
+    client: PathId,
+    image: Option<PathId>,
     unk_2: u8,
     unk_3: u8,
     unk_4: Option<u16>,
@@ -218,7 +218,7 @@ impl<'a> Parser<'a> {
 
         let (i, grid) = parser.grid(i).unwrap();
         let (i, _string_bytes) = parser.string_bytes(i).unwrap();
-        let (i, class_table) = parser.classes(i).unwrap();
+        let (i, path_table) = parser.path_table(i).unwrap();
         let (i, mob_table) = parser.mobs(i).unwrap();
         let (i, string_table) = parser.strings(i).unwrap();
         let (i, misc_table) = parser.misc_table(i).unwrap();
@@ -234,7 +234,7 @@ impl<'a> Parser<'a> {
 
         Dmb {
             grid,
-            class_table,
+            path_table,
             mob_table,
             string_table,
             misc_table,
@@ -309,25 +309,25 @@ impl<'a> Parser<'a> {
         Ok((i, Grid))
     }
 
-    fn classes(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Class>> {
+    fn path_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Path>> {
         let (i, count) = self.word(i)?;
 
-        println!("Loading {} classes", count);
+        println!("Loading {} paths", count);
 
-        let mut classes = vec![];
-        classes.reserve(count.try_into().unwrap());
+        let mut paths = vec![];
+        paths.reserve(count.try_into().unwrap());
 
         let mut i = i;
         for _ in 0..count {
-            let (inner_i, class) = self.class(i)?;
-            classes.push(class);
+            let (inner_i, path) = self.path(i)?;
+            paths.push(path);
             i = inner_i;
         }
 
-        Ok((i, classes))
+        Ok((i, paths))
     }
 
-    fn class(&self, i: &'a [u8]) -> IResult<&'a [u8], Class> {
+    fn path(&self, i: &'a [u8]) -> IResult<&'a [u8], Path> {
         let (i, path) = self.object(i)?;
         let (i, parent) = self.optional_object(i)?;
         let (i, name) = self.optional_object(i)?;
@@ -463,7 +463,7 @@ impl<'a> Parser<'a> {
 
         Ok((
             i,
-            Class {
+            Path {
                 path,
                 parent,
                 name,
@@ -510,7 +510,7 @@ impl<'a> Parser<'a> {
     }
 
     fn mob(&self, i: &'a [u8]) -> IResult<&'a [u8], Mob> {
-        let (i, class) = self.object(i)?;
+        let (i, path) = self.object(i)?;
         let (i, key) = self.optional_object(i)?;
         let (i, sight_flags) = le_u8(i)?;
 
@@ -531,7 +531,7 @@ impl<'a> Parser<'a> {
         Ok((
             i,
             Mob {
-                class,
+                path,
                 key,
                 sight_flags,
                 sight_flags_ex,
