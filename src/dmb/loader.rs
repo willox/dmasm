@@ -17,7 +17,7 @@ use nom::{
 };
 
 #[derive(Debug)]
-pub struct DmbFile {
+pub struct Dmb {
     grid: Grid,
     class_table: Vec<Class>,
     mob_table: Vec<Mob>,
@@ -25,10 +25,22 @@ pub struct DmbFile {
     misc_table: Vec<Misc>,
     proc_table: Vec<Proc>,
     variable_table: Vec<Variable>,
-    some_proc_table: Vec<u32>,
+    some_proc_table: Vec<ProcId>,
     instance_table: Vec<Instance>,
     map_data_table: Vec<MapData>,
+    world: World,
     file_table: Vec<File>,
+}
+
+impl Dmb {
+    fn string(&self, id: StringId) -> &[u8] {
+        let str = &self.string_table[id.0.0 as usize];
+        &str.data
+    }
+
+    fn proc(&self, id: ProcId) -> &Proc {
+        &self.proc_table[id.0.0 as usize]
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -63,7 +75,7 @@ struct Class {
     path: StringId,
     parent: Option<ClassId>,
     name: Option<StringId>,
-    description: Option<StringId>,
+    desc: Option<StringId>,
     icon: Option<FileId>,
     icon_state: Option<StringId>,
     direction: u8,
@@ -75,7 +87,7 @@ struct Class {
     unk_3: u16,
     unk_4: u16,
     suffix: Option<StringId>,
-    flags: u32, // TODO: preserve long-ness. Do I care?
+    flags: u32, // contains mouse_opacity, dmif
     verbs: Option<MiscId>,
     procs: Option<MiscId>,
     initializer: Option<ProcId>,
@@ -111,7 +123,7 @@ struct Misc {
 struct Proc {
     path: Option<StringId>,
     name: Option<StringId>,
-    unk_0: Option<ObjectId>,
+    desc: Option<StringId>,
     category: Option<StringId>,
     unk_1: u8,
     unk_2: u8,
@@ -160,7 +172,7 @@ struct World {
     unk_3: u8,
     unk_4: Option<u16>,
     unk_5: u8,
-    unk_6: Option<ObjectId>,
+    client_script: Option<ObjectId>,
     unk_7: Vec<ObjectId>,
     unk_8: Option<ObjectId>,
     unk_9: Option<u16>,
@@ -194,7 +206,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(i: &'a [u8]) -> Self {
+    fn new(i: &'a [u8]) -> Dmb {
         let data = i;
 
         // state-less parsing of header
@@ -205,10 +217,10 @@ impl<'a> Parser<'a> {
         let parser = Self { data, header };
 
         let (i, grid) = parser.grid(i).unwrap();
-        let (i, string_bytes) = parser.string_bytes(i).unwrap();
-        let (i, classes) = parser.classes(i).unwrap();
-        let (i, mobs) = parser.mobs(i).unwrap();
-        let (i, strings) = parser.strings(i).unwrap();
+        let (i, _string_bytes) = parser.string_bytes(i).unwrap();
+        let (i, class_table) = parser.classes(i).unwrap();
+        let (i, mob_table) = parser.mobs(i).unwrap();
+        let (i, string_table) = parser.strings(i).unwrap();
         let (i, misc_table) = parser.misc_table(i).unwrap();
         let (i, proc_table) = parser.proc_table(i).unwrap();
         let (i, variable_table) = parser.variable_table(i).unwrap();
@@ -216,9 +228,24 @@ impl<'a> Parser<'a> {
         let (i, instance_table) = parser.instance_table(i).unwrap();
         let (i, map_data_table) = parser.map_data_table(i).unwrap();
         let (i, world) = parser.world(i).unwrap();
-        let (i, file_table) = parser.file_table(i).unwrap();
+        let (_i, file_table) = parser.file_table(i).unwrap();
 
-        parser
+        // TODO: validate string_bytes
+
+        Dmb {
+            grid,
+            class_table,
+            mob_table,
+            string_table,
+            misc_table,
+            proc_table,
+            variable_table,
+            some_proc_table,
+            instance_table,
+            map_data_table,
+            world,
+            file_table,
+        }
     }
 
     // i like to live dangerously
@@ -304,7 +331,7 @@ impl<'a> Parser<'a> {
         let (i, path) = self.object(i)?;
         let (i, parent) = self.optional_object(i)?;
         let (i, name) = self.optional_object(i)?;
-        let (i, description) = self.optional_object(i)?;
+        let (i, desc) = self.optional_object(i)?;
         let (i, icon) = self.optional_object(i)?;
         let (i, icon_state) = self.optional_object(i)?;
         let (i, direction) = le_u8(i)?;
@@ -440,7 +467,7 @@ impl<'a> Parser<'a> {
                 path,
                 parent,
                 name,
-                description,
+                desc,
                 icon,
                 icon_state,
                 direction,
@@ -623,7 +650,7 @@ impl<'a> Parser<'a> {
         };
 
         let (i, name) = self.optional_object(i)?;
-        let (i, unk_0) = self.optional_object(i)?;
+        let (i, desc) = self.optional_object(i)?;
         let (i, category) = self.optional_object(i)?;
         let (i, unk_1) = le_u8(i)?;
         let (i, unk_2) = le_u8(i)?;
@@ -646,7 +673,7 @@ impl<'a> Parser<'a> {
             Proc {
                 path,
                 name,
-                unk_0,
+                desc,
                 category,
                 unk_1,
                 unk_2,
@@ -809,9 +836,9 @@ impl<'a> Parser<'a> {
 
         let (i, unk_5) = le_u8(i)?;
 
-        let (i, unk_6) = if self.header.major >= 230 {
-            let (i, unk_6) = self.object(i)?;
-            (i, Some(unk_6))
+        let (i, client_script) = if self.header.major >= 230 {
+            let (i, client_script) = self.object(i)?;
+            (i, Some(client_script))
         } else {
             (i, None)
         };
@@ -929,7 +956,7 @@ impl<'a> Parser<'a> {
                 unk_3,
                 unk_4,
                 unk_5,
-                unk_6,
+                client_script,
                 unk_7,
                 unk_8,
                 unk_9,
@@ -1037,12 +1064,24 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 
 #[cfg(test)]
 mod tests {
-    // const EXAMPLE_DMB: &'static [u8] =
-    //     include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-    const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+    use super::*;
+
+   //const EXAMPLE_DMB: &'static [u8] =
+   //    include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+     const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
 
     #[test]
     fn it_works() {
-        let parser = super::Parser::new(EXAMPLE_DMB);
+        let dmb = super::Parser::new(EXAMPLE_DMB);
+
+        fn debug(dmb: &super::Dmb, id: ObjectId) {
+            println!("Debugging {:x?}", id);
+            println!("\tString = {:?}", String::from_utf8_lossy(dmb.string(StringId(id))));
+            println!("\tProc = {:?}", dmb.proc(ProcId(id)));
+        }
+
+        println!("{:#?}", dmb.world);
+
+        // debug(&dmb, dmb.world.client_script.unwrap());
     }
 }
