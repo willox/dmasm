@@ -165,7 +165,7 @@ struct World {
     unk_0: Option<ObjectId>,
     name: StringId,
     unk_1: Option<ObjectId>,
-    tick_lag: u32, // probably??? fps more likely
+    tick_lag_ms: u32,
     client: PathId,
     image: Option<PathId>,
     unk_2: u8,
@@ -814,7 +814,7 @@ impl<'a> Parser<'a> {
             (i, None)
         };
 
-        let (i, tick_lag) = le_u32(i)?;
+        let (i, tick_lag_ms) = le_u32(i)?;
         let (i, client) = self.object(i)?;
 
         let (i, image) = if self.header.major >= 308 {
@@ -949,7 +949,7 @@ impl<'a> Parser<'a> {
                 unk_0,
                 name,
                 unk_1,
-                tick_lag,
+                tick_lag_ms,
                 client,
                 image,
                 unk_2,
@@ -1066,9 +1066,9 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 mod tests {
     use super::*;
 
-   //const EXAMPLE_DMB: &'static [u8] =
-   //    include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-     const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+   const EXAMPLE_DMB: &'static [u8] =
+       include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+   //  const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
 
     #[test]
     fn it_works() {
@@ -1080,7 +1080,7 @@ mod tests {
             println!("\tProc = {:?}", dmb.proc(ProcId(id)));
         }
 
-        println!("{:#?}", dmb.world);
+        println!("{:#x?}", dmb.world);
 
         // debug(&dmb, dmb.world.client_script.unwrap());
     }
