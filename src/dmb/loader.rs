@@ -1,16 +1,17 @@
 mod nqcrc;
 mod xorjump;
 
-use std::{convert::TryInto};
+use std::convert::TryInto;
 
 use nom::{
     branch::alt,
-    bytes::{complete::{take_while, take}, streaming::tag},
-    character::{
-        is_digit,
+    bytes::{
+        complete::{take, take_while},
+        streaming::tag,
     },
+    character::is_digit,
     combinator::{map, map_res},
-    number::complete::{le_f32, le_u16, le_u32, le_u8, le_i32},
+    number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8},
     sequence::{delimited, preceded, terminated, tuple},
     IResult,
 };
@@ -30,42 +31,66 @@ pub struct DmbFile {
     file_table: Vec<File>,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct ObjectId(u32);
+
+macro_rules! define_object_kind {
+    ($name:ident) => {
+        #[derive(Copy, Clone, Debug)]
+        struct $name(ObjectId);
+
+        impl From<ObjectId> for $name {
+            fn from(id: ObjectId) -> Self {
+                Self(id)
+            }
+        }
+    };
+}
+
+define_object_kind!(ClassId);
+define_object_kind!(MobId);
+define_object_kind!(StringId);
+define_object_kind!(MiscId);
+define_object_kind!(ProcId);
+define_object_kind!(InstanceId);
+define_object_kind!(FileId);
+
 #[derive(Debug)]
 struct Grid;
 
 #[derive(Debug)]
 struct Class {
-    path: u32,
-    parent: Option<u32>,
-    name: Option<u32>,
-    description: Option<u32>,
-    icon: Option<u32>,
-    icon_state: Option<u32>,
+    path: StringId,
+    parent: Option<ClassId>,
+    name: Option<StringId>,
+    description: Option<StringId>,
+    icon: Option<FileId>,
+    icon_state: Option<StringId>,
     direction: u8,
     interface: u32, // TODO: preserve long-ness. Do I care?
-    text: Option<u32>,
-    unk_0: Option<u32>,
+    text: Option<StringId>,
+    unk_0: Option<ObjectId>,
     unk_1: u16,
     unk_2: u16,
     unk_3: u16,
     unk_4: u16,
-    suffix: Option<u32>,
+    suffix: Option<StringId>,
     flags: u32, // TODO: preserve long-ness. Do I care?
-    verbs: Option<u32>,
-    procs: Option<u32>,
-    initializer: Option<u32>,
-    initialized_vars: Option<u32>,
-    defining_vars: Option<u32>,
+    verbs: Option<MiscId>,
+    procs: Option<MiscId>,
+    initializer: Option<ProcId>,
+    initialized_vars: Option<MiscId>,
+    defining_vars: Option<MiscId>,
     layer: f32,
     floats: Option<[f32; 6]>,
     more_floats: Option<[f32; 20]>,
-    overriding_vars: Option<u32>,
+    overriding_vars: Option<MiscId>,
 }
 
 #[derive(Debug)]
 struct Mob {
-    class: u32,
-    key: Option<u32>,
+    class: ClassId,
+    key: Option<StringId>,
     sight_flags: u8,
     sight_flags_ex: Option<u32>,
     see_in_dark: Option<u8>,
@@ -84,73 +109,73 @@ struct Misc {
 
 #[derive(Debug)]
 struct Proc {
-    path: Option<u32>,
-    name: Option<u32>,
-    unk_0: Option<u32>,
-    category: Option<u32>,
+    path: Option<StringId>,
+    name: Option<StringId>,
+    unk_0: Option<ObjectId>,
+    category: Option<StringId>,
     unk_1: u8,
     unk_2: u8,
     unk_3: u8,
     unk_4: Option<u32>,
     unk_5: Option<u8>,
-    bytecode: u32,
-    locals: u32,
-    parameters: u32,
+    bytecode: MiscId,
+    locals: MiscId,
+    parameters: MiscId,
 }
 
 #[derive(Debug)]
 struct Variable {
     kind: u8,
     value: u32,
-    name: u32,
+    name: StringId,
 }
 
 #[derive(Debug)]
 struct Instance {
     kind: u8,
     value: u32,
-    initializer: Option<u32>,
+    initializer: Option<ProcId>,
 }
 
 #[derive(Debug)]
 struct MapData {
     offset: u16,
-    instance: Option<u32>,
+    instance: Option<InstanceId>,
 }
 
 #[derive(Debug)]
 struct World {
-    mob: Option<u32>,
-    turf: Option<u32>,
-    area: Option<u32>,
-    procs: Option<u32>,
-    initializer: Option<u32>,
-    unk_0: Option<u32>,
-    name: u32,
-    unk_1: Option<u32>,
-    tick_lag: u32, // probably
-    client: u32,
-    image: Option<u32>,
+    mob: Option<MobId>,
+    turf: Option<ClassId>,
+    area: Option<ClassId>,
+    procs: Option<MiscId>,
+    initializer: Option<ProcId>,
+    unk_0: Option<ObjectId>,
+    name: StringId,
+    unk_1: Option<ObjectId>,
+    tick_lag: u32, // probably??? fps more likely
+    client: ClassId,
+    image: Option<ClassId>,
     unk_2: u8,
     unk_3: u8,
     unk_4: Option<u16>,
     unk_5: u8,
-    unk_6: Option<u32>,
-    unk_7: Vec<u32>,
-    unk_8: Option<u32>,
+    unk_6: Option<ObjectId>,
+    unk_7: Vec<ObjectId>,
+    unk_8: Option<ObjectId>,
     unk_9: Option<u16>,
     unk_a: Option<u16>,
     unk_b: Option<u16>,
-    hub_password: Option<u32>,
-    server_name: Option<u32>,
+    hub_password: Option<StringId>,
+    server_name: Option<StringId>,
     unk_c: Option<u32>,
     unk_d: Option<u32>,
     unk_e: Option<u16>,
-    unk_f: Option<u32>,
-    unk_g: Option<u32>,
-    hub: Option<u32>,
-    channel: Option<u32>,
-    unk_h: Option<u32>,
+    unk_f: Option<ObjectId>,
+    unk_g: Option<ObjectId>,
+    hub: Option<StringId>,
+    channel: Option<StringId>,
+    unk_h: Option<ObjectId>,
     icon_size_x: Option<u16>,
     icon_size_y: Option<u16>,
     unk_i: Option<u16>,
@@ -210,21 +235,28 @@ impl<'a> Parser<'a> {
         le_u32(i)
     }
 
-    fn object(&self, i: &'a [u8]) -> IResult<&'a [u8], u32> {
+    fn word(&self, i: &'a [u8]) -> IResult<&'a [u8], u32> {
         if self.header.flags.large_object_ids {
             return le_u32(i);
         }
 
-        map(le_u16, |x| x.try_into().unwrap())(i)
+        let (i, id) = le_u16(i)?;
+        Ok((i, id as u32))
     }
 
-    fn optional_object(&self, i: &'a [u8]) -> IResult<&'a [u8], Option<u32>> {
-        let (i, object) = self.object(i)?;
-        if object == 0xFFFF {
+    fn object<T: From<ObjectId>>(&self, i: &'a [u8]) -> IResult<&'a [u8], T> {
+        let (i, id) = self.word(i)?;
+        Ok((i, ObjectId(id).into()))
+    }
+
+    fn optional_object<T: From<ObjectId>>(&self, i: &'a [u8]) -> IResult<&'a [u8], Option<T>> {
+        let (i, id) = self.word(i)?;
+
+        if id == 0xFFFF {
             return Ok((i, None));
         }
 
-        Ok((i, Some(object)))
+        Ok((i, Some(ObjectId(id).into())))
     }
 
     fn grid(&self, i: &'a [u8]) -> IResult<&'a [u8], Grid> {
@@ -237,9 +269,9 @@ impl<'a> Parser<'a> {
         let mut i = i;
         while count != 0 {
             let inner_i = i;
-            let (inner_i, _turf) = self.optional_object(inner_i)?;
-            let (inner_i, _area) = self.optional_object(inner_i)?;
-            let (inner_i, _additional_turfs) = self.optional_object(inner_i)?;
+            let (inner_i, _turf) = self.word(inner_i)?;
+            let (inner_i, _area) = self.word(inner_i)?;
+            let (inner_i, _additional_turfs) = self.word(inner_i)?;
             let (inner_i, copies) = le_u8(inner_i)?;
 
             assert!(copies > 0);
@@ -251,7 +283,7 @@ impl<'a> Parser<'a> {
     }
 
     fn classes(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Class>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("Loading {} classes", count);
 
@@ -276,7 +308,6 @@ impl<'a> Parser<'a> {
         let (i, icon) = self.optional_object(i)?;
         let (i, icon_state) = self.optional_object(i)?;
         let (i, direction) = le_u8(i)?;
-
 
         let (i, interface) = {
             let mut i = i;
@@ -330,7 +361,8 @@ impl<'a> Parser<'a> {
         } else {
             let (i, value) = le_u8(i)?;
 
-            if self.header.rhs >= 0x203 { // TODO: check me
+            if self.header.rhs >= 0x203 {
+                // TODO: check me
                 unimplemented!()
             }
 
@@ -344,7 +376,7 @@ impl<'a> Parser<'a> {
         let (i, defining_vars) = self.optional_object(i)?;
 
         let (i, _something_else) = if self.header.rhs >= 514 {
-            self.optional_object(i)?
+            self.optional_object::<ObjectId>(i)?
         } else {
             (i, None)
         };
@@ -354,8 +386,6 @@ impl<'a> Parser<'a> {
         } else {
             (i, 0.0)
         };
-
-
 
         let (i, floats) = if self.header.rhs >= 500 {
             let (i, has) = le_u8(i)?;
@@ -437,7 +467,7 @@ impl<'a> Parser<'a> {
     }
 
     fn mobs(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Mob>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         let mut mobs = vec![];
         mobs.reserve(count.try_into().unwrap());
@@ -487,7 +517,7 @@ impl<'a> Parser<'a> {
     fn strings(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<DMString>> {
         let mut hash_state: i32 = -1;
 
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} strings", count);
 
@@ -525,19 +555,17 @@ impl<'a> Parser<'a> {
         }
 
         let offset = self.offset(i);
-        let (i, data)  = take(length)(i)?;
+        let (i, data) = take(length)(i)?;
         let data = xorjump::xorjump(offset as u8, data);
 
         nqcrc::hash(hash_state, &data);
         nqcrc::hash(hash_state, &[0]);
 
-        Ok((i, DMString {
-            data
-        }))
+        Ok((i, DMString { data }))
     }
 
     fn misc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Misc>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} miscs", count);
 
@@ -561,18 +589,16 @@ impl<'a> Parser<'a> {
 
         let mut i = i;
         for _ in 0..count {
-            let res = self.object(i)?;
+            let res = self.word(i)?;
             i = res.0;
             entries.push(res.1);
         }
 
-        Ok((i, Misc {
-            entries,
-        }))
+        Ok((i, Misc { entries }))
     }
 
     fn proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Proc>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} procs", count);
 
@@ -615,24 +641,27 @@ impl<'a> Parser<'a> {
         let (i, locals) = self.object(i)?;
         let (i, parameters) = self.object(i)?;
 
-        Ok((i, Proc {
-            path,
-            name,
-            unk_0,
-            category,
-            unk_1,
-            unk_2,
-            unk_3,
-            unk_4,
-            unk_5,
-            bytecode,
-            locals,
-            parameters,
-        }))
+        Ok((
+            i,
+            Proc {
+                path,
+                name,
+                unk_0,
+                category,
+                unk_1,
+                unk_2,
+                unk_3,
+                unk_4,
+                unk_5,
+                bytecode,
+                locals,
+                parameters,
+            },
+        ))
     }
 
     fn variable_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Variable>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} variables", count);
 
@@ -663,15 +692,11 @@ impl<'a> Parser<'a> {
         let (i, value) = le_u32(i)?;
         let (i, name) = self.object(i)?;
 
-        Ok((i, Variable {
-            kind,
-            value,
-            name,
-        }))
+        Ok((i, Variable { kind, value, name }))
     }
 
-    fn some_proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<u32>> {
-        let (i, count) = self.object(i)?;
+    fn some_proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<ProcId>> {
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} some_procs", count);
 
@@ -689,7 +714,7 @@ impl<'a> Parser<'a> {
     }
 
     fn instance_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Instance>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} instances", count);
 
@@ -711,11 +736,14 @@ impl<'a> Parser<'a> {
         let (i, value) = le_u32(i)?;
         let (i, initializer) = self.optional_object(i)?;
 
-        Ok((i, Instance {
-            kind,
-            value,
-            initializer,
-        }))
+        Ok((
+            i,
+            Instance {
+                kind,
+                value,
+                initializer,
+            },
+        ))
     }
 
     fn map_data_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<MapData>> {
@@ -740,10 +768,7 @@ impl<'a> Parser<'a> {
         let (i, offset) = le_u16(i)?;
         let (i, instance) = self.optional_object(i)?;
 
-        Ok((i, MapData {
-            offset,
-            instance,
-        }))
+        Ok((i, MapData { offset, instance }))
     }
 
     fn world(&self, i: &'a [u8]) -> IResult<&'a [u8], World> {
@@ -886,46 +911,49 @@ impl<'a> Parser<'a> {
             (i, None, None, None)
         };
 
-        Ok((i, World {
-            mob,
-            turf,
-            area,
-            procs,
-            initializer,
-            unk_0,
-            name,
-            unk_1,
-            tick_lag,
-            client,
-            image,
-            unk_2,
-            unk_3,
-            unk_4,
-            unk_5,
-            unk_6,
-            unk_7,
-            unk_8,
-            unk_9,
-            unk_a,
-            unk_b,
-            hub_password,
-            server_name,
-            unk_c,
-            unk_d,
-            unk_e,
-            unk_f,
-            unk_g,
-            hub,
-            channel,
-            unk_h,
-            icon_size_x,
-            icon_size_y,
-            unk_i,
-        }))
+        Ok((
+            i,
+            World {
+                mob,
+                turf,
+                area,
+                procs,
+                initializer,
+                unk_0,
+                name,
+                unk_1,
+                tick_lag,
+                client,
+                image,
+                unk_2,
+                unk_3,
+                unk_4,
+                unk_5,
+                unk_6,
+                unk_7,
+                unk_8,
+                unk_9,
+                unk_a,
+                unk_b,
+                hub_password,
+                server_name,
+                unk_c,
+                unk_d,
+                unk_e,
+                unk_f,
+                unk_g,
+                hub,
+                channel,
+                unk_h,
+                icon_size_x,
+                icon_size_y,
+                unk_i,
+            },
+        ))
     }
 
     fn file_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<File>> {
-        let (i, count) = self.object(i)?;
+        let (i, count) = self.word(i)?;
 
         println!("loading {:?} files", count);
 
@@ -946,10 +974,7 @@ impl<'a> Parser<'a> {
         let (i, id) = le_u32(i)?;
         let (i, kind) = le_u8(i)?;
 
-        Ok((i, File {
-            id,
-            kind,
-        }))
+        Ok((i, File { id, kind }))
     }
 }
 
@@ -1012,8 +1037,8 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 
 #[cfg(test)]
 mod tests {
-     //const EXAMPLE_DMB: &'static [u8] =
-     //    include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+    // const EXAMPLE_DMB: &'static [u8] =
+    //     include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
     const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
 
     #[test]
