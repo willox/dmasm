@@ -81,21 +81,21 @@ struct Path {
     direction: u8,
     interface: u32, // TODO: preserve long-ness. Do I care?
     text: Option<StringId>,
-    unk_0: Option<ObjectId>,
-    unk_1: u16,
-    unk_2: u16,
-    unk_3: u16,
-    unk_4: u16,
+    maptext: Option<ObjectId>,
+    maptext_width: u16, // 0x20 when a color or matrix exists?? or when a builtin is overriden (but not layer????)
+    maptext_height: u16, // 0x20 when a color or matrix exists?? or when a builtin is overriden (but not layer????)
+    maptext_x: u16,
+    maptext_y: u16,
     suffix: Option<StringId>,
-    flags: u32, // contains mouse_opacity, dmif
+    flags: u32, // contains (invisibility == 0), mouse_opacity, mouse_drop_zone, density, opacity, gender, override, animate_movement: see <https://github.com/willox/dmdiag/blob/cc5db4496a3c9054a8645cf1c5ce743b89081377/dm/Mob.h#L34-L44>
     verbs: Option<MiscId>,
     procs: Option<MiscId>,
     initializer: Option<ProcId>,
     initialized_vars: Option<MiscId>,
     defining_vars: Option<MiscId>,
     layer: f32,
-    floats: Option<[f32; 6]>,
-    more_floats: Option<[f32; 20]>,
+    transform: Option<[f32; 6]>,
+    color_matrix: Option<[f32; 20]>,
     overriding_vars: Option<MiscId>,
 }
 
@@ -217,10 +217,10 @@ impl<'a> Parser<'a> {
         let parser = Self { data, header };
 
         let (i, grid) = parser.grid(i).unwrap();
-        let (i, _string_bytes) = parser.string_bytes(i).unwrap();
+        let (i, expected_string_bytes) = parser.string_bytes(i).unwrap();
         let (i, path_table) = parser.path_table(i).unwrap();
-        let (i, mob_table) = parser.mobs(i).unwrap();
-        let (i, string_table) = parser.strings(i).unwrap();
+        let (i, mob_table) = parser.mob_table(i).unwrap();
+        let (i, (string_table, actual_string_bytes)) = parser.string_table(i).unwrap();
         let (i, misc_table) = parser.misc_table(i).unwrap();
         let (i, proc_table) = parser.proc_table(i).unwrap();
         let (i, variable_table) = parser.variable_table(i).unwrap();
@@ -228,7 +228,10 @@ impl<'a> Parser<'a> {
         let (i, instance_table) = parser.instance_table(i).unwrap();
         let (i, map_data_table) = parser.map_data_table(i).unwrap();
         let (i, world) = parser.world(i).unwrap();
-        let (_i, file_table) = parser.file_table(i).unwrap();
+        let (i, file_table) = parser.file_table(i).unwrap();
+
+        assert!(expected_string_bytes as usize == actual_string_bytes);
+        assert!(i.is_empty());
 
         // TODO: validate string_bytes
 
@@ -358,19 +361,19 @@ impl<'a> Parser<'a> {
 
         let (i, text) = self.optional_object(i)?;
 
-        let (i, unk_0, unk_1, unk_2) = if self.header.rhs >= 494 {
-            let (i, unk_0) = self.optional_object(i)?;
-            let (i, unk_1) = le_u16(i)?;
-            let (i, unk_2) = le_u16(i)?;
-            (i, unk_0, unk_1, unk_2)
+        let (i, maptext, maptext_width, maptext_height) = if self.header.rhs >= 494 {
+            let (i, maptext) = self.optional_object(i)?;
+            let (i, maptext_width) = le_u16(i)?;
+            let (i, maptext_height) = le_u16(i)?;
+            (i, maptext, maptext_width, maptext_height)
         } else {
-            (i, None, 0, 0)
+            (i, None, 0, 0) // TODO: HAS TO DEFAULT TO WORLD.ICON_SIZE?!?!?!
         };
 
-        let (i, unk_3, unk_4) = if self.header.rhs >= 508 {
-            let (i, unk_3) = le_u16(i)?;
-            let (i, unk_4) = le_u16(i)?;
-            (i, unk_3, unk_4)
+        let (i, maptext_x, maptext_y) = if self.header.rhs >= 508 {
+            let (i, maptext_x) = le_u16(i)?;
+            let (i, maptext_y) = le_u16(i)?;
+            (i, maptext_x, maptext_y)
         } else {
             (i, 0, 0)
         };
@@ -414,19 +417,19 @@ impl<'a> Parser<'a> {
             (i, 0.0)
         };
 
-        let (i, floats) = if self.header.rhs >= 500 {
+        let (i, transform) = if self.header.rhs >= 500 {
             let (i, has) = le_u8(i)?;
 
             if has != 0 {
-                let mut floats: [f32; 6] = [0.0; 6];
+                let mut transform: [f32; 6] = [0.0; 6];
 
                 let mut i = i;
                 for idx in 0..6 {
                     let res = le_f32(i)?;
                     i = res.0;
-                    floats[idx] = res.1;
+                    transform[idx] = res.1;
                 }
-                (i, Some(floats))
+                (i, Some(transform))
             } else {
                 (i, None)
             }
@@ -434,19 +437,19 @@ impl<'a> Parser<'a> {
             (i, None)
         };
 
-        let (i, more_floats) = if self.header.rhs >= 509 {
+        let (i, color_matrix) = if self.header.rhs >= 509 {
             let (i, has) = le_u8(i)?;
 
             if has != 0 {
-                let mut floats: [f32; 20] = [0.0; 20];
+                let mut color_matrix: [f32; 20] = [0.0; 20];
 
                 let mut i = i;
                 for idx in 0..20 {
                     let res = le_f32(i)?;
                     i = res.0;
-                    floats[idx] = res.1;
+                    color_matrix[idx] = res.1;
                 }
-                (i, Some(floats))
+                (i, Some(color_matrix))
             } else {
                 (i, None)
             }
@@ -473,11 +476,11 @@ impl<'a> Parser<'a> {
                 direction,
                 interface,
                 text,
-                unk_0,
-                unk_1,
-                unk_2,
-                unk_3,
-                unk_4,
+                maptext,
+                maptext_width,
+                maptext_height,
+                maptext_x,
+                maptext_y,
                 suffix,
                 flags,
                 verbs,
@@ -486,14 +489,14 @@ impl<'a> Parser<'a> {
                 initialized_vars,
                 defining_vars,
                 layer,
-                floats,
-                more_floats,
+                transform,
+                color_matrix,
                 overriding_vars,
             },
         ))
     }
 
-    fn mobs(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Mob>> {
+    fn mob_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Mob>> {
         let (i, count) = self.word(i)?;
 
         let mut mobs = vec![];
@@ -541,8 +544,9 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn strings(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<DMString>> {
+    fn string_table(&self, i: &'a [u8]) -> IResult<&'a [u8], (Vec<DMString>, usize)> {
         let mut hash_state: i32 = -1;
+        let mut total_bytes: usize = 0;
 
         let (i, count) = self.word(i)?;
 
@@ -554,6 +558,7 @@ impl<'a> Parser<'a> {
         let mut i = i;
         for _ in 0..count {
             let (inner_i, string) = self.string(&mut hash_state, i)?;
+            total_bytes += string.data.len() + 1;
             strings.push(string);
             i = inner_i;
         }
@@ -568,7 +573,7 @@ impl<'a> Parser<'a> {
             i
         };
 
-        Ok((i, strings))
+        Ok((i, (strings, total_bytes)))
     }
 
     fn string(&self, hash_state: &mut i32, i: &'a [u8]) -> IResult<&'a [u8], DMString> {
@@ -702,6 +707,7 @@ impl<'a> Parser<'a> {
             i = inner_i;
         }
 
+        // global and world vars?
         let (i, unk_0) = if self.header.major >= 512 && self.header.lhs >= 512 {
             let (i, unk_0) = le_u32(i)?;
             (i, Some(unk_0))
@@ -1066,9 +1072,9 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 mod tests {
     use super::*;
 
-   const EXAMPLE_DMB: &'static [u8] =
-       include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-   //  const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+  const EXAMPLE_DMB: &'static [u8] =
+      include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+     //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
 
     #[test]
     fn it_works() {
@@ -1080,7 +1086,14 @@ mod tests {
             println!("\tProc = {:?}", dmb.proc(ProcId(id)));
         }
 
-        println!("{:#x?}", dmb.world);
+        for path in &dmb.path_table {
+            if path.maptext.is_some() {
+                println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), path.maptext);
+                break;
+            }
+        }
+
+        //println!("{:#x?}", dmb.world);
 
         // debug(&dmb, dmb.world.client_script.unwrap());
     }
