@@ -102,42 +102,42 @@ struct Path {
 
 bitflags! {
     pub struct PathFlags: u64 {
-        const OPACITY = 0x01;
-        const DENSITY = 0x02;
-        const VISIBILITY = 0x04;
-        const LUMINOSITY_0 = 0x08;
-        const LUMINOSITY_1 = 0x10;
-        const LUMINOSITY_2 = 0x20;
-        const GENDER_LO = 0x40;
-        const GENDER_HI = 0x80;
-        const MOUSE_DROP_ZONE = 0x100;
-        // = 0x200;
-        const ANIMATE_MOVEMENT_DISABLED = 0x400;
-        const HAS_MOUSE_PROC = 0x800;
-        const MOUSE_OPACITY_LO = 0x1000;
-        const MOUSE_OPACITY_HI = 0x2000;
-        const ANIMATE_MOVEMENT_LO = 0x4000;
-        const ANIMATE_MOVEMENT_HI = 0x8000;
-        const TODO_PREFAB_LIKE_UNKNOWN = 0x10000;
-        // = 0x20000
-        const OVERRIDE = 0x40000;
-        const HAS_MOUSE_MOVE_PROC = 0x80000;
-        const APPEARANCE_FLAGS_0 = 0x100000;
-        const APPEARANCE_FLAGS_1 = 0x200000;
-        const APPEARANCE_FLAGS_2 = 0x400000;
-        const APPEARANCE_FLAGS_3 = 0x800000;
-        const APPEARANCE_FLAGS_4 = 0x1000000;
-        const APPEARANCE_FLAGS_5 = 0x2000000;
-        const APPEARANCE_FLAGS_6 = 0x4000000;
-        const APPEARANCE_FLAGS_7 = 0x8000000;
-        const APPEARANCE_FLAGS_8 = 0x10000000;
-        const APPEARANCE_FLAGS_9 = 0x20000000;
-        const APPEARANCE_FLAGS_A = 0x40000000;
-        const APPEARANCE_FLAGS_B = 0x80000000;
-        const APPEARANCE_FLAGS_C = 0x100000000;
-        const APPEARANCE_FLAGS_D = 0x200000000;
-        const APPEARANCE_FLAGS_E = 0x400000000;
-        const APPEARANCE_FLAGS_F = 0x800000000;
+        const OPACITY = 1 << 0;
+        const DENSITY = 1 << 1;
+        const VISIBILITY = 1 << 2;
+        const LUMINOSITY_0 = 1 << 3;
+        const LUMINOSITY_1 = 1 << 4;
+        const LUMINOSITY_2 = 1 << 5;
+        const GENDER_LO = 1 << 6;
+        const GENDER_HI = 1 << 7;
+        const MOUSE_DROP_ZONE = 1 << 8;
+        // = 1 << 9;
+        const ANIMATE_MOVEMENT_DISABLED = 1 << 10;
+        const HAS_MOUSE_PROC = 1 << 11;
+        const MOUSE_OPACITY_LO = 1 << 12;
+        const MOUSE_OPACITY_HI = 1 << 13;
+        const ANIMATE_MOVEMENT_LO = 1 << 14;
+        const ANIMATE_MOVEMENT_HI = 1 << 15;
+        const TODO_PREFAB_LIKE_UNKNOWN = 1 << 16;
+        // = 1 << 17
+        const OVERRIDE = 1 << 18;
+        const HAS_MOUSE_MOVE_PROC = 1 << 19;
+        const APPEARANCE_FLAGS_0 = 1 << 20;
+        const APPEARANCE_FLAGS_1 = 1 << 21;
+        const APPEARANCE_FLAGS_2 = 1 << 22;
+        const APPEARANCE_FLAGS_3 = 1 << 23;
+        const APPEARANCE_FLAGS_4 = 1 << 24;
+        const APPEARANCE_FLAGS_5 = 1 << 25;
+        const APPEARANCE_FLAGS_6 = 1 << 26;
+        const APPEARANCE_FLAGS_7 = 1 << 27;
+        const APPEARANCE_FLAGS_8 = 1 << 28;
+        const APPEARANCE_FLAGS_9 = 1 << 29;
+        const APPEARANCE_FLAGS_A = 1 << 30;
+        const APPEARANCE_FLAGS_B = 1 << 31;
+        const APPEARANCE_FLAGS_C = 1 << 32;
+        const APPEARANCE_FLAGS_D = 1 << 33;
+        const APPEARANCE_FLAGS_E = 1 << 34;
+        const APPEARANCE_FLAGS_F = 1 << 35;
     }
 }
 
@@ -1127,8 +1127,8 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 mod tests {
     use super::*;
 
-   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-   // const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
    //  const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
 
     #[test]
