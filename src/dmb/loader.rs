@@ -2,6 +2,7 @@ mod nqcrc;
 mod xorjump;
 
 use std::convert::TryInto;
+use bitflags::bitflags;
 
 use nom::{
     branch::alt,
@@ -11,7 +12,7 @@ use nom::{
     },
     character::is_digit,
     combinator::{map, map_res},
-    number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8},
+    number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8, le_u64},
     sequence::{delimited, preceded, terminated, tuple},
     IResult,
 };
@@ -87,7 +88,7 @@ struct Path {
     maptext_x: u16,
     maptext_y: u16,
     suffix: Option<StringId>,
-    flags: u32, // contains (invisibility == 0), mouse_opacity, mouse_drop_zone, density, opacity, gender, override, animate_movement: see <https://github.com/willox/dmdiag/blob/cc5db4496a3c9054a8645cf1c5ce743b89081377/dm/Mob.h#L34-L44>
+    flags: u64, // contains (invisibility == 0), mouse_opacity, mouse_drop_zone, density, opacity, gender, override, animate_movement: see <https://github.com/willox/dmdiag/blob/cc5db4496a3c9054a8645cf1c5ce743b89081377/dm/Mob.h#L34-L44>
     verbs: Option<MiscId>,
     procs: Option<MiscId>,
     initializer: Option<ProcId>,
@@ -97,6 +98,47 @@ struct Path {
     transform: Option<[f32; 6]>,
     color_matrix: Option<[f32; 20]>,
     overriding_vars: Option<MiscId>,
+}
+
+bitflags! {
+    pub struct PathFlags: u64 {
+        const OPACITY = 0x01;
+        const DENSITY = 0x02;
+        const VISIBILITY = 0x04;
+        const LUMINOSITY_0 = 0x08;
+        const LUMINOSITY_1 = 0x10;
+        const LUMINOSITY_2 = 0x20;
+        const GENDER_LO = 0x40;
+        const GENDER_HI = 0x80;
+        const MOUSE_DROP_ZONE = 0x100;
+        // = 0x200;
+        const ANIMATE_MOVEMENT_DISABLED = 0x400;
+        const HAS_MOUSE_PROC = 0x800;
+        const MOUSE_OPACITY_LO = 0x1000;
+        const MOUSE_OPACITY_HI = 0x2000;
+        const ANIMATE_MOVEMENT_LO = 0x4000;
+        const ANIMATE_MOVEMENT_HI = 0x8000;
+        const TODO_PREFAB_LIKE_UNKNOWN = 0x10000;
+        // = 0x20000
+        const OVERRIDE = 0x40000;
+        const HAS_MOUSE_MOVE_PROC = 0x80000;
+        const APPEARANCE_FLAGS_0 = 0x100000;
+        const APPEARANCE_FLAGS_1 = 0x200000;
+        const APPEARANCE_FLAGS_2 = 0x400000;
+        const APPEARANCE_FLAGS_3 = 0x800000;
+        const APPEARANCE_FLAGS_4 = 0x1000000;
+        const APPEARANCE_FLAGS_5 = 0x2000000;
+        const APPEARANCE_FLAGS_6 = 0x4000000;
+        const APPEARANCE_FLAGS_7 = 0x8000000;
+        const APPEARANCE_FLAGS_8 = 0x10000000;
+        const APPEARANCE_FLAGS_9 = 0x20000000;
+        const APPEARANCE_FLAGS_A = 0x40000000;
+        const APPEARANCE_FLAGS_B = 0x80000000;
+        const APPEARANCE_FLAGS_C = 0x100000000;
+        const APPEARANCE_FLAGS_D = 0x200000000;
+        const APPEARANCE_FLAGS_E = 0x400000000;
+        const APPEARANCE_FLAGS_F = 0x800000000;
+    }
 }
 
 #[derive(Debug)]
@@ -214,6 +256,10 @@ impl<'a> Parser<'a> {
 
         println!("header = {:?}", header);
 
+        // force this on? goonstation needs this atm
+        let mut header = header;
+        //header.flags.large_object_ids = true;
+
         let parser = Self { data, header };
 
         let (i, grid) = parser.grid(i).unwrap();
@@ -304,6 +350,7 @@ impl<'a> Parser<'a> {
             let (inner_i, _additional_turfs) = self.word(inner_i)?;
             let (inner_i, copies) = le_u8(inner_i)?;
 
+            // goonstation hits this assert lol
             assert!(copies > 0);
             count = count.saturating_sub(copies as u64);
             i = inner_i;
@@ -382,11 +429,18 @@ impl<'a> Parser<'a> {
 
         let (i, flags) = if self.header.major >= 306 {
             if self.header.rhs >= 514 {
-                let (i, _something_important) = le_u32(i)?; // TODO
-                let (i, flags) = le_u32(i)?;
-                (i, flags)
+                // TODO: eck
+                let (i, lo) = le_u32(i)?;
+                let (i, hi) = le_u32(i)?;
+
+                let mut lo = lo as u64;
+                let mut hi = hi as u64;
+
+
+                (i, lo | (hi << 32))
             } else {
-                le_u32(i)?
+                let (i, flags) = le_u32(i)?;
+                (i, flags as u64)
             }
         } else {
             let (i, value) = le_u8(i)?;
@@ -396,7 +450,7 @@ impl<'a> Parser<'a> {
                 unimplemented!()
             }
 
-            (i, value as u32)
+            (i, value as u64)
         };
 
         let (i, verbs) = self.optional_object(i)?;
@@ -566,6 +620,7 @@ impl<'a> Parser<'a> {
         let i = if self.header.major >= 468 {
             let (i, expected_hash) = le_i32(i)?;
             if expected_hash != hash_state {
+                // goonstation hits this too HOW?!
                 panic!("oh noooo");
             }
             i
@@ -1072,9 +1127,9 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 mod tests {
     use super::*;
 
-  const EXAMPLE_DMB: &'static [u8] =
-      include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-     //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+   // const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+   //  const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
 
     #[test]
     fn it_works() {
@@ -1087,10 +1142,25 @@ mod tests {
         }
 
         for path in &dmb.path_table {
-            if path.maptext.is_some() {
-                println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), path.maptext);
-                break;
+            let res = super::PathFlags::from_bits(path.flags);
+
+            match res {
+                Some(flags) => {
+                    if path.flags > 0 {
+                       println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), flags);
+                    }
+                }
+
+                None => {
+                    let res2 = super::PathFlags::from_bits_truncate(path.flags);
+                    println!("UNKNOWN: {:#x?} = {} ({:?}, {})", String::from_utf8_lossy(dmb.string(path.path)), path.flags, res2, path.flags ^ res2.bits);
+                    // break;
+                }
             }
+
+           //println!("{:#x?}", path);
+
+           //break;
         }
 
         //println!("{:#x?}", dmb.world);
