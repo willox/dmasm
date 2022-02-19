@@ -82,7 +82,7 @@ struct Path {
     direction: u8,
     interface: u32, // TODO: preserve long-ness. Do I care?
     text: Option<StringId>,
-    maptext: Option<ObjectId>,
+    maptext: Option<StringId>,
     maptext_width: u16,
     maptext_height: u16,
     maptext_x: u16,
