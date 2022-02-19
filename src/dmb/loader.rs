@@ -82,8 +82,8 @@ struct Path {
     interface: u32, // TODO: preserve long-ness. Do I care?
     text: Option<StringId>,
     maptext: Option<ObjectId>,
-    maptext_width: u16, // 0x20 when a color or matrix exists?? or when a builtin is overriden (but not layer????)
-    maptext_height: u16, // 0x20 when a color or matrix exists?? or when a builtin is overriden (but not layer????)
+    maptext_width: u16,
+    maptext_height: u16,
     maptext_x: u16,
     maptext_y: u16,
     suffix: Option<StringId>,
