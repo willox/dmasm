@@ -251,7 +251,7 @@ struct World {
     area: Option<PathId>,
     procs: Option<MiscId>,
     initializer: Option<ProcId>,
-    unk_0: Option<ObjectId>,
+    domain: Option<StringId>,
     name: StringId,
     unk_1: Option<ObjectId>,
     tick_lag_ms: u32,
@@ -911,7 +911,7 @@ impl<'a> Parser<'a> {
         let (i, area) = self.optional_object(i)?;
         let (i, procs) = self.optional_object(i)?;
         let (i, initializer) = self.optional_object(i)?;
-        let (i, unk_0) = self.optional_object(i)?;
+        let (i, domain) = self.optional_object(i)?;
         let (i, name) = self.object(i)?;
 
         let (i, unk_1) = if self.header.major < 368 {
@@ -1053,7 +1053,7 @@ impl<'a> Parser<'a> {
                 area,
                 procs,
                 initializer,
-                unk_0,
+                domain,
                 name,
                 unk_1,
                 tick_lag_ms,
