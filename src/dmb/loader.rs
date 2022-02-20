@@ -253,7 +253,7 @@ struct World {
     initializer: Option<ProcId>,
     domain: Option<StringId>,
     name: StringId,
-    unk_1: Option<ObjectId>,
+    unk_1: Option<ObjectId>, // TODO: Only set in old byond compilers
     tick_lag_ms: u32,
     client: PathId,
     image: Option<PathId>,
