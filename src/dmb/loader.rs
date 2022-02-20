@@ -12,7 +12,7 @@ use nom::{
     },
     character::is_digit,
     combinator::{map, map_res},
-    number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8, le_u64},
+    number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8},
     sequence::{delimited, preceded, terminated, tuple},
     IResult,
 };
@@ -151,6 +151,38 @@ struct Mob {
     see_invisible: Option<u8>,
 }
 
+// TODO: confirm behaviour with ex
+// Merge into one type?
+bitflags! {
+    pub struct MobSight: u8 {
+        const BLIND = 1 << 0;
+        const SEE_INVIS = 1 << 1;
+        const SEE_MOBS = 1 << 2;
+        const SEE_OBJS = 1 << 3;
+        const SEE_TURFS = 1 << 4;
+        const SEE_SELF = 1 << 5;
+        const SEE_INFRA = 1 << 6;
+        const HAS_SIGHT_EX = 1 << 7;
+    }
+}
+
+bitflags! {
+    // TODO: Check these
+    pub struct MobSightEx: u32 {
+        const BLIND = 1 << 0;
+        const SEE_INVIS = 1 << 1;
+        const SEE_MOBS = 1 << 2;
+        const SEE_OBJS = 1 << 3;
+        const SEE_TURFS = 1 << 4;
+        const SEE_SELF = 1 << 5;
+        const SEE_INFRA = 1 << 6;
+        const HAS_SIGHT_EX = 1 << 7;
+        const SEE_PIXELS = 1 << 8;
+        const SEE_THRU = 1 << 9;
+        const SEE_BLACKNESS = 1 << 10;
+    }
+}
+
 #[derive(Debug)]
 struct DMString {
     data: Vec<u8>,
@@ -167,14 +199,29 @@ struct Proc {
     name: Option<StringId>,
     desc: Option<StringId>,
     category: Option<StringId>,
-    unk_1: u8,
-    unk_2: u8,
-    unk_3: u8,
+    verb_src_param: u8,
+    verb_src_kind: u8, // (1, in view) (2, in oview) (3, = usr.loc) (5, in range), (8, in usr), (32, = usr)
+    flags: u8, // ProcFlags
     unk_4: Option<u32>,
     unk_5: Option<u8>,
     bytecode: MiscId,
     locals: MiscId,
     parameters: MiscId,
+}
+
+
+bitflags! {
+    // TODO: Extended flags, and that weird extra u8
+    pub struct ProcFlags: u8 {
+        const HIDDEN = 0x01;
+        const SRC_EQUAL = 0x02; // `set src = ...`
+        const WAIT_FOR = 0x04;
+        // = 0x08
+        // = 0x10
+        const NO_CATEGORY = 0x20;
+        const YES_CATEGORY = 0x40;
+        // const HAS_EX_FLAGS = 0x80;
+    }
 }
 
 #[derive(Debug)]
@@ -258,7 +305,7 @@ impl<'a> Parser<'a> {
 
         // force this on? goonstation needs this atm
         let mut header = header;
-        //header.flags.large_object_ids = true;
+        header.flags.large_object_ids = true;
 
         let parser = Self { data, header };
 
@@ -433,9 +480,8 @@ impl<'a> Parser<'a> {
                 let (i, lo) = le_u32(i)?;
                 let (i, hi) = le_u32(i)?;
 
-                let mut lo = lo as u64;
-                let mut hi = hi as u64;
-
+                let lo = lo as u64;
+                let hi = hi as u64;
 
                 (i, lo | (hi << 32))
             } else {
@@ -712,11 +758,11 @@ impl<'a> Parser<'a> {
         let (i, name) = self.optional_object(i)?;
         let (i, desc) = self.optional_object(i)?;
         let (i, category) = self.optional_object(i)?;
-        let (i, unk_1) = le_u8(i)?;
-        let (i, unk_2) = le_u8(i)?;
-        let (i, unk_3) = le_u8(i)?;
+        let (i, verb_src_param) = le_u8(i)?;
+        let (i, verb_src_kind) = le_u8(i)?;
+        let (i, flags) = le_u8(i)?;
 
-        let (i, unk_4, unk_5) = if (unk_3 & 0x80) != 0 {
+        let (i, unk_4, unk_5) = if (flags & 0x80) != 0 {
             let (i, unk_4) = le_u32(i)?;
             let (i, unk_5) = le_u8(i)?;
             (i, Some(unk_4), Some(unk_5))
@@ -735,9 +781,9 @@ impl<'a> Parser<'a> {
                 name,
                 desc,
                 category,
-                unk_1,
-                unk_2,
-                unk_3,
+                verb_src_param,
+                verb_src_kind,
+                flags,
                 unk_4,
                 unk_5,
                 bytecode,
@@ -1127,8 +1173,8 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 mod tests {
     use super::*;
 
-   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
    //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
 
     #[test]
@@ -1141,25 +1187,36 @@ mod tests {
             println!("\tProc = {:?}", dmb.proc(ProcId(id)));
         }
 
-        for path in &dmb.path_table {
-            let res = super::PathFlags::from_bits(path.flags);
-
-            match res {
-                Some(flags) => {
-                    println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), flags);
-                }
-
-                None => {
-                    let res2 = super::PathFlags::from_bits_truncate(path.flags);
-                    println!("UNKNOWN: {:#x?} = {} ({:?}, {})", String::from_utf8_lossy(dmb.string(path.path)), path.flags, res2, path.flags ^ res2.bits);
-                    // break;
-                }
-            }
-
-           //println!("{:#x?}", path);
-
-           //break;
+        for var in &dmb.variable_table {
+            println!("{:?} = {:x}", String::from_utf8_lossy(dmb.string(var.name)), var.kind);
         }
+
+        // for proc in &dmb.proc_table {
+        //     let res = ProcFlags::from_bits(proc.flags);
+        //     if res.is_none() {
+        //         println!("{:?}, {:#x?}", String::from_utf8_lossy(dmb.string(proc.path.unwrap_or(StringId(ObjectId(0))))), proc.flags);
+        //    }
+        // }
+
+        // for path in &dmb.path_table {
+        //     let res = super::PathFlags::from_bits(path.flags);
+
+        //     match res {
+        //         Some(flags) => {
+        //             println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), flags);
+        //         }
+
+        //         None => {
+        //             let res2 = super::PathFlags::from_bits_truncate(path.flags);
+        //             println!("UNKNOWN: {:#x?} = {} ({:?}, {})", String::from_utf8_lossy(dmb.string(path.path)), path.flags, res2, path.flags ^ res2.bits);
+        //             // break;
+        //         }
+        //     }
+
+        //    //println!("{:#x?}", path);
+
+        //    //break;
+        // }
 
         //println!("{:#x?}", dmb.world);
 
