@@ -118,7 +118,7 @@ bitflags! {
         const MOUSE_OPACITY_HI = 1 << 13;
         const ANIMATE_MOVEMENT_LO = 1 << 14;
         const ANIMATE_MOVEMENT_HI = 1 << 15;
-        const TODO_PREFAB_LIKE_UNKNOWN = 1 << 16;
+        const CLONED_TURF = 1 << 16;
         // = 1 << 17
         const OVERRIDE = 1 << 18;
         const HAS_MOUSE_MOVE_PROC = 1 << 19;
@@ -1127,9 +1127,9 @@ fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
 mod tests {
     use super::*;
 
-   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
-   //  const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
+   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
 
     #[test]
     fn it_works() {
@@ -1146,9 +1146,7 @@ mod tests {
 
             match res {
                 Some(flags) => {
-                    if path.flags > 0 {
-                       println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), flags);
-                    }
+                    println!("{:#x?} = {:x?}", String::from_utf8_lossy(dmb.string(path.path)), flags);
                 }
 
                 None => {
