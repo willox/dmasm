@@ -88,7 +88,7 @@ struct Path {
     maptext_x: u16,
     maptext_y: u16,
     suffix: Option<StringId>,
-    flags: u64, // contains (invisibility == 0), mouse_opacity, mouse_drop_zone, density, opacity, gender, override, animate_movement: see <https://github.com/willox/dmdiag/blob/cc5db4496a3c9054a8645cf1c5ce743b89081377/dm/Mob.h#L34-L44>
+    flags: u64, // See PathFlags (TODO)
     verbs: Option<MiscId>,
     procs: Option<MiscId>,
     initializer: Option<ProcId>,
