@@ -257,29 +257,29 @@ struct World {
     tick_lag_ms: u32,
     client: PathId,
     image: Option<PathId>,
-    unk_2: u8,
-    unk_3: u8,
-    unk_4: Option<u16>,
-    unk_5: u8,
+    client_lazy_eye: u8,
+    client_dir: u8,
+    client_control_freak: Option<u16>,
+    unk_5: u8, // Something to do with byond 498?
     client_script: Option<ObjectId>,
-    unk_7: Vec<ObjectId>,
-    unk_8: Option<ObjectId>,
-    unk_9: Option<u16>,
-    unk_a: Option<u16>,
-    unk_b: Option<u16>,
+    client_script_files: Vec<FileId>,
+    unk_8: Option<ObjectId>, // TODO: Only set in old byond compilers
+    unk_9: Option<u16>, // TODO: Only set in old byond compilers
+    unk_a: Option<u16>, // TODO: Only set in old byond compilers
+    unk_b: Option<u16>, // TODO: Only set in old byond compilers
     hub_password: Option<StringId>,
     server_name: Option<StringId>,
-    unk_c: Option<u32>,
-    unk_d: Option<u32>,
-    unk_e: Option<u16>,
-    unk_f: Option<ObjectId>,
-    unk_g: Option<ObjectId>,
+    hub_number: Option<u32>,
+    version: Option<u32>,
+    cache_lifespan: Option<u16>,
+    client_command_text: Option<StringId>,
+    client_command_prompt: Option<StringId>,
     hub: Option<StringId>,
     channel: Option<StringId>,
-    unk_h: Option<ObjectId>,
+    skin: Option<FileId>, // TODO: what file gets picked? the first with a .dmf? does it need a special flag?
     icon_size_x: Option<u16>,
     icon_size_y: Option<u16>,
-    unk_i: Option<u16>,
+    map_format: Option<u16>,
 }
 
 #[derive(Debug)]
@@ -931,12 +931,12 @@ impl<'a> Parser<'a> {
             (i, None)
         };
 
-        let (i, unk_2) = le_u8(i)?;
-        let (i, unk_3) = le_u8(i)?;
+        let (i, client_lazy_eye) = le_u8(i)?;
+        let (i, client_dir) = le_u8(i)?;
 
-        let (i, unk_4) = if self.header.major >= 415 {
-            let (i, unk_4) = le_u16(i)?;
-            (i, Some(unk_4))
+        let (i, client_control_freak) = if self.header.major >= 415 {
+            let (i, control_freak) = le_u16(i)?;
+            (i, Some(control_freak))
         } else {
             (i, None)
         };
@@ -950,19 +950,19 @@ impl<'a> Parser<'a> {
             (i, None)
         };
 
-        let (i, unk_7) = if self.header.major >= 507 {
+        let (i, client_script_files) = if self.header.major >= 507 {
             let (i, count) = le_u16(i)?;
-            let mut unk_7 = vec![];
-            unk_7.reserve(count as usize);
+            let mut client_script_files = vec![];
+            client_script_files.reserve(count as usize);
 
             let mut i = i;
             for _ in 0..count {
                 let res = self.object(i)?;
                 i = res.0;
-                unk_7.push(res.1);
+                client_script_files.push(res.1);
             }
 
-            (i, unk_7)
+            (i, client_script_files)
         } else {
             (i, vec![])
         };
@@ -1000,20 +1000,20 @@ impl<'a> Parser<'a> {
             (i, None)
         };
 
-        let (i, server_name, unk_c, unk_d) = if self.header.major >= 266 {
+        let (i, server_name, hub_number, version) = if self.header.major >= 266 {
             let (i, server_name) = self.optional_object(i)?;
-            let (i, unk_c) = le_u32(i)?;
-            let (i, unk_d) = le_u32(i)?;
-            (i, server_name, Some(unk_c), Some(unk_d))
+            let (i, hub_number) = le_u32(i)?;
+            let (i, version) = le_u32(i)?;
+            (i, server_name, Some(hub_number), Some(version))
         } else {
             (i, None, None, None)
         };
 
-        let (i, unk_e, unk_f, unk_g) = if self.header.major >= 272 {
-            let (i, unk_e) = le_u16(i)?;
-            let (i, unk_f) = self.optional_object(i)?;
-            let (i, unk_g) = self.optional_object(i)?;
-            (i, Some(unk_e), unk_f, unk_g)
+        let (i, cache_lifespan, client_command_text, client_command_prompt) = if self.header.major >= 272 {
+            let (i, cache_lifespan) = le_u16(i)?;
+            let (i, client_command_text) = self.optional_object(i)?;
+            let (i, client_command_prompt) = self.optional_object(i)?;
+            (i, Some(cache_lifespan), client_command_text, client_command_prompt)
         } else {
             (i, None, None, None)
         };
@@ -1030,17 +1030,17 @@ impl<'a> Parser<'a> {
             (i, None)
         };
 
-        let (i, unk_h) = if self.header.major >= 360 {
+        let (i, skin) = if self.header.major >= 360 {
             self.optional_object(i)?
         } else {
             (i, None)
         };
 
-        let (i, icon_size_x, icon_size_y, unk_i) = if self.header.major >= 272 {
+        let (i, icon_size_x, icon_size_y, map_format) = if self.header.major >= 272 {
             let (i, icon_size_x) = le_u16(i)?;
             let (i, icon_size_y) = le_u16(i)?;
-            let (i, unk_i) = le_u16(i)?;
-            (i, Some(icon_size_x), Some(icon_size_y), Some(unk_i))
+            let (i, map_format) = le_u16(i)?;
+            (i, Some(icon_size_x), Some(icon_size_y), Some(map_format))
         } else {
             (i, None, None, None)
         };
@@ -1059,29 +1059,29 @@ impl<'a> Parser<'a> {
                 tick_lag_ms,
                 client,
                 image,
-                unk_2,
-                unk_3,
-                unk_4,
+                client_lazy_eye,
+                client_dir,
+                client_control_freak,
                 unk_5,
                 client_script,
-                unk_7,
+                client_script_files,
                 unk_8,
                 unk_9,
                 unk_a,
                 unk_b,
                 hub_password,
                 server_name,
-                unk_c,
-                unk_d,
-                unk_e,
-                unk_f,
-                unk_g,
+                hub_number,
+                version,
+                cache_lifespan,
+                client_command_text,
+                client_command_prompt,
                 hub,
                 channel,
-                unk_h,
+                skin,
                 icon_size_x,
                 icon_size_y,
-                unk_i,
+                map_format,
             },
         ))
     }
