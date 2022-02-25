@@ -1,19 +1,19 @@
 mod nqcrc;
 mod xorjump;
 
-use std::convert::TryInto;
 use bitflags::bitflags;
+use std::convert::TryInto;
 
 use nom::{
-    branch::alt,
     bytes::{
         complete::{take, take_while},
         streaming::tag,
     },
     character::is_digit,
-    combinator::{map, map_res},
+    combinator::{map_res},
+    error::{FromExternalError, ParseError},
     number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8},
-    sequence::{delimited, preceded, terminated, tuple},
+    sequence::{delimited, terminated},
     IResult,
 };
 
@@ -33,14 +33,46 @@ pub struct Dmb {
     file_table: Vec<File>,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum DmbError {
+    Nom(String),
+    UnknownVersion(u32, u32, u32),
+    GridEntryHasZeroCopies,
+    Unimplemented0x203Path,
+    IncorrectStringTableHash(i32, i32),
+    UnimplementedLargeString,
+}
+
+impl<I> ParseError<I> for DmbError
+where
+    I: std::fmt::Debug,
+{
+    fn from_error_kind(_: I, kind: nom::error::ErrorKind) -> Self {
+        DmbError::Nom(format!("{:?}", kind))
+    }
+
+    fn append(_: I, kind: nom::error::ErrorKind, other: Self) -> Self {
+        DmbError::Nom(format!("{:?} -> {:?}", other, kind))
+    }
+}
+
+impl<I, E> FromExternalError<I, E> for DmbError
+where
+    E: std::fmt::Debug,
+{
+    fn from_external_error(_: I, kind: nom::error::ErrorKind, e: E) -> Self {
+        DmbError::Nom(format!("{:?} {:?}", kind, e))
+    }
+}
+
 impl Dmb {
     fn string(&self, id: StringId) -> &[u8] {
-        let str = &self.string_table[id.0.0 as usize];
+        let str = &self.string_table[id.0 .0 as usize];
         &str.data
     }
 
     fn proc(&self, id: ProcId) -> &Proc {
-        &self.proc_table[id.0.0 as usize]
+        &self.proc_table[id.0 .0 as usize]
     }
 }
 
@@ -80,7 +112,7 @@ struct Path {
     icon: Option<FileId>,
     icon_state: Option<StringId>,
     direction: u8,
-    interface: u32, // TODO: preserve long-ness. Do I care?
+    interface: u32,
     text: Option<StringId>,
     maptext: Option<StringId>,
     maptext_width: u16,
@@ -201,14 +233,13 @@ struct Proc {
     category: Option<StringId>,
     verb_src_param: u8,
     verb_src_kind: u8, // (1, in view) (2, in oview) (3, = usr.loc) (5, in range), (8, in usr), (32, = usr)
-    flags: u8, // ProcFlags
+    flags: u8,         // ProcFlags
     unk_4: Option<u32>,
     unk_5: Option<u8>,
     bytecode: MiscId,
     locals: MiscId,
     parameters: MiscId,
 }
-
 
 bitflags! {
     // TODO: Extended flags, and that weird extra u8
@@ -253,7 +284,7 @@ struct World {
     initializer: Option<ProcId>,
     domain: Option<StringId>,
     name: StringId,
-    unk_1: Option<ObjectId>, // TODO: Only set in old byond compilers
+    unk_1: Option<ObjectId>, // COMPAT: Only set in old byond compilers
     tick_lag_ms: u32,
     client: PathId,
     image: Option<PathId>,
@@ -263,10 +294,10 @@ struct World {
     unk_5: u8, // Something to do with byond 498?
     client_script: Option<ObjectId>,
     client_script_files: Vec<FileId>,
-    unk_8: Option<ObjectId>, // TODO: Only set in old byond compilers
-    unk_9: Option<u16>, // TODO: Only set in old byond compilers
-    unk_a: Option<u16>, // TODO: Only set in old byond compilers
-    unk_b: Option<u16>, // TODO: Only set in old byond compilers
+    unk_8: Option<ObjectId>, // COMPAT: Only set in old byond compilers
+    unk_9: Option<u16>,      // COMPAT: Only set in old byond compilers
+    unk_a: Option<u16>,      // COMPAT: Only set in old byond compilers
+    unk_b: Option<u16>,      // COMPAT: Only set in old byond compilers
     hub_password: Option<StringId>,
     server_name: Option<StringId>,
     hub_number: Option<u32>,
@@ -295,17 +326,15 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(i: &'a [u8]) -> Dmb {
+    fn parse(i: &'a [u8]) -> IResult<&'a [u8], Dmb, DmbError> {
         let data = i;
 
+        // TODO: skip hashbang
+
         // state-less parsing of header
-        let (i, header) = header(i).unwrap();
+        let (i, header) = header(i)?;
 
         println!("header = {:?}", header);
-
-        // force this on? goonstation needs this atm
-        let mut header = header;
-        header.flags.large_object_ids = true;
 
         let parser = Self { data, header };
 
@@ -326,22 +355,23 @@ impl<'a> Parser<'a> {
         assert!(expected_string_bytes as usize == actual_string_bytes);
         assert!(i.is_empty());
 
-        // TODO: validate string_bytes
-
-        Dmb {
-            grid,
-            path_table,
-            mob_table,
-            string_table,
-            misc_table,
-            proc_table,
-            variable_table,
-            some_proc_table,
-            instance_table,
-            map_data_table,
-            world,
-            file_table,
-        }
+        Ok((
+            i,
+            Dmb {
+                grid,
+                path_table,
+                mob_table,
+                string_table,
+                misc_table,
+                proc_table,
+                variable_table,
+                some_proc_table,
+                instance_table,
+                map_data_table,
+                world,
+                file_table,
+            },
+        ))
     }
 
     // i like to live dangerously
@@ -358,7 +388,7 @@ impl<'a> Parser<'a> {
         le_u32(i)
     }
 
-    fn word(&self, i: &'a [u8]) -> IResult<&'a [u8], u32> {
+    fn word(&self, i: &'a [u8]) -> IResult<&'a [u8], u32, DmbError> {
         if self.header.flags.large_object_ids {
             return le_u32(i);
         }
@@ -367,12 +397,15 @@ impl<'a> Parser<'a> {
         Ok((i, id as u32))
     }
 
-    fn object<T: From<ObjectId>>(&self, i: &'a [u8]) -> IResult<&'a [u8], T> {
+    fn object<T: From<ObjectId>>(&self, i: &'a [u8]) -> IResult<&'a [u8], T, DmbError> {
         let (i, id) = self.word(i)?;
         Ok((i, ObjectId(id).into()))
     }
 
-    fn optional_object<T: From<ObjectId>>(&self, i: &'a [u8]) -> IResult<&'a [u8], Option<T>> {
+    fn optional_object<T: From<ObjectId>>(
+        &self,
+        i: &'a [u8],
+    ) -> IResult<&'a [u8], Option<T>, DmbError> {
         let (i, id) = self.word(i)?;
 
         if id == 0xFFFF {
@@ -382,7 +415,7 @@ impl<'a> Parser<'a> {
         Ok((i, Some(ObjectId(id).into())))
     }
 
-    fn grid(&self, i: &'a [u8]) -> IResult<&'a [u8], Grid> {
+    fn grid(&self, i: &'a [u8]) -> IResult<&'a [u8], Grid, DmbError> {
         let (i, z_width) = le_u16(i)?;
         let (i, z_height) = le_u16(i)?;
         let (i, z_count) = le_u16(i)?;
@@ -397,8 +430,10 @@ impl<'a> Parser<'a> {
             let (inner_i, _additional_turfs) = self.word(inner_i)?;
             let (inner_i, copies) = le_u8(inner_i)?;
 
-            // goonstation hits this assert lol
-            assert!(copies > 0);
+            if copies == 0 {
+                return Err(nom::Err::Failure(DmbError::GridEntryHasZeroCopies));
+            }
+
             count = count.saturating_sub(copies as u64);
             i = inner_i;
         }
@@ -406,7 +441,7 @@ impl<'a> Parser<'a> {
         Ok((i, Grid))
     }
 
-    fn path_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Path>> {
+    fn path_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Path>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("Loading {} paths", count);
@@ -424,7 +459,7 @@ impl<'a> Parser<'a> {
         Ok((i, paths))
     }
 
-    fn path(&self, i: &'a [u8]) -> IResult<&'a [u8], Path> {
+    fn path(&self, i: &'a [u8]) -> IResult<&'a [u8], Path, DmbError> {
         let (i, path) = self.object(i)?;
         let (i, parent) = self.optional_object(i)?;
         let (i, name) = self.optional_object(i)?;
@@ -476,7 +511,6 @@ impl<'a> Parser<'a> {
 
         let (i, flags) = if self.header.major >= 306 {
             if self.header.rhs >= 514 {
-                // TODO: eck
                 let (i, lo) = le_u32(i)?;
                 let (i, hi) = le_u32(i)?;
 
@@ -492,8 +526,7 @@ impl<'a> Parser<'a> {
             let (i, value) = le_u8(i)?;
 
             if self.header.rhs >= 0x203 {
-                // TODO: check me
-                unimplemented!()
+                return Err(nom::Err::Failure(DmbError::Unimplemented0x203Path));
             }
 
             (i, value as u64)
@@ -596,7 +629,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn mob_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Mob>> {
+    fn mob_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Mob>, DmbError> {
         let (i, count) = self.word(i)?;
 
         let mut mobs = vec![];
@@ -612,7 +645,7 @@ impl<'a> Parser<'a> {
         Ok((i, mobs))
     }
 
-    fn mob(&self, i: &'a [u8]) -> IResult<&'a [u8], Mob> {
+    fn mob(&self, i: &'a [u8]) -> IResult<&'a [u8], Mob, DmbError> {
         let (i, path) = self.object(i)?;
         let (i, key) = self.optional_object(i)?;
         let (i, sight_flags) = le_u8(i)?;
@@ -644,7 +677,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn string_table(&self, i: &'a [u8]) -> IResult<&'a [u8], (Vec<DMString>, usize)> {
+    fn string_table(&self, i: &'a [u8]) -> IResult<&'a [u8], (Vec<DMString>, usize), DmbError> {
         let mut hash_state: i32 = -1;
         let mut total_bytes: usize = 0;
 
@@ -666,8 +699,10 @@ impl<'a> Parser<'a> {
         let i = if self.header.major >= 468 {
             let (i, expected_hash) = le_i32(i)?;
             if expected_hash != hash_state {
-                // goonstation hits this too HOW?!
-                panic!("oh noooo");
+                return Err(nom::Err::Failure(DmbError::IncorrectStringTableHash(
+                    expected_hash,
+                    hash_state,
+                )));
             }
             i
         } else {
@@ -677,14 +712,14 @@ impl<'a> Parser<'a> {
         Ok((i, (strings, total_bytes)))
     }
 
-    fn string(&self, hash_state: &mut i32, i: &'a [u8]) -> IResult<&'a [u8], DMString> {
+    fn string(&self, hash_state: &mut i32, i: &'a [u8]) -> IResult<&'a [u8], DMString, DmbError> {
         let offset = self.offset(i);
 
         let (i, length) = le_u16(i)?;
         let length = length ^ ((offset & 0xFFFF) as u16);
 
         if length == 0xFFFF {
-            unimplemented!();
+            return Err(nom::Err::Failure(DmbError::UnimplementedLargeString));
         }
 
         let offset = self.offset(i);
@@ -697,7 +732,7 @@ impl<'a> Parser<'a> {
         Ok((i, DMString { data }))
     }
 
-    fn misc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Misc>> {
+    fn misc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Misc>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("loading {:?} miscs", count);
@@ -715,7 +750,7 @@ impl<'a> Parser<'a> {
         Ok((i, miscs))
     }
 
-    fn misc(&self, i: &'a [u8]) -> IResult<&'a [u8], Misc> {
+    fn misc(&self, i: &'a [u8]) -> IResult<&'a [u8], Misc, DmbError> {
         let (i, count) = le_u16(i)?;
         let mut entries = vec![];
         entries.reserve(count as usize);
@@ -730,7 +765,7 @@ impl<'a> Parser<'a> {
         Ok((i, Misc { entries }))
     }
 
-    fn proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Proc>> {
+    fn proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Proc>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("loading {:?} procs", count);
@@ -748,7 +783,7 @@ impl<'a> Parser<'a> {
         Ok((i, procs))
     }
 
-    fn proc(&self, i: &'a [u8]) -> IResult<&'a [u8], Proc> {
+    fn proc(&self, i: &'a [u8]) -> IResult<&'a [u8], Proc, DmbError> {
         let (i, path) = if self.header.flags.large_object_ids || self.header.major >= 224 {
             self.optional_object(i)?
         } else {
@@ -793,7 +828,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn variable_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Variable>> {
+    fn variable_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Variable>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("loading {:?} variables", count);
@@ -821,7 +856,7 @@ impl<'a> Parser<'a> {
         Ok((i, variables))
     }
 
-    fn variable(&self, i: &'a [u8]) -> IResult<&'a [u8], Variable> {
+    fn variable(&self, i: &'a [u8]) -> IResult<&'a [u8], Variable, DmbError> {
         let (i, kind) = le_u8(i)?;
         let (i, value) = le_u32(i)?;
         let (i, name) = self.object(i)?;
@@ -829,7 +864,7 @@ impl<'a> Parser<'a> {
         Ok((i, Variable { kind, value, name }))
     }
 
-    fn some_proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<ProcId>> {
+    fn some_proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<ProcId>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("loading {:?} some_procs", count);
@@ -847,7 +882,7 @@ impl<'a> Parser<'a> {
         Ok((i, variables))
     }
 
-    fn instance_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Instance>> {
+    fn instance_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Instance>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("loading {:?} instances", count);
@@ -865,7 +900,7 @@ impl<'a> Parser<'a> {
         Ok((i, instances))
     }
 
-    fn instance(&self, i: &'a [u8]) -> IResult<&'a [u8], Instance> {
+    fn instance(&self, i: &'a [u8]) -> IResult<&'a [u8], Instance, DmbError> {
         let (i, kind) = le_u8(i)?;
         let (i, value) = le_u32(i)?;
         let (i, initializer) = self.optional_object(i)?;
@@ -880,7 +915,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn map_data_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<MapData>> {
+    fn map_data_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<MapData>, DmbError> {
         let (i, count) = le_u32(i)?;
 
         println!("loading {:?} map datas", count);
@@ -898,14 +933,14 @@ impl<'a> Parser<'a> {
         Ok((i, map_datas))
     }
 
-    fn map_data(&self, i: &'a [u8]) -> IResult<&'a [u8], MapData> {
+    fn map_data(&self, i: &'a [u8]) -> IResult<&'a [u8], MapData, DmbError> {
         let (i, offset) = le_u16(i)?;
         let (i, instance) = self.optional_object(i)?;
 
         Ok((i, MapData { offset, instance }))
     }
 
-    fn world(&self, i: &'a [u8]) -> IResult<&'a [u8], World> {
+    fn world(&self, i: &'a [u8]) -> IResult<&'a [u8], World, DmbError> {
         let (i, mob) = self.optional_object(i)?;
         let (i, turf) = self.optional_object(i)?;
         let (i, area) = self.optional_object(i)?;
@@ -1009,14 +1044,20 @@ impl<'a> Parser<'a> {
             (i, None, None, None)
         };
 
-        let (i, cache_lifespan, client_command_text, client_command_prompt) = if self.header.major >= 272 {
-            let (i, cache_lifespan) = le_u16(i)?;
-            let (i, client_command_text) = self.optional_object(i)?;
-            let (i, client_command_prompt) = self.optional_object(i)?;
-            (i, Some(cache_lifespan), client_command_text, client_command_prompt)
-        } else {
-            (i, None, None, None)
-        };
+        let (i, cache_lifespan, client_command_text, client_command_prompt) =
+            if self.header.major >= 272 {
+                let (i, cache_lifespan) = le_u16(i)?;
+                let (i, client_command_text) = self.optional_object(i)?;
+                let (i, client_command_prompt) = self.optional_object(i)?;
+                (
+                    i,
+                    Some(cache_lifespan),
+                    client_command_text,
+                    client_command_prompt,
+                )
+            } else {
+                (i, None, None, None)
+            };
 
         let (i, hub) = if self.header.major >= 276 {
             self.optional_object(i)?
@@ -1086,7 +1127,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn file_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<File>> {
+    fn file_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<File>, DmbError> {
         let (i, count) = self.word(i)?;
 
         println!("loading {:?} files", count);
@@ -1104,7 +1145,7 @@ impl<'a> Parser<'a> {
         Ok((i, files))
     }
 
-    fn file(&self, i: &'a [u8]) -> IResult<&'a [u8], File> {
+    fn file(&self, i: &'a [u8]) -> IResult<&'a [u8], File, DmbError> {
         let (i, id) = le_u32(i)?;
         let (i, kind) = le_u8(i)?;
 
@@ -1126,69 +1167,90 @@ struct Flags {
 }
 
 /// parses until a non-numeric character is hit, we might be using this in places that we shouldn't
-fn parse_plaintext_uint(i: &[u8]) -> IResult<&[u8], u32> {
+fn parse_plaintext_uint(i: &[u8]) -> IResult<&[u8], u32, DmbError> {
     map_res(take_while(is_digit), |x: &[u8]| {
         let string = std::str::from_utf8(x).unwrap();
         string.parse::<u32>()
     })(i)
 }
 
-// NOTE: older versions of byond have a different format here
-fn header(i: &[u8]) -> IResult<&[u8], Header> {
-    // TODO: shebang mess
-    map(
-        tuple((
-            delimited(tag("world bin v"), parse_plaintext_uint, tag("\x0A")),
-            delimited(tag("min compatibility v"), parse_plaintext_uint, tag(" ")),
-            terminated(parse_plaintext_uint, tag("\n")),
-            header_flags,
-        )),
-        |(major, lhs, rhs, flags)| Header {
+// COMPAT: older versions of byond have a different format here
+fn header(i: &[u8]) -> IResult<&[u8], Header, DmbError> {
+    let (i, major) = delimited(tag("world bin v"), parse_plaintext_uint, tag("\x0A"))(i)?;
+    let (i, lhs) = delimited(tag("min compatibility v"), parse_plaintext_uint, tag(" "))(i)?;
+    let (i, rhs) = terminated(parse_plaintext_uint, tag("\n"))(i)?;
+    let (i, flags) = header_flags(i)?;
+
+    if major != 514 {
+        return Err(nom::Err::Error(DmbError::UnknownVersion(major, lhs, rhs)));
+    }
+
+    if lhs > major {
+        return Err(nom::Err::Error(DmbError::UnknownVersion(major, lhs, rhs)));
+    }
+
+    if rhs > major {
+        return Err(nom::Err::Error(DmbError::UnknownVersion(major, lhs, rhs)));
+    }
+
+    Ok((
+        i,
+        Header {
             major,
             lhs,
             rhs,
             flags,
         },
-    )(i)
+    ))
 }
 
-fn header_flags(i: &[u8]) -> IResult<&[u8], Flags> {
-    alt((
-        map_res(le_u32, |flags| {
-            if (flags & (1 << 31)) != 0 {
-                return Err(());
-            }
+fn header_flags(i: &[u8]) -> IResult<&[u8], Flags, DmbError> {
+    let (i, flags1) = le_u32(i)?;
 
-            Ok(Flags {
-                large_object_ids: (flags & (1 << 30) != 0),
-            })
-        }),
-        map(preceded(le_u32, le_u32), |flags| Flags {
-            large_object_ids: (flags & (1 << 30) != 0),
-        }),
-    ))(i)
+    let (i, _flags2) = if (flags1 & (1 << 31)) != 0 {
+        le_u32(i)?
+    } else {
+        (i, 0)
+    };
+
+    // TODO: other flags :(
+
+    Ok((
+        i,
+        Flags {
+            large_object_ids: (flags1 & (1 << 30)) != 0,
+        },
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
-   const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
-   //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
+    //const EXAMPLE_DMB: &'static [u8] =
+    //    include_bytes!("E:\\spantest_char_crash\\spantest_char_crash.dmb");
+    //const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\tgstation\\tgstation.dmb");
+    const EXAMPLE_DMB: &'static [u8] = include_bytes!("E:\\goonstation\\goonstation.dmb");
 
     #[test]
     fn it_works() {
-        let dmb = super::Parser::new(EXAMPLE_DMB);
+        let (_, dmb) = super::Parser::parse(EXAMPLE_DMB).unwrap();
 
         fn debug(dmb: &super::Dmb, id: ObjectId) {
             println!("Debugging {:x?}", id);
-            println!("\tString = {:?}", String::from_utf8_lossy(dmb.string(StringId(id))));
+            println!(
+                "\tString = {:?}",
+                String::from_utf8_lossy(dmb.string(StringId(id)))
+            );
             println!("\tProc = {:?}", dmb.proc(ProcId(id)));
         }
 
         for var in &dmb.variable_table {
-            println!("{:?} = {:x}", String::from_utf8_lossy(dmb.string(var.name)), var.kind);
+            println!(
+                "{:?} = {:x}",
+                String::from_utf8_lossy(dmb.string(var.name)),
+                var.kind
+            );
         }
 
         // for proc in &dmb.proc_table {
