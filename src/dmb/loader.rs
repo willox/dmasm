@@ -14,7 +14,7 @@ use nom::{
     error::{FromExternalError, ParseError},
     number::complete::{le_f32, le_i32, le_u16, le_u32, le_u8},
     sequence::{delimited, terminated},
-    IResult,
+    IResult, Finish,
 };
 
 #[derive(Debug)]
@@ -352,6 +352,7 @@ impl<'a> Parser<'a> {
         let (i, world) = parser.world(i)?;
         let (i, file_table) = parser.file_table(i)?;
 
+
         assert!(expected_string_bytes as usize == actual_string_bytes);
         assert!(i.is_empty());
 
@@ -443,8 +444,6 @@ impl<'a> Parser<'a> {
 
     fn path_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Path>, DmbError> {
         let (i, count) = self.word(i)?;
-
-        println!("Loading {} paths", count);
 
         let mut paths = vec![];
         paths.reserve(count.try_into().unwrap());
@@ -683,8 +682,6 @@ impl<'a> Parser<'a> {
 
         let (i, count) = self.word(i)?;
 
-        println!("loading {:?} strings", count);
-
         let mut strings = vec![];
         strings.reserve(count.try_into().unwrap());
 
@@ -735,8 +732,6 @@ impl<'a> Parser<'a> {
     fn misc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Misc>, DmbError> {
         let (i, count) = self.word(i)?;
 
-        println!("loading {:?} miscs", count);
-
         let mut miscs = vec![];
         miscs.reserve(count.try_into().unwrap());
 
@@ -767,8 +762,6 @@ impl<'a> Parser<'a> {
 
     fn proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Proc>, DmbError> {
         let (i, count) = self.word(i)?;
-
-        println!("loading {:?} procs", count);
 
         let mut procs = vec![];
         procs.reserve(count.try_into().unwrap());
@@ -831,8 +824,6 @@ impl<'a> Parser<'a> {
     fn variable_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Variable>, DmbError> {
         let (i, count) = self.word(i)?;
 
-        println!("loading {:?} variables", count);
-
         let mut variables = vec![];
         variables.reserve(count.try_into().unwrap());
 
@@ -867,8 +858,6 @@ impl<'a> Parser<'a> {
     fn some_proc_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<ProcId>, DmbError> {
         let (i, count) = self.word(i)?;
 
-        println!("loading {:?} some_procs", count);
-
         let mut variables = vec![];
         variables.reserve(count.try_into().unwrap());
 
@@ -884,8 +873,6 @@ impl<'a> Parser<'a> {
 
     fn instance_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<Instance>, DmbError> {
         let (i, count) = self.word(i)?;
-
-        println!("loading {:?} instances", count);
 
         let mut instances = vec![];
         instances.reserve(count.try_into().unwrap());
@@ -917,8 +904,6 @@ impl<'a> Parser<'a> {
 
     fn map_data_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<MapData>, DmbError> {
         let (i, count) = le_u32(i)?;
-
-        println!("loading {:?} map datas", count);
 
         let mut map_datas = vec![];
         map_datas.reserve(count.try_into().unwrap());
@@ -1129,8 +1114,6 @@ impl<'a> Parser<'a> {
 
     fn file_table(&self, i: &'a [u8]) -> IResult<&'a [u8], Vec<File>, DmbError> {
         let (i, count) = self.word(i)?;
-
-        println!("loading {:?} files", count);
 
         let mut files = vec![];
         files.reserve(count.try_into().unwrap());
