@@ -338,19 +338,19 @@ impl<'a> Parser<'a> {
 
         let parser = Self { data, header };
 
-        let (i, grid) = parser.grid(i).unwrap();
-        let (i, expected_string_bytes) = parser.string_bytes(i).unwrap();
-        let (i, path_table) = parser.path_table(i).unwrap();
-        let (i, mob_table) = parser.mob_table(i).unwrap();
-        let (i, (string_table, actual_string_bytes)) = parser.string_table(i).unwrap();
-        let (i, misc_table) = parser.misc_table(i).unwrap();
-        let (i, proc_table) = parser.proc_table(i).unwrap();
-        let (i, variable_table) = parser.variable_table(i).unwrap();
-        let (i, some_proc_table) = parser.some_proc_table(i).unwrap();
-        let (i, instance_table) = parser.instance_table(i).unwrap();
-        let (i, map_data_table) = parser.map_data_table(i).unwrap();
-        let (i, world) = parser.world(i).unwrap();
-        let (i, file_table) = parser.file_table(i).unwrap();
+        let (i, grid) = parser.grid(i)?;
+        let (i, expected_string_bytes) = parser.string_bytes(i)?;
+        let (i, path_table) = parser.path_table(i)?;
+        let (i, mob_table) = parser.mob_table(i)?;
+        let (i, (string_table, actual_string_bytes)) = parser.string_table(i)?;
+        let (i, misc_table) = parser.misc_table(i)?;
+        let (i, proc_table) = parser.proc_table(i)?;
+        let (i, variable_table) = parser.variable_table(i)?;
+        let (i, some_proc_table) = parser.some_proc_table(i)?;
+        let (i, instance_table) = parser.instance_table(i)?;
+        let (i, map_data_table) = parser.map_data_table(i)?;
+        let (i, world) = parser.world(i)?;
+        let (i, file_table) = parser.file_table(i)?;
 
         assert!(expected_string_bytes as usize == actual_string_bytes);
         assert!(i.is_empty());
@@ -384,7 +384,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn string_bytes(&self, i: &'a [u8]) -> IResult<&'a [u8], u32> {
+    fn string_bytes(&self, i: &'a [u8]) -> IResult<&'a [u8], u32, DmbError> {
         le_u32(i)
     }
 
