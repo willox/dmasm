@@ -14,29 +14,18 @@ use std::fmt::Write;
 struct Proc {}
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum Node<D = ()> {
-    Label(String),
-    Instruction(Instruction, D),
-}
+pub struct Node<D = ()>(pub Instruction, pub D);
 
 impl<D> Node<D> {
     pub fn strip_debug_data(self) -> Node {
-        match self {
-            Self::Label(str) => Node::Label(str),
-            Self::Instruction(ins, _debug) => Node::Instruction(ins, ()),
-        }
+        Node(self.0, ())
     }
 }
 
 impl<D> std::fmt::Display for Node<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Label(name) => writeln!(f, "{}:", name),
-            Self::Instruction(ins, _) => {
-                ins.serialize(f)?;
-                write!(f, "\n")
-            }
-        }
+        self.0.serialize(f)?;
+        write!(f, "\n")
     }
 }
 
@@ -45,41 +34,37 @@ pub fn format_disassembly(nodes: &[Node<DebugData>], cursor: Option<u32>) -> Str
     let mut buf = String::new();
 
     for node in nodes {
-        match node {
-            Node::Instruction(ins, dbg) => {
-                let mut raw_lines = vec![];
+        let (ins, dbg) = (&node.0, &node.1);
 
-                for chunk in dbg.bytecode.chunks(3) {
-                    let mut line = String::new();
-                    for code in chunk {
-                        write!(&mut line, " {:0>8X}", code).unwrap();
-                    }
-                    raw_lines.push(line);
-                }
+        let mut raw_lines = vec![];
 
-                let prefix = match cursor {
-                    Some(offset)
-                        if offset >= dbg.offset
-                            && offset < (dbg.offset + dbg.bytecode.len() as u32) =>
-                    {
-                        '>'
-                    }
-                    _ => ' ',
-                };
-
-                writeln!(
-                    &mut buf,
-                    "{} {:0>4X}:{:28} {}",
-                    prefix, dbg.offset, raw_lines[0], ins
-                )
-                .unwrap();
-
-                for line in &raw_lines[1..] {
-                    writeln!(&mut buf, "       {}", line).unwrap();
-                }
+        for chunk in dbg.bytecode.chunks(3) {
+            let mut line = String::new();
+            for code in chunk {
+                write!(&mut line, " {:0>8X}", code).unwrap();
             }
+            raw_lines.push(line);
+        }
 
-            other => write!(&mut buf, "{}", other).unwrap(),
+        let prefix = match cursor {
+            Some(offset)
+                if offset >= dbg.offset
+                    && offset < (dbg.offset + dbg.bytecode.len() as u32) =>
+            {
+                '>'
+            }
+            _ => ' ',
+        };
+
+        writeln!(
+            &mut buf,
+            "{} {:0>4X}:{:28} {}",
+            prefix, dbg.offset, raw_lines[0], ins
+        )
+        .unwrap();
+
+        for line in &raw_lines[1..] {
+            writeln!(&mut buf, "       {}", line).unwrap();
         }
     }
 

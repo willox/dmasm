@@ -69,7 +69,7 @@ impl Operand for f32 {
 // Label
 //
 #[derive(PartialEq, Debug, Clone)]
-pub struct Label(pub String);
+pub struct Label(pub u32);
 
 impl Operand for Label {
     fn disassemble(
@@ -77,11 +77,8 @@ impl Operand for Label {
     ) -> Result<Self, DisassembleError> {
         let offset = dism.read_u32()?;
 
-        // TODO: Move to output
-        dism.reserve_destination(offset);
-
         // TODO: This label naming scheme is duplicated into output stage
-        Ok(Self(format!("LAB_{:0>4X}", offset)))
+        Ok(Self(offset))
     }
 
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

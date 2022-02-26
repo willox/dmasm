@@ -54,11 +54,7 @@ pub fn disassemble<'a>(
     let mut nodes = vec![];
 
     for (ins, dbg) in instructions {
-        if state.indirection_destinations.contains(&dbg.offset) {
-            nodes.push(Node::Label(format!("LAB_{:0>4X}", dbg.offset)));
-        }
-
-        nodes.push(Node::Instruction(ins, dbg));
+        nodes.push(Node(ins, dbg));
     }
 
     (nodes, err)
@@ -67,7 +63,6 @@ pub fn disassemble<'a>(
 pub struct Disassembler<'a> {
     pub bytecode: &'a [u32],
     pub current_offset: u32,
-    indirection_destinations: HashSet<u32>,
 }
 
 impl<'a> Disassembler<'a> {
@@ -75,7 +70,6 @@ impl<'a> Disassembler<'a> {
         Self {
             bytecode,
             current_offset: 0,
-            indirection_destinations: HashSet::new(),
         }
     }
 
@@ -99,9 +93,5 @@ impl<'a> Disassembler<'a> {
 
     pub fn read_i32(&mut self) -> Result<i32, DisassembleError> {
         unsafe { Ok(std::mem::transmute(self.read_u32()?)) }
-    }
-
-    pub fn reserve_destination(&mut self, offset: u32) {
-        self.indirection_destinations.insert(offset);
     }
 }
