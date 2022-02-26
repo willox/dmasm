@@ -15,7 +15,6 @@ struct Proc {}
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Node<D = ()> {
-    Comment(String),
     Label(String),
     Instruction(Instruction, D),
 }
@@ -23,7 +22,6 @@ pub enum Node<D = ()> {
 impl<D> Node<D> {
     pub fn strip_debug_data(self) -> Node {
         match self {
-            Self::Comment(str) => Node::Comment(str),
             Self::Label(str) => Node::Label(str),
             Self::Instruction(ins, _debug) => Node::Instruction(ins, ()),
         }
@@ -33,7 +31,6 @@ impl<D> Node<D> {
 impl<D> std::fmt::Display for Node<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Comment(text) => writeln!(f, ";{}", text),
             Self::Label(name) => writeln!(f, "{}:", name),
             Self::Instruction(ins, _) => {
                 ins.serialize(f)?;
