@@ -1,8 +1,7 @@
 use std::fmt;
 
 use crate::{
-    assembler::{AssembleEnv, AssembleError, Assembler},
-    disassembler::{DisassembleEnv, DisassembleError, Disassembler},
+    disassembler::{DisassembleError, Disassembler},
 };
 
 use crate::operands::Operand;
@@ -45,12 +44,8 @@ bitflags! {
 }
 
 impl Operand for TypeFilter {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        unimplemented!()
-    }
-
-    fn disassemble<E: DisassembleEnv>(
-        dism: &mut Disassembler<E>,
+    fn disassemble(
+        dism: &mut Disassembler
     ) -> Result<Self, DisassembleError> {
         let bits = dism.read_u32()?;
 

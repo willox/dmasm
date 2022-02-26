@@ -3,13 +3,6 @@ use crate::Node;
 
 use std::collections::HashSet;
 
-pub trait DisassembleEnv {
-    fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>>;
-    fn get_variable_name(&mut self, index: u32) -> Option<Vec<u8>>;
-    fn get_proc_name(&mut self, index: u32) -> Option<String>;
-    fn value_to_string_data(&mut self, tag: u32, data: u32) -> Option<Vec<u8>>;
-}
-
 #[derive(Debug, PartialEq)]
 pub enum DisassembleError {
     UnexpectedEnd,
@@ -33,11 +26,10 @@ pub struct DebugData<'a> {
     pub bytecode: &'a [u32],
 }
 
-pub fn disassemble<'a, E: DisassembleEnv>(
+pub fn disassemble<'a>(
     bytecode: &'a [u32],
-    env: &'a mut E,
 ) -> (Vec<Node<DebugData<'a>>>, Option<DisassembleError>) {
-    let mut state = Disassembler::new(bytecode, env);
+    let mut state = Disassembler::new(bytecode);
     let mut instructions = vec![];
     let mut err = None;
 
@@ -72,20 +64,18 @@ pub fn disassemble<'a, E: DisassembleEnv>(
     (nodes, err)
 }
 
-pub struct Disassembler<'a, E: DisassembleEnv> {
+pub struct Disassembler<'a> {
     pub bytecode: &'a [u32],
     pub current_offset: u32,
     indirection_destinations: HashSet<u32>,
-    pub env: &'a mut E,
 }
 
-impl<'a, E: DisassembleEnv> Disassembler<'a, E> {
-    fn new(bytecode: &'a [u32], env: &'a mut E) -> Self {
+impl<'a> Disassembler<'a> {
+    fn new(bytecode: &'a [u32]) -> Self {
         Self {
             bytecode,
             current_offset: 0,
             indirection_destinations: HashSet::new(),
-            env,
         }
     }
 

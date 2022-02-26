@@ -1,8 +1,6 @@
 use crate::operands::Operand;
-use crate::parser;
 use crate::{
-    assembler::{AssembleEnv, AssembleError, Assembler},
-    disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
+    disassembler::{DebugData, DisassembleError, Disassembler},
     list_operands::*,
     operands::*,
 };
@@ -24,21 +22,8 @@ macro_rules! instructions {
         }
 
         impl Instruction {
-            pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) -> Result<(), AssembleError> {
-                match self {
-                    $(
-                        Self::$name$( ( $( $operand_name, )* ) )? => {
-                            asm.emit($opcode);
-                            $( $( $operand_name.assemble(asm)?; )* )?
-                        }
-                    )*
-                }
-
-                Ok(())
-            }
-
-            pub fn disassemble<'a, E: DisassembleEnv>(
-                dism: &mut Disassembler<'a, E>,
+            pub fn disassemble<'a>(
+                dism: &mut Disassembler<'a>,
             ) -> Result<(Self, DebugData<'a>), DisassembleError> {
                 let offset = dism.current_offset;
 
@@ -78,32 +63,6 @@ macro_rules! instructions {
                 }
 
                 Ok(())
-            }
-
-            pub fn deserialize<'b, E: 'b>(i: &'b str) -> nom::IResult<&str, Self, E>
-            where
-                E: nom::error::ParseError<&'b str>
-                    + nom::error::FromExternalError<&'b str, std::num::ParseIntError>,
-            {
-                let (i, name) = parser::whitespace(parser::parse_identifier)(i)?;
-
-                let (i, instruction) = match name {
-                    $(
-                        stringify!($name) => {
-                            $( $(
-                                let (i, $operand_name) = parser::whitespace($operand_type::deserialize)(i)?;
-                            )* )?
-                            (i, Self::$name$( ( $(
-                                $operand_name,
-                             )* ))? )
-                        },
-                    )*
-
-                    // TODO: Real error
-                    other => panic!("unknown instruction {}", other),
-                };
-
-                Ok((i, instruction))
             }
         }
     };
