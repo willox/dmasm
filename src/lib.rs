@@ -4,7 +4,7 @@ mod access_modifiers;
 pub mod disassembler;
 mod instructions;
 mod list_operands;
-mod operands;
+pub mod operands;
 
 pub use disassembler::DebugData;
 pub use instructions::Instruction;
