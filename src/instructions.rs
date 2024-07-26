@@ -489,7 +489,10 @@ instructions! {
     0x160 = SpliceTextChar,
     0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
-    // 0x163 .. 0x172
+    // 0x163 .. 0x16B
+    0x16C = NumIsNaN,
+    0x16D = NumIsInf,
+    // 0x16F .. 0x172
     0x173 = PowSquare, // Optimization whenever ** 2 is used.
 
     0x1337 = AuxtoolsDebugBreak,
