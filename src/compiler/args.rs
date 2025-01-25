@@ -10,12 +10,8 @@ use crate::Instruction;
 // (x = y) -> x = y
 fn unroll(expr: &Expression) -> &Expression {
     match expr {
-        Expression::Base {
-            unary,
-            term,
-            follow,
-        } => {
-            if unary.is_empty() && follow.is_empty() {
+        Expression::Base { term, follow } => {
+            if follow.is_empty() {
                 if let Term::Expr(inner) = &term.elem {
                     unroll(inner.as_ref());
                 }
@@ -36,11 +32,7 @@ fn unroll(expr: &Expression) -> &Expression {
 // x?.y = z -> true
 fn can_short_circuit(expr: &Expression) -> bool {
     match expr {
-        Expression::Base {
-            unary: _,
-            term: _,
-            follow,
-        } => {
+        Expression::Base { term: _, follow } => {
             for follow in follow {
                 match follow.elem {
                     Follow::Index(ListAccessKind::Safe, _) => return true,
@@ -56,10 +48,7 @@ fn can_short_circuit(expr: &Expression) -> bool {
             false
         }
 
-        Expression::AssignOp { op: _, lhs, rhs: _ } => {
-            return can_short_circuit(lhs);
-        }
-
+        Expression::AssignOp { op: _, lhs, rhs: _ } => can_short_circuit(lhs),
         Expression::BinaryOp { .. } => false,
         Expression::TernaryOp { .. } => false,
     }
@@ -72,56 +61,42 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
         match context {
             // Proc arguments are only treated as associative if they contain an unwrapped assign operation where the LHS is not a nested expression
             ArgsContext::Proc => {
-                match arg {
-                    Expression::AssignOp {
-                        op: AssignOp::Assign,
-                        lhs,
-                        rhs: _,
-                    } => {
-                        // BYOND's behaviour for short-circuiting ops here is mad, so I'm going to error instead of matching it
-                        // TODO: Move to emit code?
-                        if can_short_circuit(unroll(lhs)) {
-                            return Err(CompileError::AmbiguousListConstructor);
-                        }
-
-                        match lhs.as_ref() {
-                            Expression::Base {
-                                unary: _,
-                                term,
-                                follow: _,
-                            } => {
-                                if !matches!(term.elem, Term::Expr(_)) {
-                                    found_associative = true;
-                                }
-                            }
-
-                            _ => {}
-                        }
+                if let Expression::AssignOp {
+                    op: AssignOp::Assign,
+                    lhs,
+                    rhs: _,
+                } = arg
+                {
+                    // BYOND's behaviour for short-circuiting ops here is mad, so I'm going to error instead of matching it
+                    // TODO: Move to emit code?
+                    if can_short_circuit(unroll(lhs)) {
+                        return Err(CompileError::AmbiguousListConstructor);
                     }
 
-                    _ => {}
+                    if let Expression::Base { term, follow: _ } = lhs.as_ref() {
+                        if !matches!(term.elem, Term::Expr(_)) {
+                            found_associative = true;
+                        }
+                    }
                 }
             }
 
             // Lists arguments are treated as associative if they contain _any_ assign operation (after unrolling)
             ArgsContext::List => {
-                match unroll(arg) {
-                    Expression::AssignOp {
-                        op: AssignOp::Assign,
-                        lhs,
-                        rhs: _,
-                    } => {
-                        // BYOND's behaviour for short-circuiting ops here is mad, so I'm going to error instead of matching it
-                        // TODO: Move to emit code?
-                        if can_short_circuit(unroll(lhs)) {
-                            return Err(CompileError::AmbiguousListConstructor);
-                        }
-
-                        // Finding an assign op means these args are associative
-                        found_associative = true;
+                if let Expression::AssignOp {
+                    op: AssignOp::Assign,
+                    lhs,
+                    rhs: _,
+                } = unroll(arg)
+                {
+                    // BYOND's behaviour for short-circuiting ops here is mad, so I'm going to error instead of matching it
+                    // TODO: Move to emit code?
+                    if can_short_circuit(unroll(lhs)) {
+                        return Err(CompileError::AmbiguousListConstructor);
                     }
 
-                    _ => {}
+                    // Finding an assign op means these args are associative
+                    found_associative = true;
                 }
             }
         }
@@ -212,13 +187,8 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
             rhs,
         } = &arg
         {
-            if let Expression::Base {
-                unary,
-                term,
-                follow,
-            } = lhs.as_ref()
-            {
-                if unary.is_empty() && follow.is_empty() {
+            if let Expression::Base { term, follow } = lhs.as_ref() {
+                if follow.is_empty() {
                     // TODO: BYOND would change null to "null" here.
 
                     if let Term::Ident(ident) = &term.elem {

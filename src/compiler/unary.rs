@@ -34,7 +34,12 @@ fn emit_single(
         }
 
         // l-value mutating unary ops
-        UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr => {
+        UnaryOp::PreIncr
+        | UnaryOp::PostIncr
+        | UnaryOp::PreDecr
+        | UnaryOp::PostDecr
+        | UnaryOp::Reference
+        | UnaryOp::Dereference => {
             let label = format!("LAB_{:0>4X}", compiler.label_count);
             compiler.label_count += 1;
 

@@ -65,7 +65,7 @@ macro_rules! simple_stack_procs {
                         args::emit_normal(compiler, args::ArgsContext::Proc, args.to_owned())?;
 
                         $(
-                            arg_idx = arg_idx + 1;
+                            arg_idx += 1;
 
                             if arg_count < arg_idx {
                                 #[allow(unused)]

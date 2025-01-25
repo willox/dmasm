@@ -20,8 +20,10 @@ pub(super) fn emit(
                 // We currently treat `.` and `:` as the same
                 // TODO: Should we type check?
                 match access_kind {
-                    PropertyAccessKind::Dot | PropertyAccessKind::Colon => {
-                        field_buffer.push(ident);
+                    PropertyAccessKind::Dot
+                    | PropertyAccessKind::Colon
+                    | PropertyAccessKind::Scope => {
+                        field_buffer.push(ident.into());
                     }
 
                     PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
@@ -31,7 +33,7 @@ pub(super) fn emit(
                         let short_circuit = compiler.short_circuit();
                         compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
 
-                        kind = EvalKind::Field(ChainBuilder::begin(Variable::Cache), ident);
+                        kind = EvalKind::Field(ChainBuilder::begin(Variable::Cache), ident.into());
                     }
                 }
             }
@@ -75,10 +77,12 @@ pub(super) fn emit(
 
                 match index_kind {
                     // Global call syntax `global.f()`
-                    PropertyAccessKind::Dot | PropertyAccessKind::Colon
+                    PropertyAccessKind::Dot
+                    | PropertyAccessKind::Colon
+                    | PropertyAccessKind::Scope
                         if matches!(kind, EvalKind::Global) && field_buffer.is_empty() =>
                     {
-                        match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                        match args::emit(compiler, args::ArgsContext::Proc, args.into_vec())? {
                             args::ArgsResult::Normal => {
                                 // We're treating all Term::Call expressions as global calls
                                 compiler.emit_ins(Instruction::CallGlob(
@@ -104,7 +108,9 @@ pub(super) fn emit(
 
                     // We just treat these as the same
                     // TODO: Should we type check?
-                    PropertyAccessKind::Dot | PropertyAccessKind::Colon => {
+                    PropertyAccessKind::Dot
+                    | PropertyAccessKind::Colon
+                    | PropertyAccessKind::Scope => {
                         // TODO: Can emit much cleaner code when no params
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
@@ -113,12 +119,12 @@ pub(super) fn emit(
                         compiler.emit_ins(Instruction::SetVar(Variable::Cache));
                         compiler.emit_ins(Instruction::PushCache);
 
-                        match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                        match args::emit(compiler, args::ArgsContext::Proc, args.into_vec())? {
                             args::ArgsResult::Normal => {
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.into())),
+                                    Variable::DynamicProc(DMString(ident.as_str().into())),
                                     arg_count,
                                 ));
                             }
@@ -129,7 +135,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.into())),
+                                    Variable::DynamicProc(DMString(ident.as_str().into())),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -138,7 +144,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.into())),
+                                    Variable::DynamicProc(DMString(ident.as_str().into())),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -156,12 +162,12 @@ pub(super) fn emit(
                         // We'll need our src after pushing the parameters
                         compiler.emit_ins(Instruction::PushCache);
 
-                        match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                        match args::emit(compiler, args::ArgsContext::Proc, args.into_vec())? {
                             args::ArgsResult::Normal => {
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.into())),
+                                    Variable::DynamicProc(DMString(ident.as_str().into())),
                                     arg_count,
                                 ));
                             }
@@ -172,7 +178,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.into())),
+                                    Variable::DynamicProc(DMString(ident.as_str().into())),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -181,7 +187,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.into())),
+                                    Variable::DynamicProc(DMString(ident.as_str().into())),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -190,6 +196,15 @@ pub(super) fn emit(
                 }
 
                 kind = EvalKind::Stack;
+            }
+
+            Follow::Unary(op) => {
+                kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+                kind = unary::emit(compiler, vec![op], kind)?;
+            }
+
+            Follow::ProcReference(ident) | Follow::StaticField(ident) => {
+                unreachable!()
             }
         }
     }

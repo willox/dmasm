@@ -54,7 +54,8 @@ pub(super) fn emit(
         | BinaryOp::BitXor
         | BinaryOp::BitOr
         | BinaryOp::LShift
-        | BinaryOp::RShift => {
+        | BinaryOp::RShift
+        | BinaryOp::FloatMod => {
             // Bring LHS to stack
             let lhs = compiler.emit_expr(lhs)?;
             compiler.emit_move_to_stack(lhs)?;
@@ -87,6 +88,7 @@ pub(super) fn emit(
                 BinaryOp::BitOr => compiler.emit_ins(Instruction::Bor),
                 BinaryOp::LShift => compiler.emit_ins(Instruction::LShift),
                 BinaryOp::RShift => compiler.emit_ins(Instruction::RShift),
+                BinaryOp::FloatMod => compiler.emit_ins(Instruction::FloatMod),
                 _ => unreachable!(),
             }
 

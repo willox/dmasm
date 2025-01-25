@@ -14,7 +14,7 @@ pub trait Operand: Sized {
 
 // This is a separate trait just so that the large amount of nom code can live in operands_deserialize
 pub trait OperandDeserialize: Sized {
-    fn deserialize<'a, E>(i: &'a str) -> nom::IResult<&str, Self, E>
+    fn deserialize<'a, E>(i: &'a str) -> nom::IResult<&'a str, Self, E>
     where
         E: nom::error::ParseError<&'a str>
             + nom::error::FromExternalError<&'a str, std::num::ParseIntError>;
