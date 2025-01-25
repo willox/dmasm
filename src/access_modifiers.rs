@@ -45,8 +45,10 @@ access_modifiers! {
     // UnkFFEA = 0xFFEA,
     // UnkFFEB = 0xFFEB,
     // UnkFFEC = 0xFFEC,
+    // UnkFFED = 0xFFED,
+    PtrRef = 0xFFEF,
 }
 
 pub fn is_access_modifier(value: u32) -> bool {
-    value >= 0xFFCD && value <= 0xFFEC
+    value >= 0xFFCD && value <= 0xFFEF
 }

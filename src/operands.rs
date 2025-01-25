@@ -700,6 +700,7 @@ pub enum Variable {
     DynamicVerb(DMString),
     StaticProc(Proc),
     DynamicProc(DMString),
+    PtrRef(Box<Variable>),
     //RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
 }
 
@@ -789,6 +790,10 @@ impl Operand for Variable {
                 asm.emit(access_modifiers::StaticVerb);
                 proc.assemble(asm)?;
             }
+            Variable::PtrRef(var) => {
+                asm.emit(access_modifiers::PtrRef);
+                var.assemble(asm)?;
+            }
         }
 
         Ok(())
@@ -845,6 +850,7 @@ impl Operand for Variable {
             access_modifiers::DynamicVerb => Variable::DynamicVerb(DMString::disassemble(dism)?),
             access_modifiers::StaticProc => Variable::StaticProc(Proc::disassemble(dism)?),
             access_modifiers::StaticVerb => Variable::StaticVerb(Proc::disassemble(dism)?),
+            access_modifiers::PtrRef => Variable::PtrRef(Box::new(Variable::disassemble(dism)?)),
 
             other => {
                 return Err(DisassembleError::UnknownAccessModifier {
@@ -923,6 +929,10 @@ impl Operand for Variable {
                 write!(f, "dynamic_proc(")?;
                 proc.serialize(f)?;
                 write!(f, ")")
+            }
+            Variable::PtrRef(var) => {
+                write!(f, "&")?;
+                var.serialize(f)
             }
         }
     }
