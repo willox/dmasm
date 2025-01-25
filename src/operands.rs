@@ -701,6 +701,7 @@ pub enum Variable {
     StaticProc(Proc),
     DynamicProc(DMString),
     PtrRef(Box<Variable>),
+    PtrDeref(Box<Variable>),
     //RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
 }
 
@@ -792,6 +793,10 @@ impl Operand for Variable {
             }
             Variable::PtrRef(var) => {
                 asm.emit(access_modifiers::PtrRef);
+                var.assemble(asm)?;
+            }
+            Variable::PtrDeref(var) => {
+                asm.emit(access_modifiers::PtrDeref);
                 var.assemble(asm)?;
             }
         }
@@ -932,6 +937,10 @@ impl Operand for Variable {
             }
             Variable::PtrRef(var) => {
                 write!(f, "&")?;
+                var.serialize(f)
+            }
+            Variable::PtrDeref(var) => {
+                write!(f, "*")?;
                 var.serialize(f)
             }
         }
