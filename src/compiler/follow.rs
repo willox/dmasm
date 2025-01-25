@@ -203,7 +203,7 @@ pub(super) fn emit(
                 kind = unary::emit(compiler, vec![op], kind)?;
             }
 
-            Follow::ProcReference(ident) | Follow::StaticField(ident) => {
+            Follow::ProcReference(_ident) | Follow::StaticField(_ident) => {
                 unreachable!()
             }
         }

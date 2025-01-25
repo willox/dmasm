@@ -11,7 +11,7 @@ pub(super) fn emit(
         kind = emit_single(compiler, op, kind)?;
     }
 
-    return Ok(kind);
+    Ok(kind)
 }
 
 fn emit_single(

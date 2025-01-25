@@ -161,7 +161,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         Term::SelfCall { .. } | Term::ParentCall { .. } => {
             // Can't implement these until we compile full procs
             // Well, maybe we could
-            return Err(CompileError::UnsupportedRelativeCall);
+            Err(CompileError::UnsupportedRelativeCall)
         }
 
         Term::NewImplicit { .. } => Err(CompileError::UnsupportedImplicitNew),
@@ -169,7 +169,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             let var = compiler.emit_find_var(expr.ident.into());
             let follows: Vec<Follow> = expr
                 .fields
-                .into_iter()
+                .iter()
                 .map(|f: &Field| f.clone().into())
                 .collect();
 

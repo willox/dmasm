@@ -8,7 +8,7 @@ use nom::sequence::*;
 use nom::{character::complete::*, *};
 
 impl OperandDeserialize for u32 {
-    fn deserialize<'a, E>(i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -18,7 +18,7 @@ impl OperandDeserialize for u32 {
 }
 
 impl OperandDeserialize for i32 {
-    fn deserialize<'a, E>(i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -30,7 +30,7 @@ impl OperandDeserialize for i32 {
 }
 
 impl OperandDeserialize for Label {
-    fn deserialize<'a, E>(i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -39,7 +39,7 @@ impl OperandDeserialize for Label {
 }
 
 impl OperandDeserialize for Proc {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -48,7 +48,7 @@ impl OperandDeserialize for Proc {
 }
 
 impl OperandDeserialize for DMString {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -62,7 +62,7 @@ impl OperandDeserialize for DMString {
 }
 
 impl OperandDeserialize for RangeParams {
-    fn deserialize<'a, E>(i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -72,7 +72,7 @@ impl OperandDeserialize for RangeParams {
 }
 
 impl OperandDeserialize for IsInParams {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -81,7 +81,7 @@ impl OperandDeserialize for IsInParams {
 }
 
 impl OperandDeserialize for SwitchParams {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -90,7 +90,7 @@ impl OperandDeserialize for SwitchParams {
 }
 
 impl OperandDeserialize for PickSwitchParams {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -99,7 +99,7 @@ impl OperandDeserialize for PickSwitchParams {
 }
 
 impl OperandDeserialize for SwitchRangeParams {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -108,7 +108,7 @@ impl OperandDeserialize for SwitchRangeParams {
 }
 
 impl OperandDeserialize for PickProbParams {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -117,7 +117,7 @@ impl OperandDeserialize for PickProbParams {
 }
 
 impl OperandDeserialize for Value {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -126,7 +126,7 @@ impl OperandDeserialize for Value {
 }
 
 impl OperandDeserialize for Variable {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
@@ -135,7 +135,7 @@ impl OperandDeserialize for Variable {
 }
 
 impl OperandDeserialize for TypeFilter {
-    fn deserialize<'a, E>(_i: &'a str) -> IResult<&str, Self, E>
+    fn deserialize<'a, E>(_i: &'a str) -> IResult<&'a str, Self, E>
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {

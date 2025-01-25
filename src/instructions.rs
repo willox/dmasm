@@ -80,9 +80,9 @@ macro_rules! instructions {
                 Ok(())
             }
 
-            pub fn deserialize<'b, E: 'b>(i: &'b str) -> nom::IResult<&str, Self, E>
+            pub fn deserialize<'b, E>(i: &'b str) -> nom::IResult<&'b str, Self, E>
             where
-                E: nom::error::ParseError<&'b str>
+                E: 'b + nom::error::ParseError<&'b str>
                     + nom::error::FromExternalError<&'b str, std::num::ParseIntError>,
             {
                 let (i, name) = parser::whitespace(parser::parse_identifier)(i)?;
