@@ -489,7 +489,9 @@ instructions! {
     0x160 = SpliceTextChar,
     0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
-    // 0x163 .. 0x168
+    // 0x163 .. 0x165
+    0x167 = JsonEncodeFlags,
+    0x168 = JsonDecodeFlags,
     0x169 = Ceil,
     0x16A = Trunc,
     0x16B = Fract,
