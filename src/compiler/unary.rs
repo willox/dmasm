@@ -19,6 +19,7 @@ fn emit_single(
     op: UnaryOp,
     kind: EvalKind,
 ) -> Result<EvalKind, CompileError> {
+    let mut return_kind = EvalKind::Stack;
     match op {
         // Simple unary ops
         UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot => {
@@ -63,6 +64,10 @@ fn emit_single(
                 UnaryOp::PostIncr => compiler.emit_ins(Instruction::PostInc(var)),
                 UnaryOp::PreDecr => compiler.emit_ins(Instruction::PreDec(var)),
                 UnaryOp::PostDecr => compiler.emit_ins(Instruction::PostDec(var)),
+                UnaryOp::Reference => return_kind = EvalKind::Var(Variable::PtrRef(Box::new(var))),
+                UnaryOp::Dereference => {
+                    return_kind = EvalKind::Var(Variable::PtrDeref(Box::new(var)))
+                }
                 _ => unreachable!(),
             }
 
@@ -70,5 +75,5 @@ fn emit_single(
         }
     }
 
-    Ok(EvalKind::Stack)
+    Ok(return_kind)
 }

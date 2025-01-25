@@ -203,8 +203,10 @@ pub(super) fn emit(
                 kind = unary::emit(compiler, vec![op], kind)?;
             }
 
-            Follow::ProcReference(_ident) | Follow::StaticField(_ident) => {
-                unreachable!()
+            Follow::ProcReference(ident) | Follow::StaticField(ident) => {
+                compiler.emit_ins(Instruction::GetVar(Variable::Initial(Box::new(
+                    Variable::Global(DMString(ident.as_str().into())),
+                ))));
             }
         }
     }
