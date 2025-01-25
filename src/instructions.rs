@@ -496,12 +496,15 @@ instructions! {
     0x16C = IsNaN,
     0x16D = IsInf,
     0x16E = TrimText,
-    // 0x16F .. 0x171
+    0x16F = FTime,
+    0x170 = BlockXYZ,
+    // 0x171
     0x172 = NoiseHash,
-    0x173 = PowSquare, // Optimization whenever ** 2 is used.
-    // 0x174
+    0x173 = PowSquare, // Optimization whenever x ** 2 or x ** x is used.
+    0x174 = PowNegativeOne, // Optimization whenever x ** -1 is used.
     0x175 = GetStepsTo,
-    // 0x176 .. 0x177
+    0x176 = FloatMod,
+    0x177 = AugFloatMod(var: Variable),
     0x178 = RefCount,
 
     0x1337 = AuxtoolsDebugBreak,
