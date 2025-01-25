@@ -121,7 +121,7 @@ instructions! {
     0x08 = OutputFtp,
     0x09 = OutputRun,
     // 0x0A
-    // 0x0B
+    0x0B = Missile,
     0x0C = Del,
     0x0D = Test,
     0x0E = Not,
