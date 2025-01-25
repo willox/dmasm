@@ -45,7 +45,7 @@ impl Operand for u32 {
 //
 impl Operand for i32 {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        asm.emit(unsafe { std::mem::transmute(*self) });
+        asm.emit(unsafe { std::mem::transmute::<i32, u32>(*self) });
         Ok(())
     }
 
@@ -185,12 +185,8 @@ impl Operand for DMString {
         let mut format = vec![];
         let mut iter = self.0.iter();
 
-        loop {
-            let byte = match iter.next() {
-                Some(x) => *x,
-                None => break,
-            };
-
+        while let Some(byte_ref) = iter.next() {
+            let byte = *byte_ref;
             if byte == 0xFF {
                 // NOTE: Doesn't hold state for formatting, so some strings relying on are a little off
                 format.extend_from_slice(match iter.next() {
