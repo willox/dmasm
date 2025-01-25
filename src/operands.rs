@@ -852,6 +852,9 @@ impl Operand for Variable {
             access_modifiers::StaticProc => Variable::StaticProc(Proc::disassemble(dism)?),
             access_modifiers::StaticVerb => Variable::StaticVerb(Proc::disassemble(dism)?),
             access_modifiers::PtrRef => Variable::PtrRef(Box::new(Variable::disassemble(dism)?)),
+            access_modifiers::PtrDeref => {
+                Variable::PtrDeref(Box::new(Variable::disassemble(dism)?))
+            }
 
             other => {
                 return Err(DisassembleError::UnknownAccessModifier {
