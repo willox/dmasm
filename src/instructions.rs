@@ -491,7 +491,7 @@ instructions! {
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
     // 0x163
     0x164 = Gradient,
-    // 0x165
+    0x165 = LoadResource,
     // 0x166
     0x167 = JsonEncodeFlags,
     0x168 = JsonDecodeFlags,
