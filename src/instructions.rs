@@ -121,7 +121,7 @@ instructions! {
     0x08 = OutputFtp,
     0x09 = OutputRun,
     // 0x0A
-    // 0x0B
+    0x0B = Missile,
     0x0C = Del,
     0x0D = Test,
     0x0E = Not,
@@ -484,11 +484,33 @@ instructions! {
     0x15B = PushCacheKey,
     0x15C = PopCacheKey,
     0x15D = Time2TextTZ(arg_count: u32),
-    // 0x15E
+    0x15E = MakeGenerator,
     0x15F = SpliceText,
     0x160 = SpliceTextChar,
     0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
+    // 0x163
+    0x164 = Gradient,
+    0x165 = LoadResource,
+    // 0x166
+    0x167 = JsonEncodeFlags,
+    0x168 = JsonDecodeFlags,
+    0x169 = Ceil,
+    0x16A = Trunc,
+    0x16B = Fract,
+    0x16C = IsNaN,
+    0x16D = IsInf,
+    0x16E = TrimText,
+    0x16F = FTime,
+    0x170 = BlockXYZ,
+    // 0x171
+    0x172 = NoiseHash,
+    0x173 = PowSquare, // Optimization whenever x ** 2 or x ** x is used.
+    0x174 = PowNegativeOne, // Optimization whenever x ** -1 is used.
+    0x175 = GetStepsTo,
+    0x176 = FloatMod,
+    0x177 = AugFloatMod(var: Variable),
+    0x178 = RefCount,
 
     0x1337 = AuxtoolsDebugBreak,
     0x1338 = AuxtoolsDebugBreakNop,

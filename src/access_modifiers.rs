@@ -16,7 +16,7 @@ access_modifiers! {
     // UnkFFD2 = 0xFFD2,
     // UnkFFD3 = 0xFFD3,
     // UnkFFD4 = 0xFFD4,
-    // UnkFFD5 = 0xFFD5,
+    PtrDeref = 0xFFD5,
     // UnkFFD6 = 0xFFD6,
     // UnkFFD7 = 0xFFD7,
     Cache = 0xFFD8,
@@ -45,8 +45,10 @@ access_modifiers! {
     // UnkFFEA = 0xFFEA,
     // UnkFFEB = 0xFFEB,
     // UnkFFEC = 0xFFEC,
+    // UnkFFED = 0xFFED,
+    PtrRef = 0xFFEF,
 }
 
 pub fn is_access_modifier(value: u32) -> bool {
-    value >= 0xFFCD && value <= 0xFFEC
+    value >= 0xFFCD && value <= 0xFFEF
 }
