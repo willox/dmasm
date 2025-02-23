@@ -1,7 +1,7 @@
 [package]
 name = "dmasm"
 version = "0.1.0"
-authors = ["William Wallace <me@wiox.me>"]
+authors = ["Sophie Wallace <sophie@wiox.me>"]
 edition = "2018"
 license = "GPL-3.0"
 repository = "https://github.com/willox/dmasm"
