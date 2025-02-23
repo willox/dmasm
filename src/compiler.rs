@@ -182,13 +182,12 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
     let kind = compiler.emit_expr(expr)?;
     compiler.emit_move_to_stack(kind)?;
 
-    let mut arg_id = 0;
-    for _ in params {
+    let param_amt = params.len() as u32;
+    for arg_id in 0..param_amt {
         compiler.emit_ins(Instruction::GetVar(Variable::Arg(arg_id)));
-        arg_id += 1;
     }
 
-    compiler.emit_ins(Instruction::NewList(params.len() as u32 + 1));
+    compiler.emit_ins(Instruction::NewList(param_amt + 1));
     compiler.emit_ins(Instruction::Ret);
     Ok(compiler.nodes)
 }

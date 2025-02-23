@@ -602,7 +602,7 @@ impl Operand for Value {
         let offset = dism.current_offset;
 
         let tag = dism.read_u32()?;
-        let data = (tag & 0xFF00) << 8 | dism.read_u32()?;
+        let data = ((tag & 0xFF00) << 8) | dism.read_u32()?;
         let tag = tag & 0xFF;
 
         // Number is a special snowflake
