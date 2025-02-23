@@ -41,18 +41,14 @@ impl ChainBuilder {
 
     // TODO: dedupe
     fn resolve2(var: &mut Variable) {
-        match var {
-            Variable::SetCache(lhs, rhs) => match **rhs {
-                Variable::SetCache { .. } => {
-                    Self::resolve2(rhs);
-                }
-                _ => {
-                    *var = (**lhs).clone();
-                }
-            },
-
-            _ => {}
-        }
+        if let Variable::SetCache(lhs, rhs) = var { match **rhs {
+            Variable::SetCache { .. } => {
+                Self::resolve2(rhs);
+            }
+            _ => {
+                *var = (**lhs).clone();
+            }
+        } }
     }
 
     fn last_setcache_rhs(&mut self) -> Option<&mut Box<Variable>> {

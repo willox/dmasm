@@ -50,5 +50,5 @@ access_modifiers! {
 }
 
 pub fn is_access_modifier(value: u32) -> bool {
-    value >= 0xFFCD && value <= 0xFFEF
+    (0xFFCD..=0xFFEF).contains(&value)
 }

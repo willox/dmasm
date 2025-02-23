@@ -94,21 +94,21 @@ impl<'a, E: DisassembleEnv> Disassembler<'a, E> {
     }
 
     pub fn peek_u32(&mut self) -> Option<u32> {
-        self.bytecode.get(self.current_offset as usize).map(|x| *x)
+        self.bytecode.get(self.current_offset as usize).copied()
     }
 
     pub fn read_u32(&mut self) -> Result<u32, DisassembleError> {
         let val = self
             .bytecode
             .get(self.current_offset as usize)
-            .map(|x| *x)
+            .copied()
             .ok_or(DisassembleError::UnexpectedEnd);
         self.current_offset += 1;
         val
     }
 
     pub fn read_i32(&mut self) -> Result<i32, DisassembleError> {
-        unsafe { Ok(std::mem::transmute(self.read_u32()?)) }
+        unsafe { Ok(std::mem::transmute::<u32, i32>(self.read_u32()?)) }
     }
 
     pub fn reserve_destination(&mut self, offset: u32) {

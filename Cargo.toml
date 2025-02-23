@@ -1,12 +1,14 @@
 [package]
 name = "dmasm"
 version = "0.1.0"
-authors = ["William Wallace <me@wiox.me>"]
+authors = ["Sophie Wallace <sophie@wiox.me>"]
 edition = "2018"
+license = "GPL-3.0"
+repository = "https://github.com/willox/dmasm"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-nom = "7.1.3"
-bitflags = "1.2.1"
-dreammaker = { git = "https://github.com/willox/SpacemanDMM", branch = "fixes" }
+nom = "7"
+bitflags = "2"
+dreammaker = { git = "https://github.com/SpaceManiac/SpacemanDMM", tag = "suite-1.9" }

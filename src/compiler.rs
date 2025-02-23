@@ -65,6 +65,7 @@ pub enum CompileError {
     UnsupportedImplicitLocate,
     UnsupportedStringInterpolation,
     UnsupportedInput,
+    UnsupportedCompilerMacro { name: String },
 
     AmbiguousListConstructor,
     InvalidLocateArgs,
@@ -141,6 +142,9 @@ impl fmt::Display for CompileError {
                 "too many argument(s) for: {} (expected {})",
                 proc, expected
             ),
+            CompileError::UnsupportedCompilerMacro { name } => {
+                write!(f, "unsupported compiler macro: {}", name)
+            }
         }
     }
 }
@@ -178,13 +182,12 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
     let kind = compiler.emit_expr(expr)?;
     compiler.emit_move_to_stack(kind)?;
 
-    let mut arg_id = 0;
-    for _ in params {
+    let param_amt = params.len() as u32;
+    for arg_id in 0..param_amt {
         compiler.emit_ins(Instruction::GetVar(Variable::Arg(arg_id)));
-        arg_id += 1;
     }
 
-    compiler.emit_ins(Instruction::NewList(params.len() as u32 + 1));
+    compiler.emit_ins(Instruction::NewList(param_amt + 1));
     compiler.emit_ins(Instruction::Ret);
     Ok(compiler.nodes)
 }
@@ -236,7 +239,7 @@ struct Compiler<'a> {
     short_circuit_labels: Vec<(String, bool)>,
 }
 
-impl<'a> Compiler<'a> {
+impl Compiler<'_> {
     fn emit_ins(&mut self, ins: Instruction) {
         self.nodes.push(Node::Instruction(ins, ()));
     }
@@ -304,7 +307,7 @@ impl<'a> Compiler<'a> {
 
             EvalKind::Range => Err(CompileError::UnexpectedRange),
             EvalKind::Global => Err(CompileError::UnexpectedGlobal),
-            EvalKind::ArgList => return Err(CompileError::UnexpectedArgList),
+            EvalKind::ArgList => Err(CompileError::UnexpectedArgList),
 
             EvalKind::Field(mut builder, field) => {
                 builder.append(DMString(field.into()));
@@ -327,15 +330,11 @@ impl<'a> Compiler<'a> {
             Expression::BinaryOp { op, lhs, rhs } => binary_ops::emit(self, op, *lhs, *rhs),
             Expression::AssignOp { op, lhs, rhs } => assignment::emit(self, op, *lhs, *rhs),
 
-            Expression::Base {
-                unary,
-                term,
-                follow,
-            } => {
-                let unspanned_follows: Vec<Follow> = follow.into_iter().map(|f| f.elem).collect();
+            Expression::Base { term, follow } => {
+                let unspanned_follows: Vec<Follow> =
+                    follow.iter().map(|f| f.elem.clone()).collect();
                 let kind = term::emit(self, term.elem)?;
                 let kind = follow::emit(self, unspanned_follows, kind)?;
-                let kind = unary::emit(self, unary, kind)?;
                 Ok(kind)
             }
         }
@@ -367,7 +366,8 @@ fn compile_test() {
     let context: dreammaker::Context = Default::default();
     let lexer =
         dreammaker::lexer::Lexer::new(&context, Default::default(), "pick(1;;2,3;4)".as_bytes());
-    let expr = dreammaker::parser::parse_expression(&context, Default::default(), lexer);
+    let expr: Result<Expression, dreammaker::DMError> =
+        dreammaker::parser::parse_expression(&context, Default::default(), lexer);
     context.assert_success();
     println!("{:#?}\n\n\n", expr);
 

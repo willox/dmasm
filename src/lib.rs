@@ -42,7 +42,7 @@ impl<D> std::fmt::Display for Node<D> {
             Self::Label(name) => writeln!(f, "{}:", name),
             Self::Instruction(ins, _) => {
                 ins.serialize(f)?;
-                write!(f, "\n")
+                writeln!(f)
             }
         }
     }
@@ -143,9 +143,9 @@ impl disassembler::DisassembleEnv for TestDisassembleEnv {
     }
 }
 
+#[ignore = "disabled"]
 #[test]
 fn test_assemble() {
-    return;
     let nodes = parser::parse(
         r#"
 DbgFile "main.dm"

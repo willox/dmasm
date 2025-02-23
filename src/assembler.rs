@@ -40,8 +40,9 @@ impl<'a, E: AssembleEnv> Assembler<'a, E> {
         self.bytecode.push(code);
     }
 
-    pub fn emit_label_operand(&mut self, name: &String) {
-        self.jump_sources.push((self.bytecode.len(), name.clone()));
+    pub fn emit_label_operand(&mut self, name: &str) {
+        self.jump_sources
+            .push((self.bytecode.len(), name.to_owned()));
         self.emit(0xC0C0C0C0);
     }
 }

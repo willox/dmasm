@@ -65,7 +65,7 @@ macro_rules! simple_stack_procs {
                         args::emit_normal(compiler, args::ArgsContext::Proc, args.to_owned())?;
 
                         $(
-                            arg_idx = arg_idx + 1;
+                            arg_idx += 1;
 
                             if arg_count < arg_idx {
                                 #[allow(unused)]
@@ -227,7 +227,7 @@ macro_rules! simple_vararg_procs {
         fn eval_simple_vararg_procs(
             compiler: &mut Compiler<'_>,
             name: &str,
-            args: &Vec<Expression>,
+            args: &[Expression],
         ) -> Result<Option<EvalKind>, CompileError> {
             let args_len = args.len() as u32;
 
@@ -246,7 +246,7 @@ macro_rules! simple_vararg_procs {
                             }
                         )?
 
-                        args::emit_normal(compiler, args::ArgsContext::Proc, args.clone())?;
+                        args::emit_normal(compiler, args::ArgsContext::Proc, args.to_vec())?;
                         compiler.emit_ins($instruction(args_len));
                         Ok(Some(EvalKind::Stack))
                     }

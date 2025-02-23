@@ -62,7 +62,7 @@ impl StringBuilder {
     }
 
     fn push(&mut self, data: &[u8]) -> Result<(), StringError> {
-        let mut it = data.into_iter().peekable();
+        let mut it = data.iter().peekable();
 
         loop {
             match it.next() {

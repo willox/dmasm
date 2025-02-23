@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use dreammaker::ast::*;
 use operands::PickProbParams;
 
@@ -29,6 +31,9 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
 
         // Identifiers. These could be params or globals.
         Term::Ident(ident) => Ok(compiler.emit_find_var(ident)),
+        Term::GlobalIdent(ident) => Ok(EvalKind::Var(Variable::Global(DMString(
+            ident.as_str().into(),
+        )))),
 
         // Resources
         Term::Resource(resource) => {
@@ -60,16 +65,17 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
-        Term::Call(ident, args) => {
-            match builtin_procs::emit(compiler, &ident, &args)? {
+        Term::Call(ident, args) | Term::GlobalCall(ident, args) => {
+            let args_vec = args.into_vec();
+            match builtin_procs::emit(compiler, &ident, &args_vec)? {
                 // Handled by builtin_procs
                 Some(kind) => Ok(kind),
 
                 // We've got to call a proc
                 None => {
-                    let arg_count = args.len() as u32;
+                    let arg_count = args_vec.len() as u32;
 
-                    match args::emit(compiler, args::ArgsContext::Proc, args)? {
+                    match args::emit(compiler, args::ArgsContext::Proc, args_vec)? {
                         args::ArgsResult::Normal => {
                             // We're treating all Term::Call expressions as global calls
                             compiler.emit_ins(Instruction::CallGlob(
@@ -122,7 +128,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             }
 
             // Push RHS
-            match args::emit(compiler, args::ArgsContext::List, rhs)? {
+            match args::emit(compiler, args::ArgsContext::List, rhs.into_vec())? {
                 args::ArgsResult::Normal => match lhs_len {
                     1 => compiler.emit_ins(Instruction::CallPath(rhs_len as u32)),
                     2 => compiler.emit_ins(Instruction::CallName(rhs_len as u32)),
@@ -155,39 +161,39 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         Term::SelfCall { .. } | Term::ParentCall { .. } => {
             // Can't implement these until we compile full procs
             // Well, maybe we could
-            return Err(CompileError::UnsupportedRelativeCall);
+            Err(CompileError::UnsupportedRelativeCall)
         }
 
-        Term::New { type_, args } => match type_ {
-            NewType::Prefab(prefab) => {
-                if !prefab.vars.is_empty() {
-                    return Err(CompileError::UnsupportedPrefabWithVars);
-                }
+        Term::NewImplicit { .. } => Err(CompileError::UnsupportedImplicitNew),
+        Term::NewMiniExpr { expr, args } => {
+            let var = compiler.emit_find_var(expr.ident.into());
+            let follows: Vec<Follow> = expr
+                .fields
+                .iter()
+                .map(|f: &Field| f.clone().into())
+                .collect();
 
-                let path = format!("{}", FormatTypePath(&prefab.path));
-                let typeval = operands::Value::Path(path);
-                compiler.emit_ins(Instruction::PushVal(typeval));
+            let kind = follow::emit(compiler, follows, var)?;
+            compiler.emit_move_to_stack(kind)?;
 
-                emit_new(compiler, args)
+            emit_new(compiler, args)
+        }
+        Term::NewPrefab { prefab, args } => {
+            if !prefab.vars.is_empty() {
+                return Err(CompileError::UnsupportedPrefabWithVars);
             }
 
-            NewType::MiniExpr { ident, fields } => {
-                let var = compiler.emit_find_var(ident);
-                let follows: Vec<Follow> = fields.into_iter().map(|f| f.into()).collect();
+            let path = format!("{}", FormatTypePath(&prefab.path));
+            let typeval = operands::Value::Path(path);
+            compiler.emit_ins(Instruction::PushVal(typeval));
 
-                let kind = follow::emit(compiler, follows, var)?;
-                compiler.emit_move_to_stack(kind)?;
-
-                emit_new(compiler, args)
-            }
-
-            NewType::Implicit => Err(CompileError::UnsupportedImplicitNew),
-        },
+            emit_new(compiler, args)
+        }
 
         Term::Locate { args, in_list } => {
             let args_len = args.len();
 
-            args::emit_normal(compiler, args::ArgsContext::Proc, args)?;
+            args::emit_normal(compiler, args::ArgsContext::Proc, args.into_vec())?;
 
             match args_len {
                 // locate()
@@ -217,7 +223,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
-        Term::Pick(mut args) => {
+        Term::Pick(args) => {
             match args.len() {
                 // prob()
                 0 => {
@@ -229,9 +235,9 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
 
                 // prob(L)
                 1 => {
-                    let (lhs, rhs) = args.pop().unwrap();
+                    let (lhs, rhs) = args.into_vec().pop().unwrap();
 
-                    if let Some(_) = lhs {
+                    if lhs.is_some() {
                         return Err(CompileError::UnexpectedProbability);
                     }
 
@@ -287,7 +293,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         Term::List(args) => {
             let arg_count = args.len();
 
-            match args::emit(compiler, args::ArgsContext::List, args)? {
+            match args::emit(compiler, args::ArgsContext::List, args.into_vec())? {
                 args::ArgsResult::Normal => {
                     compiler.emit_ins(Instruction::NewList(arg_count as u32));
                 }
@@ -302,21 +308,46 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             Ok(EvalKind::Stack)
         }
 
-        Term::InterpString(_, _) => return Err(CompileError::UnsupportedStringInterpolation),
+        Term::ExternalCall {
+            library_name,
+            function_name,
+            args,
+        } => {
+            compiler.emit_expr(*library_name)?;
+            compiler.emit_expr(*function_name)?;
+
+            let args_vec = args.into_vec();
+            let arg_amount: u32 = args_vec.len().try_into().unwrap();
+            args::emit_normal(compiler, args::ArgsContext::Proc, args_vec)?;
+            compiler.emit_ins(Instruction::CallLib(arg_amount));
+
+            Ok(EvalKind::Stack)
+        }
+
+        Term::InterpString(_, _) => Err(CompileError::UnsupportedStringInterpolation),
         Term::Input {
             args: _,
             input_type: _,
             in_list: _,
-        } => return Err(CompileError::UnsupportedInput),
+        } => Err(CompileError::UnsupportedInput),
+        Term::__TYPE__ => Err(CompileError::UnsupportedCompilerMacro {
+            name: "__TYPE__".to_string(),
+        }),
+        Term::__IMPLIED_TYPE__ => Err(CompileError::UnsupportedCompilerMacro {
+            name: "__IMPLIED_TYPE__".to_string(),
+        }),
+        Term::__PROC__ => Err(CompileError::UnsupportedCompilerMacro {
+            name: "__PROC__".to_string(),
+        }),
     }
 }
 
 // Assuming the type to create will always be on the stack
 fn emit_new(
     compiler: &mut Compiler<'_>,
-    args: Option<Vec<Expression>>,
+    args: Option<Box<[Expression]>>,
 ) -> Result<EvalKind, CompileError> {
-    let args = args.unwrap_or_else(|| vec![]);
+    let args = args.unwrap_or_else(|| Box::new([])).into_vec();
     let arg_count = args.len() as u32;
 
     match args::emit(compiler, args::ArgsContext::Proc, args)? {

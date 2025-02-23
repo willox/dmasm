@@ -11,7 +11,7 @@ use nom::multi::*;
 use nom::sequence::*;
 use nom::{character::complete::*, *};
 
-fn parse_sint<'a, E>(i: &'a str) -> IResult<&str, i32, E>
+fn parse_sint<'a, E>(i: &'a str) -> IResult<&'a str, i32, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
@@ -25,7 +25,7 @@ where
     )(i)
 }
 
-fn parse_uint<'a, E>(i: &'a str) -> IResult<&str, u32, E>
+fn parse_uint<'a, E>(i: &'a str) -> IResult<&'a str, u32, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
@@ -34,7 +34,7 @@ where
     })(i)
 }
 
-pub fn parse_identifier<'a, E>(i: &'a str) -> IResult<&str, &str, E>
+pub fn parse_identifier<'a, E>(i: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
@@ -45,7 +45,7 @@ where
 }
 
 // TODO: String Formatting
-fn parse_dm_string_operand<'a, E>(i: &'a str) -> IResult<&str, operands::DMString, E>
+fn parse_dm_string_operand<'a, E>(i: &'a str) -> IResult<&'a str, operands::DMString, E>
 where
     E: ParseError<&'a str>,
 {
@@ -55,7 +55,7 @@ where
     )(i)
 }
 
-fn parse_label<'a, E>(i: &'a str) -> IResult<&str, Node, E>
+fn parse_label<'a, E>(i: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
 {
@@ -69,7 +69,7 @@ where
     )(i)
 }
 
-fn parse_comment<'a, E>(i: &'a str) -> IResult<&str, Node, E>
+fn parse_comment<'a, E>(i: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
 {
@@ -79,7 +79,7 @@ where
     )(i)
 }
 
-fn parse_label_operand<'a, E>(i: &'a str) -> IResult<&str, operands::Label, E>
+fn parse_label_operand<'a, E>(i: &'a str) -> IResult<&'a str, operands::Label, E>
 where
     E: ParseError<&'a str>,
 {
@@ -88,17 +88,17 @@ where
     })(i)
 }
 
-pub fn whitespace<'a, F: 'a, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
+pub fn whitespace<'a, F, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-    F: Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: 'a + Fn(&'a str) -> IResult<&'a str, O, E>,
 {
     delimited(multispace0, inner, multispace0)
 }
 
-fn parse_nodes<'a, E: 'a>(i: &'a str) -> IResult<&str, Vec<Node>, E>
+fn parse_nodes<'a, E>(i: &'a str) -> IResult<&'a str, Vec<Node>, E>
 where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
+    E: 'a + ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
     terminated(
         many0(delimited(

@@ -7,11 +7,7 @@ use crate::Instruction;
 // We only care if the LHS of an assignment would result in the RHS potentially be skipped!
 fn peek_is_conditional(expr: &Expression) -> bool {
     match expr {
-        Expression::Base {
-            unary: _,
-            term: _,
-            follow,
-        } => {
+        Expression::Base { term: _, follow } => {
             for follow in follow {
                 match follow.elem {
                     Follow::Index(kind, _) => match kind {
@@ -20,15 +16,23 @@ fn peek_is_conditional(expr: &Expression) -> bool {
                     },
 
                     Follow::Field(kind, _) => match kind {
-                        PropertyAccessKind::Dot | PropertyAccessKind::Colon => {}
+                        PropertyAccessKind::Dot
+                        | PropertyAccessKind::Colon
+                        | PropertyAccessKind::Scope => {}
                         PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => return true,
                     },
 
                     // We can't assign to a call's result, but I'm adding this to make the function correct anyway.
                     Follow::Call(kind, _, _) => match kind {
-                        PropertyAccessKind::Dot | PropertyAccessKind::Colon => {}
+                        PropertyAccessKind::Dot
+                        | PropertyAccessKind::Colon
+                        | PropertyAccessKind::Scope => {}
                         PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => return true,
                     },
+
+                    Follow::StaticField(_) => {}
+                    Follow::ProcReference(_) => {}
+                    Follow::Unary(_) => {}
                 }
             }
         }
@@ -79,7 +83,8 @@ fn emit_conditional(
         | AssignOp::BitOrAssign
         | AssignOp::BitXorAssign
         | AssignOp::LShiftAssign
-        | AssignOp::RShiftAssign => {
+        | AssignOp::RShiftAssign
+        | AssignOp::FloatModAssign => {
             // Push holder - We'll need it later
             compiler.emit_ins(Instruction::PushCache);
             compiler.emit_ins(Instruction::PushCacheKey);
@@ -135,6 +140,10 @@ fn emit_conditional(
                 }
                 AssignOp::RShiftAssign => {
                     compiler.emit_ins(Instruction::AugRShift(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::FloatModAssign => {
+                    compiler.emit_ins(Instruction::AugFloatMod(var));
                     compiler.emit_ins(Instruction::PushEval);
                 }
                 _ => unreachable!(),
@@ -195,7 +204,8 @@ pub(super) fn emit(
         | AssignOp::BitOrAssign
         | AssignOp::BitXorAssign
         | AssignOp::LShiftAssign
-        | AssignOp::RShiftAssign => {
+        | AssignOp::RShiftAssign
+        | AssignOp::FloatModAssign => {
             // RHS evalutes before LHS for these assignments
             let rhs = compiler.emit_expr(rhs)?;
             compiler.emit_move_to_stack(rhs)?;
@@ -259,6 +269,10 @@ pub(super) fn emit(
                 }
                 AssignOp::RShiftAssign => {
                     compiler.emit_ins(Instruction::AugRShift(var));
+                    compiler.emit_ins(Instruction::PushEval);
+                }
+                AssignOp::FloatModAssign => {
+                    compiler.emit_ins(Instruction::AugFloatMod(var));
                     compiler.emit_ins(Instruction::PushEval);
                 }
                 _ => unreachable!(),

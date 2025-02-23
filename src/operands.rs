@@ -14,7 +14,7 @@ pub trait Operand: Sized {
 
 // This is a separate trait just so that the large amount of nom code can live in operands_deserialize
 pub trait OperandDeserialize: Sized {
-    fn deserialize<'a, E>(i: &'a str) -> nom::IResult<&str, Self, E>
+    fn deserialize<'a, E>(i: &'a str) -> nom::IResult<&'a str, Self, E>
     where
         E: nom::error::ParseError<&'a str>
             + nom::error::FromExternalError<&'a str, std::num::ParseIntError>;
@@ -45,7 +45,7 @@ impl Operand for u32 {
 //
 impl Operand for i32 {
     fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        asm.emit(unsafe { std::mem::transmute(*self) });
+        asm.emit(unsafe { std::mem::transmute::<i32, u32>(*self) });
         Ok(())
     }
 
@@ -185,12 +185,8 @@ impl Operand for DMString {
         let mut format = vec![];
         let mut iter = self.0.iter();
 
-        loop {
-            let byte = match iter.next() {
-                Some(x) => *x,
-                None => break,
-            };
-
+        while let Some(byte_ref) = iter.next() {
+            let byte = *byte_ref;
             if byte == 0xFF {
                 // NOTE: Doesn't hold state for formatting, so some strings relying on are a little off
                 format.extend_from_slice(match iter.next() {
@@ -606,7 +602,7 @@ impl Operand for Value {
         let offset = dism.current_offset;
 
         let tag = dism.read_u32()?;
-        let data = (tag & 0xFF00) << 8 | dism.read_u32()?;
+        let data = ((tag & 0xFF00) << 8) | dism.read_u32()?;
         let tag = tag & 0xFF;
 
         // Number is a special snowflake
