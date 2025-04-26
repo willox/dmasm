@@ -518,7 +518,7 @@ instructions! {
     0x17d = Tlog, // <=> (less or greater) comparator
     0x17e = KeyValueIter, // for (k,v in list)
     0x17f = NewPixloc,
-    // 0x180
+    0x180 = NewVector,
     0x181 = BoundPixloc,
     // 0x182
     // 0x183
