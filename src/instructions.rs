@@ -511,9 +511,31 @@ instructions! {
     0x176 = FloatMod,
     0x177 = AugFloatMod(var: Variable),
     0x178 = RefCount,
+    0x179 = LoadExt,
+    0x17a = CallExtLoaded, // single-arg call_ext, for when you just pass the return value of load_ext to it
+    // 0x17b
+    0x17c = NewAlist,
+    0x17d = Tlog, // <=> (less or greater) comparator
+    0x17e = KeyValueIter, // for (k,v in list)
+    0x17f = NewPixloc,
+    // 0x180
+    0x181 = BoundPixloc,
+    // 0x182
+    // 0x183
+    // 0x184
+    0x185 = AsType,
+    0x186 = Sign,
+    0x187 = Lerp,
+    0x188 = ValuesSum,
+    0x189 = ValuesProduct,
+    0x18a = ValuesDot,
+    0x18b = ValuesCutUnder,
+    0x18c = ValuesCutOver,
 
     0x1337 = AuxtoolsDebugBreak,
     0x1338 = AuxtoolsDebugBreakNop,
+
+    0xffce = GeneratorNew, // ????
 }
 
 impl std::fmt::Display for Instruction {

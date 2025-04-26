@@ -11,4 +11,4 @@ repository = "https://github.com/willox/dmasm"
 [dependencies]
 nom = "7"
 bitflags = "2"
-dreammaker = { git = "https://github.com/SpaceManiac/SpacemanDMM", tag = "suite-1.9" }
+dreammaker = { git = "https://github.com/SpaceManiac/SpacemanDMM", rev = "d6bcdd50d1532571715e24b006482094d78c1ba5" }
