@@ -82,7 +82,7 @@ pub(super) fn emit(
                 BinaryOp::LessEq => compiler.emit_ins(Instruction::Tle),
                 BinaryOp::Greater => compiler.emit_ins(Instruction::Tg),
                 BinaryOp::GreaterEq => compiler.emit_ins(Instruction::Tge),
-                BinaryOp::LessOrGreater => compiler.emit_ins(Instruction::Tlog),
+                BinaryOp::LessOrGreater => compiler.emit_ins(Instruction::Spaceship),
                 BinaryOp::Equiv => compiler.emit_ins(Instruction::TestEquiv),
                 BinaryOp::NotEquiv => compiler.emit_ins(Instruction::TestNotEquiv),
                 BinaryOp::BitAnd => compiler.emit_ins(Instruction::Band),

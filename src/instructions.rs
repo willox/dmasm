@@ -515,7 +515,7 @@ instructions! {
     0x17a = CallExtLoaded, // single-arg call_ext, for when you just pass the return value of load_ext to it
     // 0x17b
     0x17c = NewAlist,
-    0x17d = Tlog, // <=> (less or greater) comparator
+    0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
     0x17e = KeyValueIter, // for (k,v in list)
     0x17f = NewPixloc,
     0x180 = NewVector,
