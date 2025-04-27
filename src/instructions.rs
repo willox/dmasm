@@ -484,7 +484,7 @@ instructions! {
     0x15B = PushCacheKey,
     0x15C = PopCacheKey,
     0x15D = Time2TextTZ(arg_count: u32),
-    0x15E = MakeGenerator,
+    0x15E = MakeGenerator(unk0: u32),
     0x15F = SpliceText,
     0x160 = SpliceTextChar,
     0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
