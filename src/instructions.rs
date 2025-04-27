@@ -516,7 +516,7 @@ instructions! {
     // 0x17b
     0x17c = NewAlist,
     0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
-    0x17e = KeyValueIter, // for (k,v in list)
+    0x17e = KeyValueIter(var: Variable), // for (k,v in list)
     0x17f = NewPixloc,
     0x180 = NewVector,
     0x181 = BoundPixloc,
@@ -534,8 +534,6 @@ instructions! {
 
     0x1337 = AuxtoolsDebugBreak,
     0x1338 = AuxtoolsDebugBreakNop,
-
-    0xffce = GeneratorNew, // ????
 }
 
 impl std::fmt::Display for Instruction {
