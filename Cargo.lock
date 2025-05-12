@@ -57,7 +57,7 @@ checksum = "5c8214115b7bf84099f1309324e63141d4c5d7cc26862f97a0a857dbefe165bd"
 [[package]]
 name = "builtins-proc-macro"
 version = "0.0.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM?rev=d6bcdd50d1532571715e24b006482094d78c1ba5#d6bcdd50d1532571715e24b006482094d78c1ba5"
+source = "git+https://github.com/SpaceManiac/SpacemanDMM?tag=suite-1.10#c1101fb3ad7971f3d19d6b81911fbd94d98fbad4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -66,9 +66,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.22.0"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b1fc10dbac614ebc03540c9dbd60e83887fda27794998c6528f1782047d540"
+checksum = "9134a6ef01ce4b366b50689c94f82c14bc72bc5d0386829828a2e2752ef7958c"
 
 [[package]]
 name = "cfg-if"
@@ -110,9 +110,9 @@ dependencies = [
 
 [[package]]
 name = "derive-where"
-version = "1.3.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2364b9aa47e460ce9bca6ac1777d14c98eef7e274eb077beed49f3adc94183ed"
+checksum = "e73f2692d4bd3cac41dca28934a39894200c9fabf49586d77d0e5954af1d7902"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -131,7 +131,7 @@ dependencies = [
 [[package]]
 name = "dreammaker"
 version = "0.1.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM?rev=d6bcdd50d1532571715e24b006482094d78c1ba5#d6bcdd50d1532571715e24b006482094d78c1ba5"
+source = "git+https://github.com/SpaceManiac/SpacemanDMM?tag=suite-1.10#c1101fb3ad7971f3d19d6b81911fbd94d98fbad4"
 dependencies = [
  "bitflags 1.3.2",
  "builtins-proc-macro",
@@ -192,9 +192,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.15.2"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
+checksum = "84b26c544d002229e640969970a2e74021aadf6e2f96372b9c58eff97de08eb3"
 
 [[package]]
 name = "indexmap"
@@ -215,7 +215,7 @@ checksum = "71dd52191aae121e8611f1e8dc3e324dd0dd1dee1e6dd91d10ee07a3cfb4d9d8"
 [[package]]
 name = "interval-tree"
 version = "0.8.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM?rev=d6bcdd50d1532571715e24b006482094d78c1ba5#d6bcdd50d1532571715e24b006482094d78c1ba5"
+source = "git+https://github.com/SpaceManiac/SpacemanDMM?tag=suite-1.10#c1101fb3ad7971f3d19d6b81911fbd94d98fbad4"
 
 [[package]]
 name = "libc"
