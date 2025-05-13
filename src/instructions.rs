@@ -484,7 +484,7 @@ instructions! {
     0x15B = PushCacheKey,
     0x15C = PopCacheKey,
     0x15D = Time2TextTZ(arg_count: u32),
-    0x15E = MakeGenerator,
+    0x15E = MakeGenerator(unk0: u32),
     0x15F = SpliceText,
     0x160 = SpliceTextChar,
     0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
@@ -511,6 +511,26 @@ instructions! {
     0x176 = FloatMod,
     0x177 = AugFloatMod(var: Variable),
     0x178 = RefCount,
+    0x179 = LoadExt,
+    0x17a = CallExtLoaded, // single-arg call_ext, for when you just pass the return value of load_ext to it
+    // 0x17b
+    0x17c = NewAlist,
+    0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
+    0x17e = KeyValueIter(var: Variable), // for (k,v in list)
+    0x17f = NewPixloc,
+    0x180 = NewVector,
+    0x181 = BoundPixloc,
+    // 0x182
+    // 0x183
+    // 0x184
+    0x185 = AsType,
+    0x186 = Sign,
+    0x187 = Lerp,
+    0x188 = ValuesSum,
+    0x189 = ValuesProduct,
+    0x18a = ValuesDot,
+    0x18b = ValuesCutUnder,
+    0x18c = ValuesCutOver,
 
     0x1337 = AuxtoolsDebugBreak,
     0x1338 = AuxtoolsDebugBreakNop,
