@@ -520,9 +520,10 @@ instructions! {
     0x17f = NewPixloc,
     0x180 = NewVector,
     0x181 = BoundPixloc,
-    // 0x182
-    // 0x183
-    // 0x184
+    // yes this is literally just sin/cos/tan 2: electric boogaloo. don't ask me why.
+    0x182 = Sin2,
+    0x183 = Cos2,
+    0x184 = Tan2,
     0x185 = AsType,
     0x186 = Sign,
     0x187 = Lerp,
