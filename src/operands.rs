@@ -149,12 +149,18 @@ impl Operand for Proc {
 //
 // DMString
 //
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct DMString(pub Vec<u8>);
 
 impl DMString {
     fn get_string_index<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> u32 {
         asm.env.get_string_index(&self.0).unwrap()
+    }
+}
+
+impl fmt::Debug for DMString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.serialize(f)
     }
 }
 
