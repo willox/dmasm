@@ -1,4 +1,4 @@
-use crate::compiler::*;
+use crate::operands::{DMString, Variable};
 
 #[derive(Debug, PartialEq)]
 pub struct ChainBuilder {
@@ -20,18 +20,18 @@ impl ChainBuilder {
         Self { var }
     }
 
-    fn resolve(&mut self) {
-        match &mut self.var {
+    fn resolve(var: &mut Variable) {
+        match var {
             Variable::Null => {
-                self.var = Variable::Cache;
+                *var = Variable::Cache;
             }
 
             Variable::SetCache(lhs, rhs) => match **rhs {
                 Variable::SetCache { .. } => {
-                    Self::resolve2(rhs);
+                    Self::resolve(rhs);
                 }
                 _ => {
-                    self.var = (**lhs).clone();
+                    *var = (**lhs).clone();
                 }
             },
 
@@ -39,35 +39,10 @@ impl ChainBuilder {
         }
     }
 
-    // TODO: dedupe
-    fn resolve2(var: &mut Variable) {
-        if let Variable::SetCache(lhs, rhs) = var { match **rhs {
-            Variable::SetCache { .. } => {
-                Self::resolve2(rhs);
-            }
-            _ => {
-                *var = (**lhs).clone();
-            }
-        } }
-    }
-
-    fn last_setcache_rhs(&mut self) -> Option<&mut Box<Variable>> {
-        if let Variable::SetCache(_, rhs) = &mut self.var {
-            if let Variable::SetCache { .. } = **rhs {
-                return Self::last_setcache_rhs2(rhs.as_mut());
-            }
-
-            return Some(rhs);
-        }
-
-        None
-    }
-
-    // TODO: dedupe
-    fn last_setcache_rhs2(var: &mut Variable) -> Option<&mut Box<Variable>> {
+    fn last_setcache_rhs(var: &mut Variable) -> Option<&mut Box<Variable>> {
         if let Variable::SetCache(_, rhs) = var {
             if let Variable::SetCache { .. } = **rhs {
-                return Self::last_setcache_rhs2(rhs.as_mut());
+                return Self::last_setcache_rhs(rhs.as_mut());
             }
 
             return Some(rhs);
@@ -77,7 +52,7 @@ impl ChainBuilder {
     }
 
     pub fn append(&mut self, field: DMString) {
-        if let Some(rhs) = self.last_setcache_rhs() {
+        if let Some(rhs) = Self::last_setcache_rhs(&mut self.var) {
             **rhs = Variable::SetCache(Box::new(Variable::Field(field)), Box::new(Variable::Null));
             return;
         }
@@ -88,12 +63,12 @@ impl ChainBuilder {
     }
 
     pub fn get(mut self) -> Variable {
-        self.resolve();
+        Self::resolve(&mut self.var);
         self.var
     }
 
     pub fn get_field(mut self, field: DMString) -> Variable {
-        if let Some(rhs) = self.last_setcache_rhs() {
+        if let Some(rhs) = Self::last_setcache_rhs(&mut self.var) {
             **rhs = Variable::Field(field);
             return self.var;
         }
@@ -102,20 +77,11 @@ impl ChainBuilder {
     }
 
     pub fn get_initial_field(mut self, field: DMString) -> Variable {
-        if let Some(rhs) = self.last_setcache_rhs() {
+        if let Some(rhs) = Self::last_setcache_rhs(&mut self.var) {
             **rhs = Variable::Initial(Box::new(Variable::Field(field)));
             return self.var;
         }
 
         Variable::Initial(Box::new(Variable::Field(field)))
-    }
-
-    pub fn get_dynamic_proc(mut self, proc: DMString) -> Variable {
-        if let Some(rhs) = self.last_setcache_rhs() {
-            **rhs = Variable::DynamicProc(proc);
-            return self.var;
-        }
-
-        Variable::DynamicProc(proc)
     }
 }

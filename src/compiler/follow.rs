@@ -1,7 +1,12 @@
-use dreammaker::ast::ListAccessKind;
+use dreammaker::ast::{Follow, ListAccessKind, PropertyAccessKind};
 
-use crate::compiler::*;
-use crate::Instruction;
+use crate::{
+    compiler::{
+        args, chain_builder::ChainBuilder, operands, unary, CompileError, Compiler, EvalKind,
+    },
+    operands::{DMString, Label, Variable},
+    Instruction,
+};
 
 pub(super) fn emit(
     compiler: &mut Compiler,
@@ -31,7 +36,8 @@ pub(super) fn emit(
                         compiler.emit_move_to_stack(kind)?;
 
                         let short_circuit = compiler.short_circuit();
-                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
+                        compiler
+                            .emit_ins(Instruction::SetCacheJmpIfNull(Label::Named(short_circuit)));
 
                         kind = EvalKind::Field(ChainBuilder::begin(Variable::Cache), ident.into());
                     }
@@ -60,7 +66,8 @@ pub(super) fn emit(
                         // Short-circuit if base is null
                         // TODO: Can we do this without using cache?
                         let short_circuit = compiler.short_circuit();
-                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
+                        compiler
+                            .emit_ins(Instruction::SetCacheJmpIfNull(Label::Named(short_circuit)));
                         compiler.emit_ins(Instruction::GetVar(Variable::Cache));
 
                         // Move inner expression to stack
@@ -157,7 +164,8 @@ pub(super) fn emit(
                         compiler.emit_move_to_stack(kind)?;
 
                         let short_circuit = compiler.short_circuit();
-                        compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label(short_circuit)));
+                        compiler
+                            .emit_ins(Instruction::SetCacheJmpIfNull(Label::Named(short_circuit)));
 
                         // We'll need our src after pushing the parameters
                         compiler.emit_ins(Instruction::PushCache);

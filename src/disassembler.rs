@@ -1,7 +1,4 @@
-use crate::Instruction;
-use crate::Node;
-
-use std::collections::HashSet;
+use crate::{Instruction, Label, Node};
 
 pub trait DisassembleEnv {
     fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>>;
@@ -35,10 +32,10 @@ pub struct DebugData<'a> {
 
 pub fn disassemble<'a, E: DisassembleEnv>(
     bytecode: &'a [u32],
-    env: &'a mut E,
+    env: &mut E,
 ) -> (Vec<Node<DebugData<'a>>>, Option<DisassembleError>) {
     let mut state = Disassembler::new(bytecode, env);
-    let mut instructions = vec![];
+    let mut instructions = Vec::with_capacity(bytecode.len() / 2);
     let mut err = None;
 
     // TODO: Move me
@@ -59,11 +56,18 @@ pub fn disassemble<'a, E: DisassembleEnv>(
         }
     }
 
-    let mut nodes = vec![];
+    state.indirection_destinations.sort_unstable();
+    state.indirection_destinations.dedup();
+
+    let mut nodes = Vec::with_capacity(instructions.len() + state.indirection_destinations.len());
 
     for (ins, dbg) in instructions {
-        if state.indirection_destinations.contains(&dbg.offset) {
-            nodes.push(Node::Label(format!("LAB_{:0>4X}", dbg.offset)));
+        if state
+            .indirection_destinations
+            .binary_search(&dbg.offset)
+            .is_ok()
+        {
+            nodes.push(Node::Label(Label::Offset(dbg.offset)));
         }
 
         nodes.push(Node::Instruction(ins, dbg));
@@ -72,19 +76,19 @@ pub fn disassemble<'a, E: DisassembleEnv>(
     (nodes, err)
 }
 
-pub struct Disassembler<'a, E: DisassembleEnv> {
+pub struct Disassembler<'a, 'e, E: DisassembleEnv> {
     pub bytecode: &'a [u32],
     pub current_offset: u32,
-    indirection_destinations: HashSet<u32>,
-    pub env: &'a mut E,
+    indirection_destinations: Vec<u32>,
+    pub env: &'e mut E,
 }
 
-impl<'a, E: DisassembleEnv> Disassembler<'a, E> {
-    fn new(bytecode: &'a [u32], env: &'a mut E) -> Self {
+impl<'a, 'e, E: DisassembleEnv> Disassembler<'a, 'e, E> {
+    fn new(bytecode: &'a [u32], env: &'e mut E) -> Self {
         Self {
             bytecode,
             current_offset: 0,
-            indirection_destinations: HashSet::new(),
+            indirection_destinations: Vec::new(),
             env,
         }
     }
@@ -108,10 +112,10 @@ impl<'a, E: DisassembleEnv> Disassembler<'a, E> {
     }
 
     pub fn read_i32(&mut self) -> Result<i32, DisassembleError> {
-        unsafe { Ok(std::mem::transmute::<u32, i32>(self.read_u32()?)) }
+        Ok(self.read_u32()? as i32)
     }
 
     pub fn reserve_destination(&mut self, offset: u32) {
-        self.indirection_destinations.insert(offset);
+        self.indirection_destinations.push(offset);
     }
 }

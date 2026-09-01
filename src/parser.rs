@@ -1,60 +1,35 @@
-use crate::operands;
-use crate::Instruction;
-use crate::Node;
-use nom::branch::*;
-use nom::bytes::complete::take_while;
-use nom::combinator::*;
-use nom::error::FromExternalError;
-use nom::error::ParseError;
-use nom::error::VerboseError;
-use nom::multi::*;
-use nom::sequence::*;
-use nom::{character::complete::*, *};
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{alpha1, alphanumeric1, multispace0},
+    combinator::recognize,
+    error::{FromExternalError, ParseError},
+    multi::many0,
+    sequence::{delimited, pair},
+    IResult,
+};
 
-fn parse_sint<'a, E>(i: &'a str) -> IResult<&'a str, i32, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
-    map_res(
-        delimited(
-            space0,
-            recognize(tuple((opt(one_of("+-")), digit1))),
-            space0,
-        ),
-        |x: &str| x.parse::<i32>(),
-    )(i)
-}
-
-fn parse_uint<'a, E>(i: &'a str) -> IResult<&'a str, u32, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
-    map_res(delimited(space0, digit1, space0), |x: &str| {
-        x.parse::<u32>()
-    })(i)
-}
+#[cfg(test)]
+use crate::{operands, Instruction, Node};
+#[cfg(test)]
+use nom::{
+    bytes::complete::take_while,
+    character::complete::{char, line_ending, space0},
+    combinator::{eof, map},
+    sequence::{preceded, terminated},
+};
 
 pub fn parse_identifier<'a, E>(i: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
     recognize(pair(
-        alt((alpha1, bytes::complete::tag("_"))),
-        many0(alt((alphanumeric1, bytes::complete::tag("_")))),
+        alt((alpha1, tag("_"))),
+        many0(alt((alphanumeric1, tag("_")))),
     ))(i)
 }
 
-// TODO: String Formatting
-fn parse_dm_string_operand<'a, E>(i: &'a str) -> IResult<&'a str, operands::DMString, E>
-where
-    E: ParseError<&'a str>,
-{
-    map(
-        delimited(char('"'), recognize(take_while(|x| x != '"')), char('"')),
-        |x: &str| operands::DMString(x.into()),
-    )(i)
-}
-
+#[cfg(test)]
 fn parse_label<'a, E>(i: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
@@ -65,10 +40,11 @@ where
             parse_identifier,
             pair(char(':'), alt((line_ending, eof))),
         ),
-        |x: &str| Node::Label(x.into()),
+        |x: &str| Node::Label(operands::Label::Named(x.into())),
     )(i)
 }
 
+#[cfg(test)]
 fn parse_comment<'a, E>(i: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
@@ -79,15 +55,6 @@ where
     )(i)
 }
 
-fn parse_label_operand<'a, E>(i: &'a str) -> IResult<&'a str, operands::Label, E>
-where
-    E: ParseError<&'a str>,
-{
-    map(delimited(space0, parse_identifier, space0), |x: &str| {
-        operands::Label(x.into())
-    })(i)
-}
-
 pub fn whitespace<'a, F, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
@@ -96,6 +63,7 @@ where
     delimited(multispace0, inner, multispace0)
 }
 
+#[cfg(test)]
 fn parse_nodes<'a, E>(i: &'a str) -> IResult<&'a str, Vec<Node>, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
@@ -114,17 +82,6 @@ where
     )(i)
 }
 
-pub fn parse(asm: &str) -> Result<Vec<Node>, String> {
-    let x = parse_nodes::<VerboseError<&str>>(asm)
-        .map(|(_, y)| y)
-        .map_err(|x| match x {
-            Err::Error(e) | Err::Failure(e) => error::convert_error(asm, e),
-            _ => panic!(),
-        });
-
-    x
-}
-
 /*
 fn parse_node<'a, E>(mut i: &'a str) -> IResult<&str, &str, E>
 where
@@ -140,30 +97,6 @@ mod tests {
     use nom::{error::ErrorKind, Err};
 
     #[test]
-    fn test_uint() {
-        assert_eq!(parse_uint::<(_, ErrorKind)>("1337"), Ok(("", 1337)));
-
-        assert_eq!(parse_uint::<(_, ErrorKind)>(" 1337 "), Ok(("", 1337)));
-
-        assert_eq!(
-            parse_uint::<(_, ErrorKind)>("Hello"),
-            Err(Err::Error(("Hello", ErrorKind::Digit)))
-        );
-    }
-
-    #[test]
-    fn test_sint() {
-        assert_eq!(parse_sint::<(_, ErrorKind)>("+1337"), Ok(("", 1337)));
-
-        assert_eq!(parse_sint::<(_, ErrorKind)>(" -1337 "), Ok(("", -1337)));
-
-        assert_eq!(
-            parse_sint::<(_, ErrorKind)>("Hello"),
-            Err(Err::Error(("Hello", ErrorKind::Digit)))
-        );
-    }
-
-    #[test]
     fn test_label() {
         assert_eq!(
             parse_label::<(_, ErrorKind)>("Invalid"),
@@ -171,19 +104,14 @@ mod tests {
         );
         assert_eq!(
             parse_label::<(_, ErrorKind)>("Loop:"),
-            Ok(("", Node::Label("Loop".into())))
+            Ok(("", Node::Label(operands::Label::Named("Loop".into()))))
         );
         assert_eq!(
             parse_label::<(_, ErrorKind)>("Loop:\nMore Stuff"),
-            Ok(("More Stuff", Node::Label("Loop".into())))
-        );
-    }
-
-    #[test]
-    fn test_label_operand() {
-        assert_eq!(
-            parse_label_operand::<(_, ErrorKind)>("identifier"),
-            Ok(("", operands::Label("identifier".into())))
+            Ok((
+                "More Stuff",
+                Node::Label(operands::Label::Named("Loop".into()))
+            ))
         );
     }
 
@@ -210,10 +138,13 @@ End
             Ok((
                 "",
                 vec![
-                    Node::Instruction(Instruction::Jmp(operands::Label("Finish".into())), ()),
+                    Node::Instruction(
+                        Instruction::Jmp(operands::Label::Named("Finish".into())),
+                        (),
+                    ),
                     Node::Comment(" Nice comment, yes!".into()),
-                    Node::Instruction(Instruction::Jmp(operands::Label("Nice".into())), ()),
-                    Node::Label("Finish".into()),
+                    Node::Instruction(Instruction::Jmp(operands::Label::Named("Nice".into())), (),),
+                    Node::Label(operands::Label::Named("Finish".into())),
                     Node::Instruction(Instruction::End, ()),
                 ]
             ))

@@ -9,18 +9,6 @@ use crate::operands::Operand;
 
 use bitflags::bitflags;
 
-pub enum Iterator {
-    Contents,
-    Block,
-    View,
-    OView,
-}
-
-pub static OVIEW: u32 = 0x08;
-pub static VIEW: u32 = 0x07;
-pub static BLOCK: u32 = 0x06;
-pub static CONTENTS: u32 = 0x05;
-
 bitflags! {
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     pub struct TypeFilter: u32 {
@@ -46,7 +34,10 @@ bitflags! {
 }
 
 impl Operand for TypeFilter {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        _asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         unimplemented!()
     }
 

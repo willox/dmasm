@@ -1,27 +1,28 @@
-#![allow(dead_code)]
-
 mod access_modifiers;
 pub mod assembler;
-pub mod disassembler;
-// pub mod builder;
+mod bytecode;
 pub mod compiler;
+pub mod disassembler;
 mod instructions;
 mod list_operands;
 mod operands;
 mod operands_deserialize;
 mod parser;
 
+pub use bytecode::{scan, BytecodeError, InstructionSpan, LabelOperand, ScannedBytecode};
 pub use disassembler::DebugData;
-pub use instructions::Instruction;
-
+pub use instructions::{Instruction, Opcode};
+pub use list_operands::TypeFilter;
+pub use operands::{
+    DMString, IsInParams, Label, PickProbParams, PickSwitchParams, Proc, RangeParams, SwitchParams,
+    SwitchRangeParams, Value, Variable,
+};
 use std::fmt::Write;
-
-struct Proc {}
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Node<D = ()> {
     Comment(String),
-    Label(String),
+    Label(Label),
     Instruction(Instruction, D),
 }
 
@@ -29,7 +30,7 @@ impl<D> Node<D> {
     pub fn strip_debug_data(self) -> Node {
         match self {
             Self::Comment(str) => Node::Comment(str),
-            Self::Label(str) => Node::Label(str),
+            Self::Label(label) => Node::Label(label),
             Self::Instruction(ins, _debug) => Node::Instruction(ins, ()),
         }
     }
@@ -39,7 +40,7 @@ impl<D> std::fmt::Display for Node<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Comment(text) => writeln!(f, ";{}", text),
-            Self::Label(name) => writeln!(f, "{}:", name),
+            Self::Label(label) => writeln!(f, "{}:", label),
             Self::Instruction(ins, _) => {
                 ins.serialize(f)?;
                 writeln!(f)
@@ -48,22 +49,21 @@ impl<D> std::fmt::Display for Node<D> {
     }
 }
 
-/// Formats the output of the disassembler into a human readable format including offsets, bytecode, and assembly.
+fn write_raw_words(buf: &mut String, words: &[u32]) {
+    for word in words {
+        write!(buf, " {:0>8X}", word).unwrap();
+    }
+}
+
+/// Formats disassembly with offsets and raw bytecode.
 pub fn format_disassembly(nodes: &[Node<DebugData>], cursor: Option<u32>) -> String {
     let mut buf = String::new();
 
     for node in nodes {
         match node {
             Node::Instruction(ins, dbg) => {
-                let mut raw_lines = vec![];
-
-                for chunk in dbg.bytecode.chunks(3) {
-                    let mut line = String::new();
-                    for code in chunk {
-                        write!(&mut line, " {:0>8X}", code).unwrap();
-                    }
-                    raw_lines.push(line);
-                }
+                let mut chunks = dbg.bytecode.chunks(3);
+                let first = chunks.next().expect("instructions contain an opcode");
 
                 let prefix = match cursor {
                     Some(offset)
@@ -75,15 +75,15 @@ pub fn format_disassembly(nodes: &[Node<DebugData>], cursor: Option<u32>) -> Str
                     _ => ' ',
                 };
 
-                writeln!(
-                    &mut buf,
-                    "{} {:0>4X}:{:28} {}",
-                    prefix, dbg.offset, raw_lines[0], ins
-                )
-                .unwrap();
+                write!(&mut buf, "{} {:0>4X}:", prefix, dbg.offset).unwrap();
+                write_raw_words(&mut buf, first);
+                write!(&mut buf, "{:width$}", "", width = 28 - first.len() * 9).unwrap();
+                writeln!(&mut buf, " {}", ins).unwrap();
 
-                for line in &raw_lines[1..] {
-                    writeln!(&mut buf, "       {}", line).unwrap();
+                for chunk in chunks {
+                    write!(&mut buf, "       ").unwrap();
+                    write_raw_words(&mut buf, chunk);
+                    writeln!(&mut buf).unwrap();
                 }
             }
 
@@ -104,9 +104,10 @@ pub fn format<D>(nodes: &[Node<D>]) -> String {
     out
 }
 
+#[cfg(test)]
 pub(crate) struct TestAssembleEnv;
-struct TestDisassembleEnv;
 
+#[cfg(test)]
 impl assembler::AssembleEnv for TestAssembleEnv {
     fn get_string_index(&mut self, _data: &[u8]) -> Option<u32> {
         Some(1337)
@@ -125,42 +126,19 @@ impl assembler::AssembleEnv for TestAssembleEnv {
     }
 }
 
-impl disassembler::DisassembleEnv for TestDisassembleEnv {
-    fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>> {
-        Some(format!("(Test String for {})", index).into_bytes())
-    }
-
-    fn get_variable_name(&mut self, index: u32) -> Option<Vec<u8>> {
-        Some(format!("var_{}", index).into_bytes())
-    }
-
-    fn get_proc_name(&mut self, index: u32) -> Option<String> {
-        Some(format!("/proc/func{}", index))
-    }
-
-    fn value_to_string_data(&mut self, tag: u32, data: u32) -> Option<Vec<u8>> {
-        Some(format!("/datum/type{}/data{}", tag, data).into_bytes())
-    }
-}
-
-#[ignore = "disabled"]
 #[test]
-fn test_assemble() {
-    let nodes = parser::parse(
-        r#"
-DbgFile "main.dm"
-DbgLine 7
-PushInt 5
-Ret
-End
-    "#,
-    )
-    .unwrap();
+fn formats_multi_line_bytecode_without_intermediate_strings() {
+    let bytecode = [0x60, 0x2A, 0x3F80, 0];
+    let nodes = [Node::Instruction(
+        Instruction::PushVal(Value::Number(1.0)),
+        DebugData {
+            offset: 0,
+            bytecode: &bytecode,
+        },
+    )];
 
-    let bytecode = assembler::assemble(&nodes, &mut TestAssembleEnv).unwrap();
-
-    let mut env = TestDisassembleEnv;
-    let (nodes, _error) = disassembler::disassemble(&bytecode, &mut env);
-
-    println!("{}", format_disassembly(&nodes, Some(4)));
+    assert_eq!(
+        format_disassembly(&nodes, None),
+        "  0000: 00000060 0000002A 00003F80  PushVal 1\n        00000000\n"
+    );
 }

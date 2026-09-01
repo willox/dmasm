@@ -1,11 +1,9 @@
 use std::fmt;
 
 use dreammaker::ast::Follow;
-use dreammaker::ast::PropertyAccessKind;
-use dreammaker::ast::{AssignOp, BinaryOp, UnaryOp};
 use dreammaker::{ast::Expression, Severity};
 
-use crate::operands::{self, DMString, Label, Value, Variable};
+use crate::operands::{self, DMString, Label, Variable};
 use crate::Instruction;
 use crate::Node;
 
@@ -23,7 +21,6 @@ mod unary;
 
 use chain_builder::ChainBuilder;
 
-// TODO: Think
 fn is_writable(var: &Variable) -> bool {
     match var {
         // Does Field count? We probably don't hit that code path but it might count
@@ -160,7 +157,6 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
         short_circuit_labels: vec![],
     };
 
-    // Expression begin
     let ctx = dreammaker::Context::default();
 
     let mut lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
@@ -170,8 +166,6 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
     if !lexer.remaining().is_empty() {
         return Err(CompileError::ExpectedEnd);
     }
-
-    // TODO: Make sure we've consumed the whole buffer
 
     for err in ctx.errors().iter() {
         if err.severity() >= Severity::Error {
@@ -245,7 +239,7 @@ impl Compiler<'_> {
     }
 
     fn emit_label(&mut self, label: String) {
-        self.nodes.push(Node::Label(label));
+        self.nodes.push(Node::Label(Label::Named(label)));
     }
 
     fn emit_find_var(&mut self, ident: dreammaker::ast::Ident) -> EvalKind {
@@ -291,33 +285,6 @@ impl Compiler<'_> {
         Ok(EvalKind::Stack)
     }
 
-    // TODO: lots of copied code from emit_move_to_stack
-    fn emit_move_to_chain_builder(&mut self, kind: EvalKind) -> Result<ChainBuilder, CompileError> {
-        match kind {
-            EvalKind::Stack => {
-                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                Ok(ChainBuilder::begin(Variable::Cache))
-            }
-
-            EvalKind::ListRef => {
-                self.emit_ins(Instruction::ListGet);
-                self.emit_ins(Instruction::SetVar(Variable::Cache));
-                Ok(ChainBuilder::begin(Variable::Cache))
-            }
-
-            EvalKind::Range => Err(CompileError::UnexpectedRange),
-            EvalKind::Global => Err(CompileError::UnexpectedGlobal),
-            EvalKind::ArgList => Err(CompileError::UnexpectedArgList),
-
-            EvalKind::Field(mut builder, field) => {
-                builder.append(DMString(field.into()));
-                Ok(builder)
-            }
-
-            EvalKind::Var(var) => Ok(ChainBuilder::begin(var)),
-        }
-    }
-
     fn short_circuit(&mut self) -> String {
         let label = self.short_circuit_labels.last_mut().unwrap();
         label.1 = true;
@@ -349,7 +316,6 @@ impl Compiler<'_> {
 
         let (label, used) = self.short_circuit_labels.pop().unwrap();
 
-        // We only care if the label was actually used
         // TODO: BYOND would put this jump destination before any unary ops (if this is Expression::Base), idk if that is sane.
         if used {
             self.emit_move_to_stack(kind)?;
@@ -362,21 +328,12 @@ impl Compiler<'_> {
 }
 
 #[test]
-fn compile_test() {
-    let context: dreammaker::Context = Default::default();
-    let lexer =
-        dreammaker::lexer::Lexer::new(&context, Default::default(), "pick(1;;2,3;4)".as_bytes());
-    let expr: Result<Expression, dreammaker::DMError> =
-        dreammaker::parser::parse_expression(&context, Default::default(), lexer);
-    context.assert_success();
-    println!("{:#?}\n\n\n", expr);
+fn compiles_safe_field_increment() {
+    let nodes = compile_expr("a?.b++", &["a"]).unwrap();
+    let bytecode = crate::assembler::assemble(&nodes, &mut crate::TestAssembleEnv).unwrap();
 
-    let expr = compile_expr("a?.b++", &["a"]);
-    println!("{:#?}", expr);
-
-    if let Ok(expr) = expr {
-        println!("{}", crate::format(&expr));
-        let code = crate::assembler::assemble(&expr, &mut crate::TestAssembleEnv);
-        println!("{:#x?}", code);
-    }
+    assert_eq!(
+        bytecode,
+        vec![0x84, 1337, 0x33, 0xFFD9, 0, 0x13D, 9, 0x63, 1337, 0x33, 0xFFD9, 0, 0x1A, 2, 0x12,]
+    );
 }

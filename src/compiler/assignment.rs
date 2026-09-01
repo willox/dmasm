@@ -1,7 +1,10 @@
-use dreammaker::ast::Expression;
+use dreammaker::ast::{AssignOp, Expression, Follow, PropertyAccessKind};
 
-use crate::compiler::*;
-use crate::Instruction;
+use crate::{
+    compiler::{is_writable, CompileError, Compiler, EvalKind},
+    operands::{DMString, Label, Variable},
+    Instruction,
+};
 
 // This is not meant to be recursive through all of the sub-expressions!
 // We only care if the LHS of an assignment would result in the RHS potentially be skipped!
@@ -67,7 +70,6 @@ fn emit_conditional(
             Variable::CacheIndex
         }
 
-        // Could be a conditional call
         _ => return Err(CompileError::ExpectedLValue),
     };
 
@@ -155,8 +157,8 @@ fn emit_conditional(
             compiler.label_count += 1;
 
             let test_ins = match op {
-                AssignOp::AndAssign => Instruction::JmpAnd(Label(label.clone())),
-                AssignOp::OrAssign => Instruction::JmpOr(Label(label.clone())),
+                AssignOp::AndAssign => Instruction::JmpAnd(Label::Named(label.clone())),
+                AssignOp::OrAssign => Instruction::JmpOr(Label::Named(label.clone())),
                 _ => unreachable!(),
             };
 
@@ -170,6 +172,7 @@ fn emit_conditional(
             let rhs = compiler.emit_expr(rhs)?;
             compiler.emit_move_to_stack(rhs)?;
 
+            // These ops require an l-value
             compiler.emit_ins(Instruction::PopCacheKey);
             compiler.emit_ins(Instruction::PopCache);
             compiler.emit_ins(Instruction::SetVarExpr(var));
@@ -210,7 +213,6 @@ pub(super) fn emit(
             let rhs = compiler.emit_expr(rhs)?;
             compiler.emit_move_to_stack(rhs)?;
 
-            // These ops require an l-value
             let var = match compiler.emit_expr(lhs)? {
                 EvalKind::Var(var) if is_writable(&var) => var,
 
@@ -293,8 +295,8 @@ pub(super) fn emit(
             }
 
             let test_ins = match op {
-                AssignOp::AndAssign => Instruction::JmpAnd(Label(label.clone())),
-                AssignOp::OrAssign => Instruction::JmpOr(Label(label.clone())),
+                AssignOp::AndAssign => Instruction::JmpAnd(Label::Named(label.clone())),
+                AssignOp::OrAssign => Instruction::JmpOr(Label::Named(label.clone())),
                 _ => unreachable!(),
             };
 

@@ -1,8 +1,10 @@
 use dreammaker::ast::Expression;
 
-use crate::compiler::*;
-use crate::operands;
-use crate::Instruction;
+use crate::{
+    compiler::{args, CompileError, Compiler, EvalKind},
+    operands::{self, DMString},
+    Instruction,
+};
 
 #[allow(non_camel_case_types)]
 enum DefaultValue {
@@ -31,7 +33,6 @@ impl From<f32> for DefaultValue {
     }
 }
 
-// # Simple-Stack Procs
 // These are built-in procs where a fixed amount of values are pushed to the stack
 // followed by a bare instruction (with no operands)
 // The parameters can have default values. If any params are missing, it'll error.
@@ -273,8 +274,6 @@ simple_vararg_procs! {
     /proc/typesof(1) => Instruction::TypesOf,
 }
 
-// # Unsupported Procs
-// Get to these later.
 macro_rules! unsupported_procs {
     (
         $(
