@@ -1,15 +1,22 @@
-use crate::operands;
-use crate::Instruction;
-use crate::Node;
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while},
-    character::complete::{alpha1, alphanumeric1, char, line_ending, multispace0, space0},
-    combinator::{eof, map, recognize},
-    error::{convert_error, FromExternalError, ParseError, VerboseError},
+    bytes::complete::tag,
+    character::complete::{alpha1, alphanumeric1, multispace0},
+    combinator::recognize,
+    error::{FromExternalError, ParseError},
     multi::many0,
-    sequence::{delimited, pair, preceded, terminated},
-    Err, IResult,
+    sequence::{delimited, pair},
+    IResult,
+};
+
+#[cfg(test)]
+use crate::{operands, Instruction, Node};
+#[cfg(test)]
+use nom::{
+    bytes::complete::take_while,
+    character::complete::{char, line_ending, space0},
+    combinator::{eof, map},
+    sequence::{preceded, terminated},
 };
 
 pub fn parse_identifier<'a, E>(i: &'a str) -> IResult<&'a str, &'a str, E>
@@ -22,6 +29,7 @@ where
     ))(i)
 }
 
+#[cfg(test)]
 fn parse_label<'a, E>(i: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
@@ -36,6 +44,7 @@ where
     )(i)
 }
 
+#[cfg(test)]
 fn parse_comment<'a, E>(i: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
@@ -54,6 +63,7 @@ where
     delimited(multispace0, inner, multispace0)
 }
 
+#[cfg(test)]
 fn parse_nodes<'a, E>(i: &'a str) -> IResult<&'a str, Vec<Node>, E>
 where
     E: 'a + ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
@@ -70,17 +80,6 @@ where
         )),
         pair(multispace0, eof),
     )(i)
-}
-
-pub fn parse(asm: &str) -> Result<Vec<Node>, String> {
-    let x = parse_nodes::<VerboseError<&str>>(asm)
-        .map(|(_, y)| y)
-        .map_err(|x| match x {
-            Err::Error(e) | Err::Failure(e) => convert_error(asm, e),
-            _ => panic!(),
-        });
-
-    x
 }
 
 /*

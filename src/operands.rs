@@ -105,7 +105,7 @@ impl Operand for Label {
     ) -> Result<(), AssembleError> {
         match self {
             Self::Named(name) => asm.emit_label_operand(name),
-            Self::Offset(offset) => asm.emit(*offset),
+            Self::Offset(offset) => asm.emit_offset_label_operand(*offset),
         }
         Ok(())
     }

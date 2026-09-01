@@ -23,6 +23,8 @@ pub struct Assembler<'a, E: AssembleEnv> {
     bytecode: Vec<u32>,
     jump_destinations: HashMap<&'a str, u32>,
     jump_sources: Vec<(usize, &'a str)>,
+    offset_destinations: HashMap<u32, u32>,
+    offset_sources: Vec<(usize, u32)>,
     pub env: &'a mut E,
 }
 
@@ -32,6 +34,8 @@ impl<'a, E: AssembleEnv> Assembler<'a, E> {
             bytecode: vec![],
             jump_destinations: HashMap::new(),
             jump_sources: vec![],
+            offset_destinations: HashMap::new(),
+            offset_sources: vec![],
             env,
         }
     }
@@ -43,6 +47,11 @@ impl<'a, E: AssembleEnv> Assembler<'a, E> {
     pub fn emit_label_operand(&mut self, name: &'a str) {
         self.jump_sources.push((self.bytecode.len(), name));
         self.emit(0xC0C0C0C0);
+    }
+
+    pub fn emit_offset_label_operand(&mut self, target: u32) {
+        self.offset_sources.push((self.bytecode.len(), target));
+        self.emit(target);
     }
 }
 
@@ -60,7 +69,11 @@ pub fn assemble<'a, E: AssembleEnv>(
                     .insert(identifier, state.bytecode.len() as u32);
             }
 
-            Node::Label(Label::Offset(_)) => {}
+            Node::Label(Label::Offset(offset)) => {
+                state
+                    .offset_destinations
+                    .insert(*offset, state.bytecode.len() as u32);
+            }
 
             Node::Comment(_) => (),
 
@@ -75,6 +88,12 @@ pub fn assemble<'a, E: AssembleEnv>(
             .copied()
             .ok_or_else(|| AssembleError::LabelNotFound(name.to_owned()))?;
         state.bytecode[offset] = destination;
+    }
+
+    for (source, target) in state.offset_sources {
+        if let Some(destination) = state.offset_destinations.get(&target) {
+            state.bytecode[source] = *destination;
+        }
     }
 
     Ok(state.bytecode)
@@ -105,6 +124,24 @@ mod tests {
         }
     }
 
+    impl crate::disassembler::DisassembleEnv for MissingEnv {
+        fn get_string_data(&mut self, _index: u32) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn get_variable_name(&mut self, _index: u32) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn get_proc_name(&mut self, _index: u32) -> Option<String> {
+            None
+        }
+
+        fn value_to_string_data(&mut self, _tag: u32, _data: u32) -> Option<Vec<u8>> {
+            None
+        }
+    }
+
     #[test]
     fn assembles_named_and_numeric_labels() {
         let nodes = [
@@ -121,6 +158,42 @@ mod tests {
                 4,
                 crate::Opcode::Jmp.word(),
                 4,
+                crate::Opcode::End.word(),
+            ]
+        );
+    }
+
+    #[test]
+    fn relocates_offset_labels() {
+        let bytecode = [
+            crate::Opcode::Jmp.word(),
+            4,
+            crate::Opcode::PushInt.word(),
+            7,
+            crate::Opcode::End.word(),
+        ];
+        let (nodes, error) = crate::disassembler::disassemble(&bytecode, &mut MissingEnv);
+        assert_eq!(error, None);
+
+        let mut nodes = nodes
+            .into_iter()
+            .map(Node::strip_debug_data)
+            .collect::<Vec<_>>();
+        let target = nodes
+            .iter()
+            .position(|node| matches!(node, Node::Label(Label::Offset(4))))
+            .unwrap();
+        nodes.insert(target, Node::Instruction(Instruction::PushInt(8), ()));
+
+        assert_eq!(
+            assemble(&nodes, &mut crate::TestAssembleEnv).unwrap(),
+            vec![
+                crate::Opcode::Jmp.word(),
+                6,
+                crate::Opcode::PushInt.word(),
+                7,
+                crate::Opcode::PushInt.word(),
+                8,
                 crate::Opcode::End.word(),
             ]
         );

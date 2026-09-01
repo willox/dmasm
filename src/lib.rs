@@ -17,8 +17,6 @@ pub use operands::{
     DMString, IsInParams, Label, PickProbParams, PickSwitchParams, Proc, RangeParams, SwitchParams,
     SwitchRangeParams, Value, Variable,
 };
-pub use parser::parse;
-
 use std::fmt::Write;
 
 #[derive(PartialEq, Clone, Debug)]
