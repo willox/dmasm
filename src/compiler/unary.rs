@@ -1,5 +1,10 @@
-use crate::compiler::*;
-use crate::Instruction;
+use dreammaker::ast::UnaryOp;
+
+use crate::{
+    compiler::{is_writable, CompileError, Compiler, EvalKind},
+    operands::{DMString, Variable},
+    Instruction,
+};
 
 pub(super) fn emit(
     compiler: &mut Compiler,

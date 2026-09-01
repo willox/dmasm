@@ -1,11 +1,18 @@
-use crate::list_operands::*;
-use crate::operands::{OperandDeserialize, *};
-use crate::parser;
-use nom::combinator::*;
-use nom::error::FromExternalError;
-use nom::error::ParseError;
-use nom::sequence::*;
-use nom::{character::complete::*, *};
+use crate::{
+    list_operands::TypeFilter,
+    operands::{
+        DMString, IsInParams, Label, OperandDeserialize, PickProbParams, PickSwitchParams, Proc,
+        RangeParams, SwitchParams, SwitchRangeParams, Value, Variable,
+    },
+    parser,
+};
+use nom::{
+    character::complete::{digit1, one_of},
+    combinator::{map, map_res, opt, recognize},
+    error::{FromExternalError, ParseError},
+    sequence::tuple,
+    IResult,
+};
 
 impl OperandDeserialize for u32 {
     fn deserialize<'a, E>(i: &'a str) -> IResult<&'a str, Self, E>
@@ -34,7 +41,7 @@ impl OperandDeserialize for Label {
     where
         E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
     {
-        map(parser::parse_identifier, |x: &str| Label(x.into()))(i)
+        map(parser::parse_identifier, |x: &str| Label::Named(x.into()))(i)
     }
 }
 

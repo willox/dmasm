@@ -5,14 +5,17 @@ use crate::{
 use std::fmt;
 
 pub trait Operand: Sized {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError>;
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError>;
     fn disassemble<E: DisassembleEnv>(dism: &mut Disassembler<E>)
         -> Result<Self, DisassembleError>;
 
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
 
-// This is a separate trait just so that the large amount of nom code can live in operands_deserialize
+// keeping the nom bullshit separate makes everything else easier to dig thru
 pub trait OperandDeserialize: Sized {
     fn deserialize<'a, E>(i: &'a str) -> nom::IResult<&'a str, Self, E>
     where
@@ -20,11 +23,11 @@ pub trait OperandDeserialize: Sized {
             + nom::error::FromExternalError<&'a str, std::num::ParseIntError>;
 }
 
-//
-// u32
-//
 impl Operand for u32 {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         asm.emit(*self);
         Ok(())
     }
@@ -40,12 +43,12 @@ impl Operand for u32 {
     }
 }
 
-//
-// i32
-//
 impl Operand for i32 {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        asm.emit(unsafe { std::mem::transmute::<i32, u32>(*self) });
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
+        asm.emit(*self as u32);
         Ok(())
     }
 
@@ -60,13 +63,12 @@ impl Operand for i32 {
     }
 }
 
-//
-// f32
-// Only a partial implementation because the type is only used for serialization/deserialization
-// TODO: Split the behaviour into two traits?
-//
+// f32 only appears inside serialized values, so bytecode assembly is unreachable.
 impl Operand for f32 {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        _asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         unreachable!()
     }
 
@@ -81,15 +83,30 @@ impl Operand for f32 {
     }
 }
 
-//
-// Label
-//
 #[derive(PartialEq, Debug, Clone)]
-pub struct Label(pub String);
+pub enum Label {
+    Named(String),
+    Offset(u32),
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Named(name) => f.write_str(name),
+            Self::Offset(offset) => write!(f, "LAB_{:0>4X}", offset),
+        }
+    }
+}
 
 impl Operand for Label {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        asm.emit_label_operand(&self.0);
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
+        match self {
+            Self::Named(name) => asm.emit_label_operand(name),
+            Self::Offset(offset) => asm.emit(*offset),
+        }
         Ok(())
     }
 
@@ -98,26 +115,23 @@ impl Operand for Label {
     ) -> Result<Self, DisassembleError> {
         let offset = dism.read_u32()?;
 
-        // TODO: Move to output
         dism.reserve_destination(offset);
-
-        // TODO: This label naming scheme is duplicated into output stage
-        Ok(Self(format!("LAB_{:0>4X}", offset)))
+        Ok(Self::Offset(offset))
     }
 
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self)
     }
 }
 
-//
-// Proc
-//
 #[derive(PartialEq, Debug, Clone)]
 pub struct Proc(pub String);
 
 impl Operand for Proc {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         let idx = asm
             .env
             .get_proc_index(&self.0)
@@ -152,21 +166,29 @@ impl Operand for Proc {
 #[derive(PartialEq, Clone)]
 pub struct DMString(pub Vec<u8>);
 
-impl DMString {
-    fn get_string_index<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> u32 {
-        asm.env.get_string_index(&self.0).unwrap()
-    }
-}
-
 impl fmt::Debug for DMString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.serialize(f)
     }
 }
 
+impl DMString {
+    fn get_string_index<E: AssembleEnv>(
+        &self,
+        asm: &mut Assembler<E>,
+    ) -> Result<u32, AssembleError> {
+        asm.env
+            .get_string_index(&self.0)
+            .ok_or_else(|| AssembleError::StringNotFound(self.0.clone()))
+    }
+}
+
 impl Operand for DMString {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
-        let idx = self.get_string_index(asm);
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
+        let idx = self.get_string_index(asm)?;
         asm.emit(idx);
         Ok(())
     }
@@ -266,17 +288,17 @@ impl Operand for DMString {
     }
 }
 
-//
-// RangeParams
 // This one's a bit odd. Range and ORange seem to always be followed by 0xAE.
 // This might actually be a combination of two instructions - but it doesn't really matter for our purposes.
 // (TODO: Use the debugger to single-step over this and know for sure.)
-//
 #[derive(PartialEq, Clone, Debug)]
 pub struct RangeParams;
 
 impl Operand for RangeParams {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         asm.emit(0xAE);
         Ok(())
     }
@@ -302,9 +324,6 @@ impl Operand for RangeParams {
     }
 }
 
-//
-// IsInParams
-//
 #[derive(PartialEq, Clone, Debug)]
 pub enum IsInParams {
     Range,
@@ -312,7 +331,10 @@ pub enum IsInParams {
 }
 
 impl Operand for IsInParams {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         match self {
             Self::Range => asm.emit(0x0B),
             Self::Value => asm.emit(0x05),
@@ -348,9 +370,6 @@ impl Operand for IsInParams {
     }
 }
 
-//
-// SwitchParams
-//
 #[derive(PartialEq, Clone, Debug)]
 pub struct SwitchParams {
     pub default: Label,
@@ -358,7 +377,10 @@ pub struct SwitchParams {
 }
 
 impl Operand for SwitchParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        _asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         unimplemented!();
     }
 
@@ -393,9 +415,6 @@ impl Operand for SwitchParams {
     }
 }
 
-//
-// PickSwitchParams
-//
 #[derive(PartialEq, Clone, Debug)]
 pub struct PickSwitchParams {
     pub default: Label,
@@ -403,7 +422,10 @@ pub struct PickSwitchParams {
 }
 
 impl Operand for PickSwitchParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        _asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         unimplemented!();
     }
 
@@ -439,9 +461,6 @@ impl Operand for PickSwitchParams {
     }
 }
 
-//
-// SwitchRangeParams
-//
 #[derive(PartialEq, Clone, Debug)]
 pub struct SwitchRangeParams {
     pub default: Label,
@@ -450,7 +469,10 @@ pub struct SwitchRangeParams {
 }
 
 impl Operand for SwitchRangeParams {
-    fn assemble<E: AssembleEnv>(&self, _asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        _asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         unimplemented!();
     }
 
@@ -505,16 +527,16 @@ impl Operand for SwitchRangeParams {
     }
 }
 
-//
-// PickProbParams
-//
 #[derive(PartialEq, Clone, Debug)]
 pub struct PickProbParams {
     pub cases: Vec<Label>,
 }
 
 impl Operand for PickProbParams {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         asm.emit(self.cases.len() as u32);
 
         for case in &self.cases {
@@ -546,9 +568,6 @@ impl Operand for PickProbParams {
     }
 }
 
-//
-// Value
-//
 #[derive(PartialEq, Debug, Clone)]
 pub enum Value {
     Null,
@@ -572,11 +591,14 @@ pub enum Value {
 }
 
 impl Operand for Value {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         let (tag, data): (u8, u32) = match self {
             Self::Null => (0x00, 0x00),
             Self::Raw { tag, data } => (*tag, *data),
-            Self::DMString(value) => (0x06, value.get_string_index(asm)),
+            Self::DMString(value) => (0x06, value.get_string_index(asm)?),
 
             // Numbers are a special case. They use an extra operand.
             Self::Number(num) => {
@@ -629,7 +651,16 @@ impl Operand for Value {
                 Self::Number(f32::from_bits((upper_bits << 16) | lower_bits))
             }
 
-            0x20 | 0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => Self::Path(
+            // Datum typepath: keep the raw tag+data so consumers (e.g. the dmeow
+            // JIT lowering `new /datum/...`) can rebuild the exact type reference.
+            // The Path arm below stringifies via value_to_string_data, which loses
+            // tag+data and also fails for typepaths whose env can't string them.
+            0x20 => Self::Raw {
+                tag: tag as u8,
+                data,
+            },
+
+            0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => Self::Path(
                 String::from_utf8(
                     dism.env
                         .value_to_string_data(tag, data)
@@ -676,9 +707,6 @@ impl Operand for Value {
     }
 }
 
-//
-// Variable
-//
 #[derive(PartialEq, Debug, Clone)]
 pub enum Variable {
     Null,
@@ -708,7 +736,10 @@ pub enum Variable {
 }
 
 impl Operand for Variable {
-    fn assemble<E: AssembleEnv>(&self, asm: &mut Assembler<E>) -> Result<(), AssembleError> {
+    fn assemble<'a, E: AssembleEnv>(
+        &'a self,
+        asm: &mut Assembler<'a, E>,
+    ) -> Result<(), AssembleError> {
         use crate::access_modifiers;
 
         fn write_variable_name<E: AssembleEnv>(
@@ -718,7 +749,32 @@ impl Operand for Variable {
             let id = asm
                 .env
                 .get_variable_name_index(&name.0)
-                .ok_or(AssembleError::InvalidVariableName)?;
+                .ok_or_else(|| AssembleError::VariableNameNotFound(name.0.clone()))?;
+            asm.emit(id);
+            Ok(())
+        }
+
+        fn write_dynamic_name<E: AssembleEnv>(
+            asm: &mut Assembler<E>,
+            name: &DMString,
+        ) -> Result<(), AssembleError> {
+            let mut formatted;
+            let bytes = if name.0.contains(&b'_') {
+                formatted = name.0.clone();
+                formatted.iter_mut().for_each(|byte| {
+                    if *byte == b'_' {
+                        *byte = b' ';
+                    }
+                });
+                formatted.as_slice()
+            } else {
+                name.0.as_slice()
+            };
+
+            let id = asm
+                .env
+                .get_string_index(bytes)
+                .ok_or_else(|| AssembleError::StringNotFound(bytes.to_vec()))?;
             asm.emit(id);
             Ok(())
         }
@@ -761,29 +817,11 @@ impl Operand for Variable {
             }
             Variable::DynamicProc(name) => {
                 asm.emit(access_modifiers::DynamicProc);
-
-                // TODO: Improve
-                let mut name = name.clone();
-                for character in &mut name.0 {
-                    if *character == b'_' {
-                        *character = b' ';
-                    }
-                }
-
-                name.assemble(asm)?;
+                write_dynamic_name(asm, name)?;
             }
             Variable::DynamicVerb(name) => {
                 asm.emit(access_modifiers::DynamicVerb);
-
-                // TODO: Improve
-                let mut name = name.clone();
-                for character in &mut name.0 {
-                    if *character == b'_' {
-                        *character = b' ';
-                    }
-                }
-
-                name.assemble(asm)?;
+                write_dynamic_name(asm, name)?;
             }
             Variable::StaticProc(proc) => {
                 asm.emit(access_modifiers::StaticProc);

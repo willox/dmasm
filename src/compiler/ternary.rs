@@ -1,5 +1,10 @@
-use crate::compiler::*;
-use crate::Instruction;
+use dreammaker::ast::Expression;
+
+use crate::{
+    compiler::{CompileError, Compiler, EvalKind},
+    operands::Label,
+    Instruction,
+};
 
 pub(super) fn emit(
     compiler: &mut Compiler,
@@ -16,12 +21,12 @@ pub(super) fn emit(
     compiler.label_count += 1;
 
     compiler.emit_ins(Instruction::Test);
-    compiler.emit_ins(Instruction::Jz(Label(label_rhs.clone())));
+    compiler.emit_ins(Instruction::Jz(Label::Named(label_rhs.clone())));
 
     // LHS
     let lhs = compiler.emit_expr(lhs)?;
     compiler.emit_move_to_stack(lhs)?;
-    compiler.emit_ins(Instruction::Jmp(Label(label_end.clone())));
+    compiler.emit_ins(Instruction::Jmp(Label::Named(label_end.clone())));
 
     // RHS
     compiler.emit_label(label_rhs);

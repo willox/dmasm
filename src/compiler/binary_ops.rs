@@ -1,7 +1,10 @@
-use dreammaker::ast::Expression;
+use dreammaker::ast::{BinaryOp, Expression};
 
-use crate::compiler::*;
-use crate::Instruction;
+use crate::{
+    compiler::{CompileError, Compiler, EvalKind},
+    operands::{self, Label},
+    Instruction,
+};
 
 pub(super) fn emit(
     compiler: &mut Compiler<'_>,
@@ -20,8 +23,8 @@ pub(super) fn emit(
             compiler.label_count += 1;
 
             let test_ins = match op {
-                BinaryOp::And => Instruction::JmpAnd(Label(label.clone())),
-                BinaryOp::Or => Instruction::JmpOr(Label(label.clone())),
+                BinaryOp::And => Instruction::JmpAnd(Label::Named(label.clone())),
+                BinaryOp::Or => Instruction::JmpOr(Label::Named(label.clone())),
                 _ => unreachable!(),
             };
 

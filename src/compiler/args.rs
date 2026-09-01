@@ -1,8 +1,10 @@
-use dreammaker::ast::Term;
-use dreammaker::ast::{ListAccessKind, PropertyAccessKind};
+use dreammaker::ast::{AssignOp, Expression, Follow, ListAccessKind, PropertyAccessKind, Term};
 
-use crate::compiler::*;
-use crate::Instruction;
+use crate::{
+    compiler::{CompileError, Compiler, EvalKind},
+    operands::{DMString, Value},
+    Instruction,
+};
 
 // (((x))) -> x
 // ((-(x))) -> -(x)
@@ -24,7 +26,7 @@ fn unroll(expr: &Expression) -> &Expression {
     }
 }
 
-// Only true if any short-circuit behaviour would step _over_ the entire expression
+// Only true if any short-circuit behavior would step _over_ the entire expression
 // x.y -> false
 // x[x?.y] -> false
 // x?.y -> true
@@ -67,7 +69,7 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
                     rhs: _,
                 } = arg
                 {
-                    // BYOND's behaviour for short-circuiting ops here is mad, so I'm going to error instead of matching it
+                    // BYOND's behavior for short-circuiting ops here is mad, so I'm going to error instead of matching it
                     // TODO: Move to emit code?
                     if can_short_circuit(unroll(lhs)) {
                         return Err(CompileError::AmbiguousListConstructor);
@@ -89,7 +91,7 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
                     rhs: _,
                 } = unroll(arg)
                 {
-                    // BYOND's behaviour for short-circuiting ops here is mad, so I'm going to error instead of matching it
+                    // BYOND's behavior for short-circuiting ops here is mad, so I'm going to error instead of matching it
                     // TODO: Move to emit code?
                     if can_short_circuit(unroll(lhs)) {
                         return Err(CompileError::AmbiguousListConstructor);
@@ -105,7 +107,7 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
     Ok(found_associative)
 }
 
-// TODO: The differences between these are... weird. We should pick a behaviour that counts as a sub-set of BYOND and enforce it with errors.
+// TODO: The differences between these are... weird. We should pick a behavior that counts as a sub-set of BYOND and enforce it with errors.
 pub(super) enum ArgsContext {
     Proc,
     List,

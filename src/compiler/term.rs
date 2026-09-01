@@ -1,10 +1,12 @@
 use std::convert::TryInto;
 
-use dreammaker::ast::*;
-use operands::PickProbParams;
+use dreammaker::ast::{Expression, Field, Follow, FormatTypePath, Term};
 
-use crate::compiler::*;
-use crate::Instruction;
+use crate::{
+    compiler::{args, builtin_procs, follow, operands, strings, CompileError, Compiler, EvalKind},
+    operands::{DMString, Label, PickProbParams, Value, Variable},
+    Instruction,
+};
 
 pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, CompileError> {
     match term {
@@ -270,7 +272,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                     compiler.emit_ins(Instruction::PickProb(PickProbParams {
                         cases: branches
                             .iter()
-                            .map(|(label, _)| Label(label.to_owned()))
+                            .map(|(label, _)| Label::Named(label.to_owned()))
                             .collect(),
                     }));
 
@@ -280,7 +282,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                         let kind = compiler.emit_expr(expr)?;
                         compiler.emit_move_to_stack(kind)?;
 
-                        compiler.emit_ins(Instruction::Jmp(Label(label_end.clone())));
+                        compiler.emit_ins(Instruction::Jmp(Label::Named(label_end.clone())));
                     }
 
                     compiler.emit_label(label_end);

@@ -1,10 +1,12 @@
-use crate::operands::Operand;
 use crate::parser;
 use crate::{
     assembler::{AssembleEnv, AssembleError, Assembler},
     disassembler::{DebugData, DisassembleEnv, DisassembleError, Disassembler},
-    list_operands::*,
-    operands::*,
+    list_operands::TypeFilter,
+    operands::{
+        DMString, IsInParams, Label, Operand, OperandDeserialize, PickProbParams, PickSwitchParams,
+        Proc, RangeParams, SwitchParams, SwitchRangeParams, Value, Variable,
+    },
 };
 use std::fmt;
 
@@ -23,7 +25,71 @@ macro_rules! instructions {
             )*
         }
 
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u32)]
+        pub enum Opcode {
+            $(
+                $name = $opcode,
+            )*
+        }
+
+        impl Opcode {
+            pub fn from_word(word: u32) -> Option<Self> {
+                match word {
+                    $(
+                        $opcode => Some(Self::$name),
+                    )*
+                    _ => None,
+                }
+            }
+
+            pub const fn word(self) -> u32 {
+                self as u32
+            }
+
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(
+                        Self::$name => stringify!($name),
+                    )*
+                }
+            }
+
+            pub(crate) fn scan_operands(
+                self,
+                cursor: &mut crate::bytecode::Cursor<'_>,
+                labels: &mut Vec<crate::bytecode::LabelOperand>,
+            ) -> Result<(), crate::bytecode::BytecodeError> {
+                match self {
+                    $(
+                        Self::$name => {
+                            $( $(
+                                crate::bytecode::scan_operand!(cursor, labels, $operand_type);
+                            )* )?
+                        }
+                    )*
+                }
+
+                Ok(())
+            }
+        }
+
         impl Instruction {
+            pub const fn opcode(&self) -> Opcode {
+                match self {
+                    $(
+                        Self::$name$( ( $( $operand_name, )* ) )? => {
+                            $( $( let _ = $operand_name; )* )?
+                            Opcode::$name
+                        }
+                    )*
+                }
+            }
+
+            pub const fn name(&self) -> &'static str {
+                self.opcode().name()
+            }
+
             pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) -> Result<(), AssembleError> {
                 match self {
                     $(
@@ -37,8 +103,8 @@ macro_rules! instructions {
                 Ok(())
             }
 
-            pub fn disassemble<'a, E: DisassembleEnv>(
-                dism: &mut Disassembler<'a, E>,
+            pub fn disassemble<'a, 'e, E: DisassembleEnv>(
+                dism: &mut Disassembler<'a, 'e, E>,
             ) -> Result<(Self, DebugData<'a>), DisassembleError> {
                 let offset = dism.current_offset;
 
