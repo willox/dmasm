@@ -559,7 +559,7 @@ instructions! {
     0x164 = Gradient,
     0x165 = LoadResource,
     0x166 = IsPointer,
-    0x167 = JsonEncodeFlags,
+    0x167 = JsonEncodeFlags(arg_count: u32),
     0x168 = JsonDecodeFlags,
     0x169 = Ceil,
     0x16A = Trunc,
