@@ -674,7 +674,7 @@ impl Operand for Value {
                 data,
             },
 
-            0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => Self::Path(
+            0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F | 0x59 => Self::Path(
                 String::from_utf8(
                     dism.env
                         .value_to_string_data(tag, data)
