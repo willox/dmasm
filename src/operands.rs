@@ -196,7 +196,11 @@ impl Operand for DMString {
     fn disassemble<E: DisassembleEnv>(
         dism: &mut Disassembler<E>,
     ) -> Result<Self, DisassembleError> {
-        let id = dism.read_u32()?;
+        // A string id landing in the access-modifier range (0xFFCD..=0xFFEF)
+        // arrives with bit 0x1000_0000 set, so a reader deciding "modifier or
+        // string?" can tell. Masking is a no-op otherwise - no string table is
+        // 268M entries deep.
+        let id = dism.read_u32()? & !0x1000_0000;
         let data = dism
             .env
             .get_string_data(id)
@@ -674,7 +678,7 @@ impl Operand for Value {
                 data,
             },
 
-            0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F => Self::Path(
+            0x3B | 0x24 | 0x26 | 0x0A | 0x0B | 0x28 | 0x09 | 0x08 | 0x3F | 0x59 => Self::Path(
                 String::from_utf8(
                     dism.env
                         .value_to_string_data(tag, data)

@@ -559,7 +559,7 @@ instructions! {
     0x164 = Gradient,
     0x165 = LoadResource,
     0x166 = IsPointer,
-    0x167 = JsonEncodeFlags,
+    0x167 = JsonEncodeFlags(arg_count: u32),
     0x168 = JsonDecodeFlags,
     0x169 = Ceil,
     0x16A = Trunc,
@@ -570,7 +570,7 @@ instructions! {
     0x16F = FTime,
     0x170 = BlockXYZ,
     // 0x171
-    0x172 = NoiseHash,
+    0x172 = NoiseHash(arg_count: u32),
     0x173 = PowSquare, // Optimization whenever x ** 2 or x ** x is used.
     0x174 = PowNegativeOne, // Optimization whenever x ** -1 is used.
     0x175 = GetStepsTo,
@@ -580,11 +580,11 @@ instructions! {
     0x179 = LoadExt,
     0x17a = CallExtLoaded, // single-arg call_ext, for when you just pass the return value of load_ext to it
     // 0x17b
-    0x17c = NewAlist,
+    0x17c = NewAlist(arg_count: u32),
     0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
     0x17e = KeyValueIter(var: Variable), // for (k,v in list)
-    0x17f = NewPixloc,
-    0x180 = NewVector,
+    0x17f = NewPixloc(arg_count: u32),
+    0x180 = NewVector(arg_count: u32),
     0x181 = BoundPixloc,
     // yes this is literally just sin/cos/tan 2: electric boogaloo. don't ask me why.
     0x182 = Sin2,
