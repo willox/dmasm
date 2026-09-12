@@ -584,7 +584,7 @@ instructions! {
     0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
     0x17e = KeyValueIter(var: Variable), // for (k,v in list)
     0x17f = NewPixloc,
-    0x180 = NewVector,
+    0x180 = NewVector(arg_count: u32),
     0x181 = BoundPixloc,
     // yes this is literally just sin/cos/tan 2: electric boogaloo. don't ask me why.
     0x182 = Sin2,
