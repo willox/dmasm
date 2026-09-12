@@ -324,10 +324,18 @@ impl Operand for RangeParams {
     }
 }
 
+// Each form pops a different depth - 3, 2, 3, 7 with the tested value on top -
+// so a consumer that lumps them together gets the stack wrong.
 #[derive(PartialEq, Clone, Debug)]
 pub enum IsInParams {
     Range,
     Value,
+    /// `x in block(a, b)`.
+    BlockCorners,
+    /// `x in block(...)` by coordinate. Always six of them: DM takes 3 to 6 and
+    /// the compiler pads the rest with `PushVal null`, so there is no argument
+    /// count in the stream.
+    BlockCoords,
 }
 
 impl Operand for IsInParams {
@@ -338,6 +346,8 @@ impl Operand for IsInParams {
         match self {
             Self::Range => asm.emit(0x0B),
             Self::Value => asm.emit(0x05),
+            Self::BlockCorners => asm.emit(0x06),
+            Self::BlockCoords => asm.emit(0x13),
         }
 
         Ok(())
@@ -351,6 +361,8 @@ impl Operand for IsInParams {
         let res = match param {
             0x0B => Self::Range,
             0x05 => Self::Value,
+            0x06 => Self::BlockCorners,
+            0x13 => Self::BlockCoords,
             other => {
                 return Err(DisassembleError::UnknownIsInOperand {
                     offset: dism.current_offset - 1,
@@ -366,6 +378,8 @@ impl Operand for IsInParams {
         match self {
             Self::Range => write!(f, "Range"),
             Self::Value => write!(f, "Value"),
+            Self::BlockCorners => write!(f, "BlockCorners"),
+            Self::BlockCoords => write!(f, "BlockCoords"),
         }
     }
 }
