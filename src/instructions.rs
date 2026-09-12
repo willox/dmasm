@@ -570,7 +570,7 @@ instructions! {
     0x16F = FTime,
     0x170 = BlockXYZ,
     // 0x171
-    0x172 = NoiseHash,
+    0x172 = NoiseHash(arg_count: u32),
     0x173 = PowSquare, // Optimization whenever x ** 2 or x ** x is used.
     0x174 = PowNegativeOne, // Optimization whenever x ** -1 is used.
     0x175 = GetStepsTo,
