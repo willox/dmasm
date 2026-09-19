@@ -557,10 +557,10 @@ instructions! {
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
     // 0x163
     0x164 = Gradient,
-    0x165 = LoadResource,
+    0x165 = LoadResource(arg_count: u32),
     0x166 = IsPointer,
     0x167 = JsonEncodeFlags(arg_count: u32),
-    0x168 = JsonDecodeFlags,
+    0x168 = JsonDecodeFlags(arg_count: u32),
     0x169 = Ceil,
     0x16A = Trunc,
     0x16B = Fract,
@@ -578,7 +578,7 @@ instructions! {
     0x177 = AugFloatMod(var: Variable),
     0x178 = RefCount,
     0x179 = LoadExt,
-    0x17a = CallExtLoaded, // single-arg call_ext, for when you just pass the return value of load_ext to it
+    0x17a = CallExtLoaded(arg_count: u32), // calls a load_ext handle: call_ext(handle)(args...)
     // 0x17b
     0x17c = NewAlist(arg_count: u32),
     0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
