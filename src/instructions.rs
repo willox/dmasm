@@ -444,7 +444,7 @@ instructions! {
     0x103 = Eval,
     0x104 = DmsPrepare,
     0x105 = IconDrawBox(var: Variable),
-    0x106 = IconInsert(arg_count: u32),
+    0x106 = IconInsert(arg_count: u32, var: Variable),
     0x107 = UrlEncode,
     0x108 = UrlDecode,
     0x109 = Md5,
@@ -454,7 +454,7 @@ instructions! {
     0x10D = WinGet,
     0x10E = WinClone,
     0x10F = WinShow,
-    0x110 = IconMapColors(arg_count: u32),
+    0x110 = IconMapColors(arg_count: u32, var: Variable),
     0x111 = IconScale(var: Variable),
     0x112 = IconCrop(var: Variable),
     0x113 = Rgba,
@@ -555,7 +555,7 @@ instructions! {
     0x160 = SpliceTextChar,
     0x161 = RgbEx, // Used when the color space for rgb() cannot be found to be COLORSPACE_RGB at compile-time
     0x162 = Rgb2Num, // This is technically a replacement for the original Rgb2Num which is somewhere else
-    // 0x163
+    0x163 = GradientIndex, // gradient(Gradient, index): the gradient is already one value, the index is pushed separately
     0x164 = Gradient,
     0x165 = LoadResource(arg_count: u32),
     0x166 = IsPointer,
@@ -579,7 +579,7 @@ instructions! {
     0x178 = RefCount,
     0x179 = LoadExt,
     0x17a = CallExtLoaded(arg_count: u32), // calls a load_ext handle: call_ext(handle)(args...)
-    // 0x17b
+    0x17b = CallExtLoadedArgList, // call_ext(handle)(arglist(L))
     0x17c = NewAlist(arg_count: u32),
     0x17d = Spaceship, // <=> (less or greater) comparator. It looks like a spaceship, and thus will be called "Spaceship", because "Tlog" is a dumb instruction name, and we all need some whimsy in our lives.
     0x17e = KeyValueIter(var: Variable), // for (k,v in list)
