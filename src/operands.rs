@@ -292,42 +292,6 @@ impl Operand for DMString {
     }
 }
 
-// This one's a bit odd. Range and ORange seem to always be followed by 0xAE.
-// This might actually be a combination of two instructions - but it doesn't really matter for our purposes.
-// (TODO: Use the debugger to single-step over this and know for sure.)
-#[derive(PartialEq, Clone, Debug)]
-pub struct RangeParams;
-
-impl Operand for RangeParams {
-    fn assemble<'a, E: AssembleEnv>(
-        &'a self,
-        asm: &mut Assembler<'a, E>,
-    ) -> Result<(), AssembleError> {
-        asm.emit(0xAE);
-        Ok(())
-    }
-
-    fn disassemble<E: DisassembleEnv>(
-        dism: &mut Disassembler<E>,
-    ) -> Result<Self, DisassembleError> {
-        let param = dism.read_u32()?;
-
-        if param != 0xAE {
-            return Err(DisassembleError::UnknownRangeParams {
-                offset: dism.current_offset - 1,
-                value: param,
-            });
-        }
-
-        Ok(RangeParams)
-    }
-
-    fn serialize(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // It's nothing! This works, right?
-        Ok(())
-    }
-}
-
 // Each form pops a different depth - 3, 2, 3, 7 with the tested value on top -
 // so a consumer that lumps them together gets the stack wrong.
 #[derive(PartialEq, Clone, Debug)]
