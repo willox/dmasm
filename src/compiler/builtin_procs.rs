@@ -168,12 +168,12 @@ simple_stack_procs! {
     /proc/nonspantext(haystack, needles, start = 1) => Instruction::NonSpanText,
     /proc/nonspantext_char(haystack, needles, start = 1) => Instruction::NonSpanTextChar,
     /proc/ohearers(depth = null, center = null) => Instruction::OHearers,
-    /proc/orange(dist = null, center = null) => Instruction::ORange(operands::RangeParams),
+    /proc/orange(dist = null, center = null) => Instruction::ORange,
     /proc/oview(dist = null, center = null) => Instruction::OView,
     /proc/oviewers(depth = null, center = null) => Instruction::OViewers,
     /proc/params2list(params) => Instruction::Params2List,
     /proc/prob(val) => Instruction::Prob,
-    /proc/range(dist = null, center = null) => Instruction::Range(operands::RangeParams),
+    /proc/range(dist = null, center = null) => Instruction::Range,
     /proc/ref(val) => Instruction::Ref,
     /proc/replacetext(haystack, needle, replacement, start = 1, end = null) => Instruction::ReplaceText,
     /proc/replacetext_char(haystack, needle, replacement, start = 1, end = null) => Instruction::ReplaceTextChar,
@@ -376,6 +376,11 @@ pub(super) fn emit(
     }
 
     if let Some(res) = eval_simple_stack_procs(compiler, name, args)? {
+        // Range and ORange push BYOND's shared scratch list, which the next range() overwrites
+        if matches!(name, "range" | "orange") {
+            compiler.emit_ins(Instruction::CopyList);
+        }
+
         return Ok(Some(res));
     }
 

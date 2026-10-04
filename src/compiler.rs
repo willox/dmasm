@@ -3,7 +3,7 @@ use std::fmt;
 use dreammaker::ast::Follow;
 use dreammaker::{ast::Expression, Severity};
 
-use crate::operands::{self, DMString, Label, Variable};
+use crate::operands::{self, DMString, GlobalVar, Label, Variable};
 use crate::Instruction;
 use crate::Node;
 
@@ -256,7 +256,10 @@ impl Compiler<'_> {
             "global" => EvalKind::Global,
 
             // Anything else is treated as a global var
-            _ => EvalKind::Var(Variable::Global(DMString(ident.into()))),
+            _ => EvalKind::Var(Variable::Global(GlobalVar {
+                name: DMString(ident.into()),
+                id: None,
+            })),
         }
     }
 

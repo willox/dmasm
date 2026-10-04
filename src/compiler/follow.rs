@@ -4,7 +4,7 @@ use crate::{
     compiler::{
         args, chain_builder::ChainBuilder, operands, unary, CompileError, Compiler, EvalKind,
     },
-    operands::{DMString, Label, Variable},
+    operands::{DMString, GlobalVar, Label, Variable},
     Instruction,
 };
 
@@ -213,7 +213,10 @@ pub(super) fn emit(
 
             Follow::ProcReference(ident) | Follow::StaticField(ident) => {
                 compiler.emit_ins(Instruction::GetVar(Variable::Initial(Box::new(
-                    Variable::Global(DMString(ident.as_str().into())),
+                    Variable::Global(GlobalVar {
+                        name: DMString(ident.as_str().into()),
+                        id: None,
+                    }),
                 ))));
             }
         }
@@ -252,7 +255,10 @@ fn commit_field_buffer(
         // Bit hacky.
         EvalKind::Global => {
             let name = field_chain.remove(0);
-            let var = Variable::Global(DMString(name.into()));
+            let var = Variable::Global(GlobalVar {
+                name: DMString(name.into()),
+                id: None,
+            });
             return commit_field_buffer(compiler, EvalKind::Var(var), field_chain);
         }
 

@@ -14,7 +14,7 @@ pub use disassembler::DebugData;
 pub use instructions::{Instruction, Opcode};
 pub use list_operands::TypeFilter;
 pub use operands::{
-    DMString, IsInParams, Label, PickProbParams, PickSwitchParams, Proc, RangeParams, SwitchParams,
+    DMString, GlobalVar, IsInParams, Label, PickProbParams, PickSwitchParams, Proc, SwitchParams,
     SwitchRangeParams, Value, Variable,
 };
 use std::fmt::Write;

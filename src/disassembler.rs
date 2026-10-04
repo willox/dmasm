@@ -17,7 +17,6 @@ pub enum DisassembleError {
     InvalidProc { offset: u32, id: u32 },
     UnknownAccessModifier { offset: u32, value: u32 },
     UnknownFieldAccessModifier { offset: u32, value: u32 },
-    UnknownRangeParams { offset: u32, value: u32 },
     UnknownIsInOperand { offset: u32, value: u32 },
     UnknownValue { offset: u32, tag: u32 },
     UnknownTypeFilter { offset: u32, value: u32 },

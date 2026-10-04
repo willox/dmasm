@@ -292,42 +292,6 @@ impl Operand for DMString {
     }
 }
 
-// This one's a bit odd. Range and ORange seem to always be followed by 0xAE.
-// This might actually be a combination of two instructions - but it doesn't really matter for our purposes.
-// (TODO: Use the debugger to single-step over this and know for sure.)
-#[derive(PartialEq, Clone, Debug)]
-pub struct RangeParams;
-
-impl Operand for RangeParams {
-    fn assemble<'a, E: AssembleEnv>(
-        &'a self,
-        asm: &mut Assembler<'a, E>,
-    ) -> Result<(), AssembleError> {
-        asm.emit(0xAE);
-        Ok(())
-    }
-
-    fn disassemble<E: DisassembleEnv>(
-        dism: &mut Disassembler<E>,
-    ) -> Result<Self, DisassembleError> {
-        let param = dism.read_u32()?;
-
-        if param != 0xAE {
-            return Err(DisassembleError::UnknownRangeParams {
-                offset: dism.current_offset - 1,
-                value: param,
-            });
-        }
-
-        Ok(RangeParams)
-    }
-
-    fn serialize(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // It's nothing! This works, right?
-        Ok(())
-    }
-}
-
 // Each form pops a different depth - 3, 2, 3, 7 with the tested value on top -
 // so a consumer that lumps them together gets the stack wrong.
 #[derive(PartialEq, Clone, Debug)]
@@ -725,6 +689,21 @@ impl Operand for Value {
     }
 }
 
+/// A global variable operand: the name BYOND records for it, plus the slot it
+/// actually lives in.
+///
+/// The slot is the part that identifies it. A `var/static` declared inside a
+/// proc gets its own slot but keeps only its *local* name, so two statics with
+/// the same name in one proc are two slots sharing one name - anything keying a
+/// global by name alone silently merges them.
+#[derive(PartialEq, Debug, Clone)]
+pub struct GlobalVar {
+    pub name: DMString,
+    /// Index into BYOND's `global_values`, read straight off the bytecode.
+    /// `None` when built from source, where the assembler resolves the name.
+    pub id: Option<u32>,
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum Variable {
     Null,
@@ -738,7 +717,7 @@ pub enum Variable {
     CacheIndex,
     Arg(u32),
     Local(u32),
-    Global(DMString),
+    Global(GlobalVar),
     SetCache(Box<Variable>, Box<Variable>),
     Initial(Box<Variable>),
     IsSaved(Box<Variable>),
@@ -816,9 +795,12 @@ impl Operand for Variable {
                 asm.emit(access_modifiers::Local);
                 asm.emit(*idx);
             }
-            Variable::Global(name) => {
+            Variable::Global(global) => {
                 asm.emit(access_modifiers::Global);
-                write_variable_name(asm, name)?;
+                match global.id {
+                    Some(id) => asm.emit(id),
+                    None => write_variable_name(asm, &global.name)?,
+                }
             }
             Variable::SetCache(lhs, rhs) => {
                 asm.emit(access_modifiers::SetCache);
@@ -867,9 +849,9 @@ impl Operand for Variable {
     ) -> Result<Self, DisassembleError> {
         use crate::access_modifiers;
 
-        fn read_variable_name<E: DisassembleEnv>(
+        fn read_global<E: DisassembleEnv>(
             dism: &mut Disassembler<E>,
-        ) -> Result<DMString, DisassembleError> {
+        ) -> Result<GlobalVar, DisassembleError> {
             let id = dism.read_u32()?;
             let string =
                 dism.env
@@ -879,7 +861,10 @@ impl Operand for Variable {
                         id,
                     })?;
 
-            Ok(DMString(string))
+            Ok(GlobalVar {
+                name: DMString(string),
+                id: Some(id),
+            })
         }
 
         // This is either a string-ref or an AccessModifier
@@ -901,7 +886,7 @@ impl Operand for Variable {
             access_modifiers::CacheIndex => Variable::CacheIndex,
             access_modifiers::Arg => Variable::Arg(dism.read_u32()?),
             access_modifiers::Local => Variable::Local(dism.read_u32()?),
-            access_modifiers::Global => Variable::Global(read_variable_name(dism)?),
+            access_modifiers::Global => Variable::Global(read_global(dism)?),
             access_modifiers::SetCache => Variable::SetCache(
                 Box::new(Variable::disassemble(dism)?),
                 Box::new(Variable::disassemble(dism)?),
@@ -950,9 +935,9 @@ impl Operand for Variable {
                 x.serialize(f)?;
                 write!(f, ")")
             }
-            Variable::Global(name) => {
+            Variable::Global(global) => {
                 write!(f, "global(")?;
-                name.serialize(f)?;
+                global.name.serialize(f)?;
                 write!(f, ")")
             }
             Variable::Field(name) => {

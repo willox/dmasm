@@ -151,9 +151,6 @@ macro_rules! scan_operand {
     ($cursor:expr, $labels:expr, TypeFilter) => {
         $cursor.skip(1)?
     };
-    ($cursor:expr, $labels:expr, RangeParams) => {
-        $cursor.skip(1)?
-    };
     ($cursor:expr, $labels:expr, IsInParams) => {
         $cursor.skip(1)?
     };

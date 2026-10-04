@@ -2,7 +2,7 @@ use crate::{
     list_operands::TypeFilter,
     operands::{
         DMString, IsInParams, Label, OperandDeserialize, PickProbParams, PickSwitchParams, Proc,
-        RangeParams, SwitchParams, SwitchRangeParams, Value, Variable,
+        SwitchParams, SwitchRangeParams, Value, Variable,
     },
     parser,
 };
@@ -65,16 +65,6 @@ impl OperandDeserialize for DMString {
         //     |x: &str| DMString(x.into()),
         // )(i)
         unimplemented!()
-    }
-}
-
-impl OperandDeserialize for RangeParams {
-    fn deserialize<'a, E>(i: &'a str) -> IResult<&'a str, Self, E>
-    where
-        E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-    {
-        // It's nothing! This works, right?
-        Ok((i, RangeParams))
     }
 }
 
