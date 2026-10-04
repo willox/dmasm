@@ -186,7 +186,7 @@ instructions! {
     0x07 = Link,
     0x08 = OutputFtp,
     0x09 = OutputRun,
-    // 0x0A
+    0x0A = OutputKey, // target << key(file)
     0x0B = Missile,
     0x0C = Del,
     0x0D = Test,
