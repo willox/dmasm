@@ -199,6 +199,38 @@ mod tests {
         );
     }
 
+    // With an env that knows no strings: read as a field name, either word
+    // would fail the lookup instead of decoding.
+    #[test]
+    fn caller_and_callee_round_trip() {
+        use crate::Variable;
+
+        let bytecode = [
+            crate::Opcode::GetVar.word(),
+            0xFFF0,
+            crate::Opcode::GetVar.word(),
+            0xFFF1,
+        ];
+        let (nodes, error) = crate::disassembler::disassemble(&bytecode, &mut MissingEnv);
+        assert_eq!(error, None);
+
+        let nodes = nodes
+            .into_iter()
+            .map(Node::strip_debug_data)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            nodes,
+            [
+                Node::Instruction(Instruction::GetVar(Variable::Caller), ()),
+                Node::Instruction(Instruction::GetVar(Variable::Callee), ()),
+            ]
+        );
+        assert_eq!(
+            assemble(&nodes, &mut crate::TestAssembleEnv).unwrap(),
+            bytecode
+        );
+    }
+
     #[test]
     fn reports_missing_assembly_inputs() {
         let missing_label = [Node::Instruction(

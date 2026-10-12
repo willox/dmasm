@@ -47,8 +47,14 @@ access_modifiers! {
     // UnkFFEC = 0xFFEC,
     // UnkFFED = 0xFFED,
     PtrRef = 0xFFEF,
+
+    // 516's two proc vars. Each reads as a /callee value: the frame above the
+    // running proc, and the running proc's own.
+    Caller = 0xFFF0,
+    Callee = 0xFFF1,
 }
 
+// 0xFFF1 is where the interpreter's own switch over these words ends.
 pub fn is_access_modifier(value: u32) -> bool {
-    (0xFFCD..=0xFFEF).contains(&value)
+    (0xFFCD..=0xFFF1).contains(&value)
 }

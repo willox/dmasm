@@ -253,6 +253,8 @@ impl Compiler<'_> {
             "src" => EvalKind::Var(Variable::Src),
             "args" => EvalKind::Var(Variable::Args),
             "world" => EvalKind::Var(Variable::World),
+            "caller" => EvalKind::Var(Variable::Caller),
+            "callee" => EvalKind::Var(Variable::Callee),
             "global" => EvalKind::Global,
 
             // Anything else is treated as a global var
