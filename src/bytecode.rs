@@ -17,6 +17,9 @@ pub struct InstructionSpan<'a> {
 pub struct ScannedBytecode<'a> {
     pub instructions: Vec<InstructionSpan<'a>>,
     pub label_operands: Vec<LabelOperand>,
+    /// Some operand is `caller` or `callee`. A raw word search cannot say
+    /// this: 0xFFF0 is also a fine proc id, type id or half of a float.
+    pub reads_caller: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,12 +55,23 @@ pub fn scan(bytecode: &[u32]) -> Result<ScannedBytecode<'_>, BytecodeError> {
     Ok(ScannedBytecode {
         instructions,
         label_operands,
+        reads_caller: cursor.reads_caller,
     })
+}
+
+/// Whether any operand is `caller` or `callee`.
+pub fn reads_caller(bytecode: &[u32]) -> Result<bool, BytecodeError> {
+    // nearly no proc has either word at all, so most never get scanned
+    let has_word = bytecode
+        .iter()
+        .any(|&word| matches!(word, access_modifiers::Caller | access_modifiers::Callee));
+    Ok(has_word && scan(bytecode)?.reads_caller)
 }
 
 pub(crate) struct Cursor<'a> {
     bytecode: &'a [u32],
     offset: usize,
+    reads_caller: bool,
 }
 
 impl<'a> Cursor<'a> {
@@ -65,6 +79,7 @@ impl<'a> Cursor<'a> {
         Self {
             bytecode,
             offset: 0,
+            reads_caller: false,
         }
     }
 
@@ -255,6 +270,8 @@ pub(crate) fn scan_variable(cursor: &mut Cursor<'_>) -> Result<(), BytecodeError
         | access_modifiers::CacheKey
         | access_modifiers::CacheIndex => {}
 
+        access_modifiers::Caller | access_modifiers::Callee => cursor.reads_caller = true,
+
         access_modifiers::Arg
         | access_modifiers::Local
         | access_modifiers::Global
@@ -330,6 +347,27 @@ mod tests {
                 value: 0xFFD1,
             })
         );
+    }
+
+    #[test]
+    fn finds_caller_under_another_operand() {
+        // `cache = caller; cache.<field 5>`, then a proc that only calls proc
+        // 0xFFF0, which holds the same word and reads nothing
+        let nested = [
+            Opcode::GetVar.word(),
+            access_modifiers::SetCache,
+            access_modifiers::Caller,
+            5,
+        ];
+        assert!(scan(&nested).unwrap().reads_caller);
+        let callee = [Opcode::GetVar.word(), access_modifiers::Callee];
+        assert!(scan(&callee).unwrap().reads_caller);
+        let same_word = [Opcode::CallGlob.word(), 0, 0xFFF0];
+        assert!(!scan(&same_word).unwrap().reads_caller);
+
+        assert_eq!(reads_caller(&nested), Ok(true));
+        assert_eq!(reads_caller(&same_word), Ok(false));
+        assert_eq!(reads_caller(&[Opcode::End.word()]), Ok(false));
     }
 
     #[test]

@@ -715,6 +715,8 @@ pub enum Variable {
     Cache,
     CacheKey,
     CacheIndex,
+    Caller,
+    Callee,
     Arg(u32),
     Local(u32),
     Global(GlobalVar),
@@ -786,6 +788,8 @@ impl Operand for Variable {
             Variable::Cache => asm.emit(access_modifiers::Cache),
             Variable::CacheKey => asm.emit(access_modifiers::CacheKey),
             Variable::CacheIndex => asm.emit(access_modifiers::CacheIndex),
+            Variable::Caller => asm.emit(access_modifiers::Caller),
+            Variable::Callee => asm.emit(access_modifiers::Callee),
             Variable::Field(name) => name.assemble(asm)?,
             Variable::Arg(idx) => {
                 asm.emit(access_modifiers::Arg);
@@ -884,6 +888,8 @@ impl Operand for Variable {
             access_modifiers::Cache => Variable::Cache,
             access_modifiers::CacheKey => Variable::CacheKey,
             access_modifiers::CacheIndex => Variable::CacheIndex,
+            access_modifiers::Caller => Variable::Caller,
+            access_modifiers::Callee => Variable::Callee,
             access_modifiers::Arg => Variable::Arg(dism.read_u32()?),
             access_modifiers::Local => Variable::Local(dism.read_u32()?),
             access_modifiers::Global => Variable::Global(read_global(dism)?),
@@ -925,6 +931,8 @@ impl Operand for Variable {
             Variable::Cache => write!(f, "cache"),
             Variable::CacheKey => write!(f, "cache_key"),
             Variable::CacheIndex => write!(f, "cache[cache_key]"),
+            Variable::Caller => write!(f, "caller"),
+            Variable::Callee => write!(f, "callee"),
             Variable::Arg(x) => {
                 write!(f, "arg(")?;
                 x.serialize(f)?;

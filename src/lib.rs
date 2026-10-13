@@ -9,7 +9,9 @@ mod operands;
 mod operands_deserialize;
 mod parser;
 
-pub use bytecode::{scan, BytecodeError, InstructionSpan, LabelOperand, ScannedBytecode};
+pub use bytecode::{
+    reads_caller, scan, BytecodeError, InstructionSpan, LabelOperand, ScannedBytecode,
+};
 pub use disassembler::DebugData;
 pub use instructions::{Instruction, Opcode};
 pub use list_operands::TypeFilter;
