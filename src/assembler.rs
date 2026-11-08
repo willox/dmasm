@@ -1,4 +1,4 @@
-use crate::{operands, Label, Node};
+use crate::{Label, Node};
 use std::collections::HashMap;
 
 pub trait AssembleEnv {
@@ -7,15 +7,20 @@ pub trait AssembleEnv {
     fn get_variable_name_index(&mut self, name: &[u8]) -> Option<u32>;
     fn get_proc_index(&mut self, path: &str) -> Option<u32>;
     fn get_type(&mut self, path: &str) -> Option<(u8, u32)>;
+
+    /// Finds the id of a resource (a single-quoted file like `'icon.dmi'`) in the destination context
+    fn get_resource_index(&mut self, _path: &str) -> Option<u32> {
+        None
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub enum AssembleError {
-    UnsupportedValue(operands::Value),
     ProcNotFound(String),
     StringNotFound(Vec<u8>),
     VariableNameNotFound(Vec<u8>),
     TypeNotFound(String),
+    ResourceNotFound(String),
     LabelNotFound(String),
 }
 
@@ -317,6 +322,165 @@ mod tests {
             .map(Node::strip_debug_data)
             .collect::<Vec<_>>();
         assert_eq!(disassembled, nodes);
+    }
+
+    // Knows one string, one resource and one type, both ways round
+    struct OperandEnv;
+
+    impl AssembleEnv for OperandEnv {
+        fn get_string_index(&mut self, string: &[u8]) -> Option<u32> {
+            (string == b"case").then_some(0x15)
+        }
+
+        fn get_variable_name_index(&mut self, _name: &[u8]) -> Option<u32> {
+            None
+        }
+
+        fn get_proc_index(&mut self, _path: &str) -> Option<u32> {
+            None
+        }
+
+        fn get_type(&mut self, path: &str) -> Option<(u8, u32)> {
+            (path == "/obj").then_some((0x09, 0x02))
+        }
+
+        fn get_resource_index(&mut self, path: &str) -> Option<u32> {
+            (path == "icon.dmi").then_some(0x01_0203)
+        }
+    }
+
+    impl crate::disassembler::DisassembleEnv for OperandEnv {
+        fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>> {
+            (index == 0x15).then(|| b"case".to_vec())
+        }
+
+        fn get_variable_name(&mut self, _index: u32) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn get_proc_name(&mut self, _index: u32) -> Option<String> {
+            None
+        }
+
+        fn value_to_string_data(&mut self, tag: u32, data: u32) -> Option<Vec<u8>> {
+            match (tag, data) {
+                (0x09, 0x02) => Some(b"/obj".to_vec()),
+                (0x0C, 0x01_0203) => Some(b"icon.dmi".to_vec()),
+                _ => None,
+            }
+        }
+    }
+
+    fn assert_round_trips(bytecode: &[u32]) -> Vec<Node> {
+        let (nodes, error) = crate::disassembler::disassemble(bytecode, &mut OperandEnv);
+        assert_eq!(error, None);
+
+        let nodes = nodes
+            .into_iter()
+            .map(Node::strip_debug_data)
+            .collect::<Vec<_>>();
+        assert_eq!(assemble(&nodes, &mut OperandEnv).unwrap(), bytecode);
+        nodes
+    }
+
+    #[test]
+    fn switch_operands_round_trip() {
+        use crate::Opcode;
+
+        // switch on 1, "case" and /obj, then default
+        let switch = [
+            Opcode::Switch.word(),
+            3,
+            0x2A,
+            0x3F80,
+            0x0000,
+            9,
+            0x06,
+            0x15,
+            9,
+            0x09,
+            0x02,
+            9,
+            9,
+            Opcode::End.word(),
+        ];
+        let nodes = assert_round_trips(&switch);
+        assert!(matches!(
+            &nodes[0],
+            Node::Instruction(Instruction::Switch(params), ()) if params.cases.len() == 3
+        ));
+
+        // pick(50; a, 50; b)
+        let pick_switch = [
+            Opcode::PickSwitch.word(),
+            2,
+            0x7FFF,
+            7,
+            0xFFFF,
+            7,
+            7,
+            Opcode::End.word(),
+        ];
+        assert_round_trips(&pick_switch);
+
+        // if(1 to 2), if("case"), else
+        let switch_range = [
+            Opcode::SwitchRange.word(),
+            1,
+            0x2A,
+            0x3F80,
+            0x0000,
+            0x2A,
+            0x4000,
+            0x0000,
+            13,
+            1,
+            0x06,
+            0x15,
+            13,
+            13,
+            Opcode::End.word(),
+        ];
+        assert_round_trips(&switch_range);
+    }
+
+    #[test]
+    fn iter_load_round_trips() {
+        let filter = crate::TypeFilter::MOB | crate::TypeFilter::OBJ;
+        let bytecode = [crate::Opcode::IterLoad.word(), 1, filter.bits()];
+        assert_round_trips(&bytecode);
+    }
+
+    #[test]
+    fn resource_and_file_values_round_trip() {
+        use crate::{operands::Value, Opcode};
+
+        let bytecode = [
+            Opcode::PushVal.word(),
+            0x010C,
+            0x0203,
+            Opcode::PushVal.word(),
+            0x27,
+            0x00,
+        ];
+        let nodes = assert_round_trips(&bytecode);
+        assert_eq!(
+            nodes,
+            [
+                Node::Instruction(Instruction::PushVal(Value::Resource("icon.dmi".into())), ()),
+                Node::Instruction(Instruction::PushVal(Value::File), ()),
+            ]
+        );
+
+        // An env that can't find resources says which one
+        let missing = [Node::Instruction(
+            Instruction::PushVal(Value::Resource("missing.dmi".into())),
+            (),
+        )];
+        assert_eq!(
+            assemble(&missing, &mut MissingEnv),
+            Err(AssembleError::ResourceNotFound("missing.dmi".into()))
+        );
     }
 
     #[test]

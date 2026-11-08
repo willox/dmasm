@@ -36,9 +36,10 @@ bitflags! {
 impl Operand for TypeFilter {
     fn assemble<'a, E: AssembleEnv>(
         &'a self,
-        _asm: &mut Assembler<'a, E>,
+        asm: &mut Assembler<'a, E>,
     ) -> Result<(), AssembleError> {
-        unimplemented!()
+        asm.emit(self.bits());
+        Ok(())
     }
 
     fn disassemble<E: DisassembleEnv>(
