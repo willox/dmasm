@@ -159,9 +159,10 @@ pub fn compile_expr(code: &str, params: &[&str]) -> Result<Vec<Node>, CompileErr
 
     let ctx = dreammaker::Context::default();
 
-    let mut lexer = dreammaker::lexer::Lexer::new(&ctx, Default::default(), code.as_bytes());
-    let mut indents = dreammaker::indents::IndentProcessor::new(&ctx, &mut lexer);
-    let expr = dreammaker::parser::parse_expression(&ctx, Default::default(), &mut indents)?;
+    let mut lexer =
+        dreammaker::lexer::Lexer::new(&ctx, dreammaker::FileId::BUILTINS, code.as_bytes());
+    let mut indents = dreammaker::IndentProcessor::new(&ctx, &mut lexer);
+    let expr = ctx.parse_expression(dreammaker::Location::BUILTINS, &mut indents)?;
 
     if !lexer.remaining().is_empty() {
         return Err(CompileError::ExpectedEnd);
@@ -243,7 +244,7 @@ impl Compiler<'_> {
     }
 
     fn emit_find_var(&mut self, ident: dreammaker::ast::Ident) -> EvalKind {
-        if let Some(index) = self.params.iter().rposition(|x| *x == ident) {
+        if let Some(index) = self.params.iter().rposition(|x| *x == ident.as_str()) {
             return EvalKind::Var(Variable::Arg(index as u32));
         }
 
@@ -259,7 +260,7 @@ impl Compiler<'_> {
 
             // Anything else is treated as a global var
             _ => EvalKind::Var(Variable::Global(GlobalVar {
-                name: DMString(ident.into()),
+                name: DMString(ident.into_owned().into_bytes()),
                 id: None,
             })),
         }

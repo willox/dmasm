@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-use dreammaker::ast::{Expression, Field, Follow, FormatTypePath, Term};
+use dreammaker::ast::{Expression, Field, Follow, Term};
 
 use crate::{
     compiler::{args, builtin_procs, follow, operands, strings, CompileError, Compiler, EvalKind},
@@ -56,13 +56,8 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                 return Err(CompileError::UnsupportedPrefabWithVars);
             }
 
-            let mut path = String::new();
-
             // TODO: Relative stuff
-            for (op, part) in prefab.path {
-                use std::fmt::Write;
-                write!(&mut path, "{}{}", op, part).unwrap();
-            }
+            let path = prefab.path.to_string();
 
             compiler.emit_ins(Instruction::PushVal(Value::Path(path)));
             Ok(EvalKind::Stack)
@@ -186,7 +181,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                 return Err(CompileError::UnsupportedPrefabWithVars);
             }
 
-            let path = format!("{}", FormatTypePath(&prefab.path));
+            let path = prefab.path.to_string();
             let typeval = operands::Value::Path(path);
             compiler.emit_ins(Instruction::PushVal(typeval));
 
@@ -312,12 +307,18 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         }
 
         Term::ExternalCall {
-            library_name,
-            function_name,
+            library,
+            function,
             args,
         } => {
-            compiler.emit_expr(*library_name)?;
-            compiler.emit_expr(*function_name)?;
+            // TODO: call_ext(handle)() without a library name
+            let Some(library) = library else {
+                return Err(CompileError::UnsupportedBuiltin {
+                    proc: "call_ext".to_owned(),
+                });
+            };
+            compiler.emit_expr(*library)?;
+            compiler.emit_expr(*function)?;
 
             let args_vec = args.into_vec();
             let arg_amount: u32 = args_vec.len().try_into().unwrap();

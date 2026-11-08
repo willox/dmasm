@@ -28,7 +28,7 @@ pub(super) fn emit(
                     PropertyAccessKind::Dot
                     | PropertyAccessKind::Colon
                     | PropertyAccessKind::Scope => {
-                        field_buffer.push(ident.into());
+                        field_buffer.push(ident.into_owned());
                     }
 
                     PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon => {
@@ -39,7 +39,10 @@ pub(super) fn emit(
                         compiler
                             .emit_ins(Instruction::SetCacheJmpIfNull(Label::Named(short_circuit)));
 
-                        kind = EvalKind::Field(ChainBuilder::begin(Variable::Cache), ident.into());
+                        kind = EvalKind::Field(
+                            ChainBuilder::begin(Variable::Cache),
+                            ident.into_owned(),
+                        );
                     }
                 }
             }
