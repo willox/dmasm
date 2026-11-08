@@ -83,7 +83,6 @@ dependencies = [
 [[package]]
 name = "dreammaker"
 version = "0.1.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM?tag=suite-1.12#a3889854c71b9a259a64092d8937fef60666e668"
 dependencies = [
  "beef",
  "bitflags",
@@ -105,7 +104,6 @@ dependencies = [
 [[package]]
 name = "dreammaker-macros"
 version = "0.0.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM?tag=suite-1.12#a3889854c71b9a259a64092d8937fef60666e668"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -172,7 +170,6 @@ checksum = "71dd52191aae121e8611f1e8dc3e324dd0dd1dee1e6dd91d10ee07a3cfb4d9d8"
 [[package]]
 name = "interval-tree"
 version = "0.8.0"
-source = "git+https://github.com/SpaceManiac/SpacemanDMM?tag=suite-1.12#a3889854c71b9a259a64092d8937fef60666e668"
 
 [[package]]
 name = "memchr"

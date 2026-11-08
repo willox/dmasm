@@ -163,6 +163,9 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         }
 
         Term::NewImplicit { .. } => Err(CompileError::UnsupportedImplicitNew),
+        Term::Alist(_) => Err(CompileError::UnsupportedBuiltin {
+            proc: "alist".to_owned(),
+        }),
         Term::NewMiniExpr { expr, args } => {
             let var = compiler.emit_find_var(expr.ident.into());
             let follows: Vec<Follow> = expr
