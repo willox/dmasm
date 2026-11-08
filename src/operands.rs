@@ -790,7 +790,17 @@ impl Operand for Variable {
             Variable::CacheIndex => asm.emit(access_modifiers::CacheIndex),
             Variable::Caller => asm.emit(access_modifiers::Caller),
             Variable::Callee => asm.emit(access_modifiers::Callee),
-            Variable::Field(name) => name.assemble(asm)?,
+            Variable::Field(name) => {
+                // The field's string id sits where an access modifier could be,
+                // so one that lands in the modifier range needs bit 0x1000_0000
+                // or BYOND reads it as that modifier. The disassembler strips it.
+                let id = name.get_string_index(asm)?;
+                if access_modifiers::is_access_modifier(id) {
+                    asm.emit(id | 0x1000_0000);
+                } else {
+                    asm.emit(id);
+                }
+            }
             Variable::Arg(idx) => {
                 asm.emit(access_modifiers::Arg);
                 asm.emit(*idx);

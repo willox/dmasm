@@ -231,6 +231,94 @@ mod tests {
         );
     }
 
+    // Big worlds have more than 0xFFCD strings, so some field names get ids
+    // that look like access modifiers
+    struct ModifierRangeStringEnv;
+
+    impl AssembleEnv for ModifierRangeStringEnv {
+        fn get_string_index(&mut self, string: &[u8]) -> Option<u32> {
+            match string {
+                b"in_range" => Some(crate::access_modifiers::StaticVerb),
+                _ => Some(1337),
+            }
+        }
+
+        fn get_variable_name_index(&mut self, _name: &[u8]) -> Option<u32> {
+            None
+        }
+
+        fn get_proc_index(&mut self, _path: &str) -> Option<u32> {
+            None
+        }
+
+        fn get_type(&mut self, _path: &str) -> Option<(u8, u32)> {
+            None
+        }
+    }
+
+    impl crate::disassembler::DisassembleEnv for ModifierRangeStringEnv {
+        fn get_string_data(&mut self, index: u32) -> Option<Vec<u8>> {
+            match index {
+                crate::access_modifiers::StaticVerb => Some(b"in_range".to_vec()),
+                1337 => Some(b"normal".to_vec()),
+                _ => None,
+            }
+        }
+
+        fn get_variable_name(&mut self, _index: u32) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn get_proc_name(&mut self, _index: u32) -> Option<String> {
+            None
+        }
+
+        fn value_to_string_data(&mut self, _tag: u32, _data: u32) -> Option<Vec<u8>> {
+            None
+        }
+    }
+
+    #[test]
+    fn flags_field_ids_in_the_access_modifier_range() {
+        use crate::access_modifiers;
+        use crate::operands::Variable;
+
+        let field = |name: &str| {
+            Instruction::GetVar(Variable::SetCache(
+                Box::new(Variable::Src),
+                Box::new(Variable::Field(DMString(name.as_bytes().to_vec()))),
+            ))
+        };
+        let nodes = [
+            Node::Instruction(field("in_range"), ()),
+            Node::Instruction(field("normal"), ()),
+        ];
+
+        let bytecode = assemble(&nodes, &mut ModifierRangeStringEnv).unwrap();
+        assert_eq!(
+            bytecode,
+            vec![
+                crate::Opcode::GetVar.word(),
+                access_modifiers::SetCache,
+                access_modifiers::Src,
+                0x1000_0000 | access_modifiers::StaticVerb,
+                crate::Opcode::GetVar.word(),
+                access_modifiers::SetCache,
+                access_modifiers::Src,
+                1337,
+            ]
+        );
+
+        let (disassembled, error) =
+            crate::disassembler::disassemble(&bytecode, &mut ModifierRangeStringEnv);
+        assert_eq!(error, None);
+        let disassembled = disassembled
+            .into_iter()
+            .map(Node::strip_debug_data)
+            .collect::<Vec<_>>();
+        assert_eq!(disassembled, nodes);
+    }
+
     #[test]
     fn reports_missing_assembly_inputs() {
         let missing_label = [Node::Instruction(
