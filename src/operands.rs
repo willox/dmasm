@@ -361,9 +361,16 @@ pub struct SwitchParams {
 impl Operand for SwitchParams {
     fn assemble<'a, E: AssembleEnv>(
         &'a self,
-        _asm: &mut Assembler<'a, E>,
+        asm: &mut Assembler<'a, E>,
     ) -> Result<(), AssembleError> {
-        unimplemented!();
+        asm.emit(self.cases.len() as u32);
+
+        for (value, label) in &self.cases {
+            value.assemble(asm)?;
+            label.assemble(asm)?;
+        }
+
+        self.default.assemble(asm)
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -406,9 +413,16 @@ pub struct PickSwitchParams {
 impl Operand for PickSwitchParams {
     fn assemble<'a, E: AssembleEnv>(
         &'a self,
-        _asm: &mut Assembler<'a, E>,
+        asm: &mut Assembler<'a, E>,
     ) -> Result<(), AssembleError> {
-        unimplemented!();
+        asm.emit(self.cases.len() as u32);
+
+        for (threshold, label) in &self.cases {
+            asm.emit(*threshold);
+            label.assemble(asm)?;
+        }
+
+        self.default.assemble(asm)
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -453,9 +467,24 @@ pub struct SwitchRangeParams {
 impl Operand for SwitchRangeParams {
     fn assemble<'a, E: AssembleEnv>(
         &'a self,
-        _asm: &mut Assembler<'a, E>,
+        asm: &mut Assembler<'a, E>,
     ) -> Result<(), AssembleError> {
-        unimplemented!();
+        asm.emit(self.range_cases.len() as u32);
+
+        for (min, max, label) in &self.range_cases {
+            min.assemble(asm)?;
+            max.assemble(asm)?;
+            label.assemble(asm)?;
+        }
+
+        asm.emit(self.cases.len() as u32);
+
+        for (value, label) in &self.cases {
+            value.assemble(asm)?;
+            label.assemble(asm)?;
+        }
+
+        self.default.assemble(asm)
     }
 
     fn disassemble<E: DisassembleEnv>(
@@ -596,8 +625,12 @@ impl Operand for Value {
                 None => return Err(AssembleError::TypeNotFound(path.clone())),
             },
 
-            // TODO: This _will_ bite me in the ass, implement assemble errors asap
-            other => return Err(AssembleError::UnsupportedValue(other.clone())),
+            Self::Resource(path) => match asm.env.get_resource_index(path) {
+                Some(id) => (0x0C, id),
+                None => return Err(AssembleError::ResourceNotFound(path.clone())),
+            },
+
+            Self::File => (0x27, 0x00),
         };
 
         // The top 8 bits of data live in tag
