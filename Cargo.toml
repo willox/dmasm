@@ -11,4 +11,8 @@ repository = "https://github.com/willox/dmasm"
 [dependencies]
 nom = "7"
 bitflags = "2"
-dreammaker = { git = "https://github.com/SpaceManiac/SpacemanDMM", tag = "suite-1.10" }
+dreammaker = { git = "https://github.com/SpaceManiac/SpacemanDMM", tag = "suite-1.12" }
+
+# Until its parser fixes (Term::Alist, empty arguments, `as` in for-in) are upstream
+[patch."https://github.com/SpaceManiac/SpacemanDMM"]
+dreammaker = { path = "../SpacemanDMM/crates/dreammaker" }

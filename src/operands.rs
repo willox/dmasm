@@ -588,6 +588,14 @@ pub enum Value {
     Resource(String),
     File,
     Raw { tag: u8, data: u32 },
+    /// A prefab with var overrides (`/obj{a = 1}`): an instance of the type
+    /// whose init proc sets the vars. `vars` holds each var's name and code
+    /// (`src.a = 1`); the proc has them in the order of their names' string
+    /// ids, which only the assembler knows.
+    Prefab {
+        path: String,
+        vars: Vec<(String, Vec<crate::Node>)>,
+    },
     /*/
     DatumPath(DMString),
     ClientPath,
@@ -631,6 +639,21 @@ impl Operand for Value {
             },
 
             Self::File => (0x27, 0x00),
+
+            Self::Prefab { path, vars } => {
+                let mut parts = vec![];
+                for (name, nodes) in vars {
+                    let id = asm.env.get_string_index(name.as_bytes());
+                    parts.push((id, crate::assembler::assemble(nodes, &mut *asm.env)?));
+                }
+                parts.sort_by_key(|(id, _)| *id);
+                let mut code: Vec<u32> = parts.into_iter().flat_map(|(_, c)| c).collect();
+                code.push(0); // End
+                match asm.env.get_instance(path, &code) {
+                    Some(id) => (0x29, id),
+                    None => return Err(AssembleError::InstanceNotFound(path.clone())),
+                }
+            }
         };
 
         // The top 8 bits of data live in tag
@@ -718,6 +741,10 @@ impl Operand for Value {
             Value::Resource(value) => write!(f, "'{}'", value),
             Value::File => write!(f, "/file"),
             Value::Raw { tag, data } => write!(f, "ref({:X}{:08X})", tag, data),
+            Value::Prefab { path, vars } => {
+                let names: Vec<&str> = vars.iter().map(|(n, _)| n.as_str()).collect();
+                write!(f, "{}{{{}}}", path, names.join("; "))
+            }
         }
     }
 }
@@ -735,6 +762,22 @@ pub struct GlobalVar {
     /// Index into BYOND's `global_values`, read straight off the bytecode.
     /// `None` when built from source, where the assembler resolves the name.
     pub id: Option<u32>,
+    /// Where a var resolved by name is declared: `Some("")` for a global var,
+    /// `Some(type path)` for a static var of that type, `Some("proc:" + proc
+    /// path)` for a proc's `var/static` local, `None` when unknown.
+    /// Names aren't unique (several types can have a static `config`), so the
+    /// assembler needs this to find the right slot.
+    pub scope: Option<String>,
+}
+
+impl GlobalVar {
+    pub fn named(name: &[u8], scope: Option<String>) -> Self {
+        GlobalVar {
+            name: DMString(name.to_vec()),
+            id: None,
+            scope,
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -774,39 +817,17 @@ impl Operand for Variable {
     ) -> Result<(), AssembleError> {
         use crate::access_modifiers;
 
-        fn write_variable_name<E: AssembleEnv>(
-            asm: &mut Assembler<E>,
-            name: &DMString,
-        ) -> Result<(), AssembleError> {
-            let id = asm
-                .env
-                .get_variable_name_index(&name.0)
-                .ok_or_else(|| AssembleError::VariableNameNotFound(name.0.clone()))?;
-            asm.emit(id);
-            Ok(())
-        }
-
+        // Written as stored. The compiler has already turned the proc name
+        // into the form BYOND looks up (see `compiler::dynamic_name`); a verb
+        // with `set name` keeps whatever that name is, underscores included.
         fn write_dynamic_name<E: AssembleEnv>(
             asm: &mut Assembler<E>,
             name: &DMString,
         ) -> Result<(), AssembleError> {
-            let mut formatted;
-            let bytes = if name.0.contains(&b'_') {
-                formatted = name.0.clone();
-                formatted.iter_mut().for_each(|byte| {
-                    if *byte == b'_' {
-                        *byte = b' ';
-                    }
-                });
-                formatted.as_slice()
-            } else {
-                name.0.as_slice()
-            };
-
             let id = asm
                 .env
-                .get_string_index(bytes)
-                .ok_or_else(|| AssembleError::StringNotFound(bytes.to_vec()))?;
+                .get_string_index(&name.0)
+                .ok_or_else(|| AssembleError::StringNotFound(name.0.clone()))?;
             asm.emit(id);
             Ok(())
         }
@@ -846,7 +867,15 @@ impl Operand for Variable {
                 asm.emit(access_modifiers::Global);
                 match global.id {
                     Some(id) => asm.emit(id),
-                    None => write_variable_name(asm, &global.name)?,
+                    None => {
+                        let id = asm
+                            .env
+                            .get_global_index(&global.name.0, global.scope.as_deref())
+                            .ok_or_else(|| {
+                                AssembleError::VariableNameNotFound(global.name.0.clone())
+                            })?;
+                        asm.emit(id);
+                    }
                 }
             }
             Variable::SetCache(lhs, rhs) => {
@@ -911,6 +940,7 @@ impl Operand for Variable {
             Ok(GlobalVar {
                 name: DMString(string),
                 id: Some(id),
+                scope: None,
             })
         }
 

@@ -108,6 +108,7 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
 }
 
 // TODO: The differences between these are... weird. We should pick a behavior that counts as a sub-set of BYOND and enforce it with errors.
+#[derive(PartialEq, Clone, Copy)]
 pub(super) enum ArgsContext {
     Proc,
     List,
@@ -130,7 +131,7 @@ pub(super) fn emit(
     args: Vec<Expression>,
 ) -> Result<ArgsResult, CompileError> {
     if has_assoc_argument(context, &args)? {
-        return do_assoc(compiler, args);
+        return do_assoc(compiler, context, args);
     }
 
     do_normal(compiler, args)
@@ -162,6 +163,7 @@ fn do_normal(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResul
     let args_len = args.len();
 
     for arg in args {
+        compiler.regroup_root = true;
         let expr = compiler.emit_expr(arg)?;
 
         // If our param is an arg list and it's the only param, we're an arg list!
@@ -177,7 +179,11 @@ fn do_normal(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResul
     Ok(ArgsResult::Normal)
 }
 
-fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult, CompileError> {
+fn do_assoc(
+    compiler: &mut Compiler,
+    context: ArgsContext,
+    args: Vec<Expression>,
+) -> Result<ArgsResult, CompileError> {
     // TODO: Lots of cloning in here :(
     for (idx, arg) in args.into_iter().enumerate() {
         let idx = idx + 1;
@@ -191,13 +197,32 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
         {
             if let Expression::Base { term, follow } = lhs.as_ref() {
                 if follow.is_empty() {
-                    // TODO: BYOND would change null to "null" here.
+                    // `null = x` is keyed by "null"
+                    if let Term::Null = &term.elem {
+                        compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
+                            b"null".to_vec(),
+                        ))));
+                        compiler.regroup_root = true;
+                        let kind = compiler.emit_expr((**rhs).to_owned())?;
+                        compiler.emit_move_to_stack(kind)?;
+                        continue;
+                    }
 
                     if let Term::Ident(ident) = &term.elem {
-                        compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
-                            ident.to_owned().into(),
-                        ))));
+                        // In a list, a builtin constant key is its value (MALE is "male")
+                        if context == ArgsContext::List
+                            && super::procs::is_builtin_const(compiler, ident.as_str())
+                        {
+                            let value =
+                                super::procs::const_value(compiler, ident.as_str()).unwrap();
+                            compiler.emit_constant(value)?;
+                        } else {
+                            compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
+                                ident.as_str().as_bytes().to_vec(),
+                            ))));
+                        }
 
+                        compiler.regroup_root = true;
                         let kind = compiler.emit_expr((**rhs).to_owned())?;
                         compiler.emit_move_to_stack(kind)?;
                         continue;
@@ -216,9 +241,11 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
                 lhs,
                 rhs,
             } => {
+                compiler.regroup_root = true;
                 let kind = compiler.emit_expr((**lhs).to_owned())?;
                 compiler.emit_move_to_stack(kind)?;
 
+                compiler.regroup_root = true;
                 let kind = compiler.emit_expr((**rhs).to_owned())?;
                 compiler.emit_move_to_stack(kind)?;
             }
@@ -227,6 +254,7 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
             other => {
                 compiler.emit_ins(Instruction::PushInt(idx as i32));
 
+                compiler.regroup_root = true;
                 let kind = compiler.emit_expr(other.to_owned())?;
                 compiler.emit_move_to_stack(kind)?;
             }

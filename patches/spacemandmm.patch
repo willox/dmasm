@@ -1,0 +1,743 @@
+From 09ec406a8b670dc37a20dce21e431c6be802c621 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 12:46:29 +0000
+Subject: [PATCH 01/13] Keep the as clause of a for-in loop
+
+The as clause right after the loop variable is read early as a key type, for
+for (k as T, v in L), so for (var/x as anything in L) lost it.
+---
+ crates/dreammaker/src/parser.rs | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/crates/dreammaker/src/parser.rs b/crates/dreammaker/src/parser.rs
+index b1349b7..5ead4a9 100644
+--- a/crates/dreammaker/src/parser.rs
++++ b/crates/dreammaker/src/parser.rs
+@@ -1756,7 +1756,8 @@ impl<'ctx, 'an, 'inp> Parser<'ctx, 'an, 'inp> {
+                     // for(var/a as obj
+                     Some(require!(self.input_type()))
+                 } else {
+-                    None
++                    // Already taken above, where it could have been a typed key
++                    key_input_type
+                 };
+ 
+                 let in_list = if let Some(()) = self.exact(Token![in])? {
+-- 
+2.47.3
+
+
+From 5adf91dc3fb4afa4aba8bcd02fac4f52692a740b Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 13:52:06 +0000
+Subject: [PATCH 02/13] Parse empty arguments as null
+
+DreamMaker passes null for an argument left empty, as in f(a, , b). The
+parser now keeps those as null expressions (with an unknown location)
+instead of dropping them, which moved the later arguments into the wrong
+positions.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/parser.rs | 33 ++++++++++++++++++++-------------
+ 1 file changed, 20 insertions(+), 13 deletions(-)
+
+diff --git a/crates/dreammaker/src/parser.rs b/crates/dreammaker/src/parser.rs
+index 5ead4a9..18c636b 100644
+--- a/crates/dreammaker/src/parser.rs
++++ b/crates/dreammaker/src/parser.rs
+@@ -2826,20 +2826,27 @@ impl<'ctx, 'an, 'inp> Parser<'ctx, 'an, 'inp> {
+         let start = self.location;
+ 
+         let mut arguments = Vec::new();
+-        // TODO: account for implicit nulls again
+-        let result = self.separated(Token![,], Token![')'], Some(()), |this| {
+-            let arg_start = this.location;
+-            let result = this.expression();
+-            this.annotate(arg_start, || Annotation::ProcArgument(arguments.len()));
+-            match result {
+-                Ok(Some(expr)) => {
+-                    arguments.push(expr);
+-                    SUCCESS
+-                },
+-                Ok(None) => Ok(None),
+-                Err(e) => Err(e),
++        // An empty argument, as in `f(a, , b)`, is null
++        let mut comma_legal = false;
++        let result: Status<()> = loop {
++            if let Some(()) = self.exact(Token![')'])? {
++                break SUCCESS;
++            } else if let Some(()) = self.exact(Token![,])? {
++                if comma_legal {
++                    comma_legal = false;
++                } else {
++                    arguments.push(Expression::from(Term::Null));
++                }
++            } else if !comma_legal {
++                let arg_start = self.location;
++                let result = self.expression();
++                self.annotate(arg_start, || Annotation::ProcArgument(arguments.len()));
++                arguments.push(self.require(result)?);
++                comma_legal = true;
++            } else {
++                break Err(self.parse_error());
+             }
+-        });
++        };
+         let end = self.location; // location of the closing parenthesis
+         self.annotate_precise(start..end, || {
+             Annotation::ProcArguments(parents.to_owned(), proc.clone(), arguments.len())
+-- 
+2.47.3
+
+
+From 7fa9ffa21a253bc89f98dc62a796567ac6092bdc Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 13:52:07 +0000
+Subject: [PATCH 03/13] Add Term::Alist for alist() calls
+
+alist(...) parsed to Term::List, so tools couldn't tell an /alist from a
+/list. It gets its own term now; dreamchecker types it as /alist.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dm-langserver/src/find_references.rs | 2 +-
+ crates/dreamchecker/src/lib.rs              | 4 ++++
+ crates/dreammaker/src/ast.rs                | 4 +++-
+ crates/dreammaker/src/constants.rs          | 2 +-
+ crates/dreammaker/src/parser.rs             | 2 +-
+ 5 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/crates/dm-langserver/src/find_references.rs b/crates/dm-langserver/src/find_references.rs
+index f43e0fb..abb4d56 100644
+--- a/crates/dm-langserver/src/find_references.rs
++++ b/crates/dm-langserver/src/find_references.rs
+@@ -592,7 +592,7 @@ impl<'o> WalkProc<'o> {
+                 StaticType::None
+             },
+ 
+-            Term::List(args) => {
++            Term::List(args) | Term::Alist(args) => {
+                 // TODO: use /proc/list
+                 self.visit_arguments(location, args);
+                 StaticType::List {
+diff --git a/crates/dreamchecker/src/lib.rs b/crates/dreamchecker/src/lib.rs
+index d8497bc..6e2fa2f 100644
+--- a/crates/dreamchecker/src/lib.rs
++++ b/crates/dreamchecker/src/lib.rs
+@@ -2731,6 +2731,10 @@ impl<'o, 's> AnalyzeProc<'o, 's> {
+                 self.visit_arguments(location, args, local_vars);
+                 Analysis::from_static_type(self.objtree.expect("/list"))
+             },
++            Term::Alist(args) => {
++                self.visit_arguments(location, args, local_vars);
++                Analysis::from_static_type(self.objtree.expect("/alist"))
++            },
+             Term::Input {
+                 args,
+                 input_type,
+diff --git a/crates/dreammaker/src/ast.rs b/crates/dreammaker/src/ast.rs
+index 0f8d57d..7a6268c 100644
+--- a/crates/dreammaker/src/ast.rs
++++ b/crates/dreammaker/src/ast.rs
+@@ -1259,6 +1259,8 @@ pub enum Term {
+     },
+     /// A `list` call. Associations are represented by assignment expressions.
+     List(Box<[Expression]>),
++    /// An `alist` call, like `list` but making an /alist.
++    Alist(Box<[Expression]>),
+     /// An `input` call.
+     Input {
+         args: Box<[Expression]>,
+@@ -1308,7 +1310,7 @@ impl Term {
+             Term::NewImplicit { .. } => Some(true),
+             Term::NewPrefab { .. } => Some(true),
+             Term::NewMiniExpr { .. } => Some(true),
+-            Term::List(_) => Some(true),
++            Term::List(_) | Term::Alist(_) => Some(true),
+ 
+             // Truthy if any of the literal parts are non-empty.
+             // Otherwise, don't try to determine the content of the parts.
+diff --git a/crates/dreammaker/src/constants.rs b/crates/dreammaker/src/constants.rs
+index f94c3cb..ad1d25d 100644
+--- a/crates/dreammaker/src/constants.rs
++++ b/crates/dreammaker/src/constants.rs
+@@ -804,7 +804,7 @@ impl<'a> ConstantFolder<'a> {
+                 },
+             },
+             Term::NewMiniExpr { .. } => return Err(self.error("non-constant new expression")),
+-            Term::List(vec) => Constant::List(self.arguments(vec)?),
++            Term::List(vec) | Term::Alist(vec) => Constant::List(self.arguments(vec)?),
+             Term::Call(ident, args) => match ident.as_str() {
+                 // constructors which remain as they are
+                 "matrix" => Constant::Call(ConstFn::Matrix, self.arguments(args)?),
+diff --git a/crates/dreammaker/src/parser.rs b/crates/dreammaker/src/parser.rs
+index 18c636b..8db01b7 100644
+--- a/crates/dreammaker/src/parser.rs
++++ b/crates/dreammaker/src/parser.rs
+@@ -2454,7 +2454,7 @@ impl<'ctx, 'an, 'inp> Parser<'ctx, 'an, 'inp> {
+             },
+ 
+             Token::Ident(i, _) if *i == ident!("alist") => match self.arguments(&[], &ident!("alist"))? {
+-                Some(args) => Term::List(args),
++                Some(args) => Term::Alist(args),
+                 None => {
+                     belongs_to.push(i.clone());
+                     self.annotate(start, || Annotation::UnscopedVar(i.clone()));
+-- 
+2.47.3
+
+
+From 322429012e5c5a796b1b24dae6a49ed9ddfd1447 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:21:24 +0000
+Subject: [PATCH 04/13] Stringify macro arguments with their spacing
+
+#x now keeps the spaces the argument was written with, including trailing
+ones, the way DreamMaker does ("U(a || 1)", not "U ( a || 1 )").
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/preprocessor.rs | 58 ++++++++++++++++++++++++---
+ 1 file changed, 52 insertions(+), 6 deletions(-)
+
+diff --git a/crates/dreammaker/src/preprocessor.rs b/crates/dreammaker/src/preprocessor.rs
+index e573a4f..9c3de32 100644
+--- a/crates/dreammaker/src/preprocessor.rs
++++ b/crates/dreammaker/src/preprocessor.rs
+@@ -1204,30 +1204,48 @@ impl<'ctx> Preprocessor<'ctx> {
+ 
+                         self.annotate_macro(ident, location, Some(docs));
+ 
+-                        // read arguments
++                        // read arguments, and where each token was, for `#arg`
+                         let mut args = Vec::new();
++                        let mut arg_spans = Vec::new();
++                        // spaces between an argument's last token and the `,` or `)` after it
++                        let mut arg_trailing = Vec::new();
+                         let mut this_arg = Vec::new();
++                        let mut this_spans = Vec::new();
+                         let mut parens = 0;
+                         loop {
+-                            let token = next!();
++                            let Some(located) = self.inner_next() else {
++                                return Err(self.error("unexpected EOF"));
++                            };
++                            let span = (located.start, located.end);
++                            let token = located.token;
+                             match token {
+                                 Token!['('] => {
+                                     parens += 1;
+                                     this_arg.push(token);
++                                    this_spans.push(span);
+                                 },
+                                 Token![')'] => {
+                                     if parens == 0 {
++                                        arg_trailing.push(trailing_gap(&this_spans, span.0));
+                                         args.push(this_arg);
++                                        arg_spans.push(this_spans);
+                                         break;
+                                     }
+                                     parens -= 1;
+                                     this_arg.push(token);
++                                    this_spans.push(span);
+                                 },
+                                 Token![,] if parens == 0 => {
++                                    arg_trailing.push(trailing_gap(&this_spans, span.0));
+                                     args.push(this_arg);
++                                    arg_spans.push(this_spans);
+                                     this_arg = Vec::new();
++                                    this_spans = Vec::new();
++                                },
++                                _ => {
++                                    this_arg.push(token);
++                                    this_spans.push(span);
+                                 },
+-                                _ => this_arg.push(token),
+                             }
+                         }
+ 
+@@ -1330,14 +1348,32 @@ impl<'ctx> Preprocessor<'ctx> {
+                                     Some(Token::Ident(argname, _)) => {
+                                         match params.iter().position(|x| *x == argname) {
+                                             Some(i) => {
++                                                // As written: tokens are spaced the way they were
++                                                // in the source, like DreamMaker does
++                                                let spans = arg_spans.get(i).filter(|s| s.len() == args[i].len());
+                                                 let mut string = String::new();
+-                                                for each in &args[i] {
++                                                for (j, each) in args[i].iter().enumerate() {
+                                                     use std::fmt::Write;
+-                                                    if !string.is_empty() {
+-                                                        string.push(' ');
++                                                    if j > 0 {
++                                                        let gap = match spans {
++                                                            Some(spans) => {
++                                                                let (prev_end, start) = (spans[j - 1].1, spans[j].0);
++                                                                if prev_end.file == start.file && prev_end.line == start.line {
++                                                                    start.column.saturating_sub(prev_end.column) as usize
++                                                                } else {
++                                                                    1
++                                                                }
++                                                            },
++                                                            None => 1,
++                                                        };
++                                                        string.extend(std::iter::repeat(' ').take(gap));
+                                                     }
+                                                     _ = write!(string, "{each}");
+                                                 }
++                                                if spans.is_some() {
++                                                    let trailing = arg_trailing.get(i).copied().unwrap_or(0);
++                                                    string.extend(std::iter::repeat(' ').take(trailing));
++                                                }
+                                                 expansion.push_back(Token::String(
+                                                     string.into(),
+                                                     StringKind::Raw,
+@@ -1397,6 +1433,16 @@ impl<'ctx> Preprocessor<'ctx> {
+     }
+ }
+ 
++/// The spaces between the last of `spans` and `next` on the same line.
++fn trailing_gap(spans: &[(Location, Location)], next: Location) -> usize {
++    match spans.last() {
++        Some((_, end)) if end.file == next.file && end.line == next.line => {
++            next.column.saturating_sub(end.column) as usize
++        },
++        _ => 0,
++    }
++}
++
+ impl<'ctx> Iterator for Preprocessor<'ctx> {
+     type Item = LocatedToken;
+ 
+-- 
+2.47.3
+
+
+From f52611bb03f14e4fe183ccc0e4b4cd9f2106a5bb Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:23:18 +0000
+Subject: [PATCH 05/13] Guess the spacing of stringified tokens that came from
+ another macro
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/preprocessor.rs | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/crates/dreammaker/src/preprocessor.rs b/crates/dreammaker/src/preprocessor.rs
+index 9c3de32..bec2d3b 100644
+--- a/crates/dreammaker/src/preprocessor.rs
++++ b/crates/dreammaker/src/preprocessor.rs
+@@ -1356,6 +1356,11 @@ impl<'ctx> Preprocessor<'ctx> {
+                                                     use std::fmt::Write;
+                                                     if j > 0 {
+                                                         let gap = match spans {
++                                                            // Tokens from another macro's expansion have no
++                                                            // real place, so their spacing is guessed
++                                                            Some(spans) if spans[j - 1].0 == spans[j - 1].1 || spans[j].0 == spans[j].1 => {
++                                                                guessed_space(&args[i][j - 1], each) as usize
++                                                            },
+                                                             Some(spans) => {
+                                                                 let (prev_end, start) = (spans[j - 1].1, spans[j].0);
+                                                                 if prev_end.file == start.file && prev_end.line == start.line {
+@@ -1433,6 +1438,24 @@ impl<'ctx> Preprocessor<'ctx> {
+     }
+ }
+ 
++/// Whether to put a space between two tokens whose spacing isn't known: after
++/// an identifier that was followed by one, after a comma, and around binary
++/// operators.
++fn guessed_space(prev: &Token, next: &Token) -> bool {
++    fn binary(t: &Token) -> bool {
++        use crate::lexer::Punctuation::*;
++        matches!(
++            t,
++            Token::Punct(
++                Or | And | Eq | NotEq | Less | Greater | LessEq | GreaterEq | Add | Mul | Slash | Mod | BitOr
++                    | BitXor | LShift | RShift | Assign | AddAssign | SubAssign | MulAssign | DivAssign
++                    | QuestionMark | Colon
++            )
++        )
++    }
++    matches!(prev, Token::Ident(_, true)) || matches!(prev, Token::Punct(crate::lexer::Punctuation::Comma)) || binary(prev) || binary(next)
++}
++
+ /// The spaces between the last of `spans` and `next` on the same line.
+ fn trailing_gap(spans: &[(Location, Location)], next: Location) -> usize {
+     match spans.last() {
+-- 
+2.47.3
+
+
+From 5c46041957fb549415d68da86db6471850f30d30 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:25:02 +0000
+Subject: [PATCH 06/13] Stringify spacing: binary minus
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/preprocessor.rs | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/crates/dreammaker/src/preprocessor.rs b/crates/dreammaker/src/preprocessor.rs
+index bec2d3b..13c24a0 100644
+--- a/crates/dreammaker/src/preprocessor.rs
++++ b/crates/dreammaker/src/preprocessor.rs
+@@ -1359,7 +1359,8 @@ impl<'ctx> Preprocessor<'ctx> {
+                                                             // Tokens from another macro's expansion have no
+                                                             // real place, so their spacing is guessed
+                                                             Some(spans) if spans[j - 1].0 == spans[j - 1].1 || spans[j].0 == spans[j].1 => {
+-                                                                guessed_space(&args[i][j - 1], each) as usize
++                                                                let before = if j >= 2 { args[i].get(j - 2) } else { None };
++                                                                guessed_space(before, &args[i][j - 1], each) as usize
+                                                             },
+                                                             Some(spans) => {
+                                                                 let (prev_end, start) = (spans[j - 1].1, spans[j].0);
+@@ -1441,7 +1442,21 @@ impl<'ctx> Preprocessor<'ctx> {
+ /// Whether to put a space between two tokens whose spacing isn't known: after
+ /// an identifier that was followed by one, after a comma, and around binary
+ /// operators.
+-fn guessed_space(prev: &Token, next: &Token) -> bool {
++fn guessed_space(before: Option<&Token>, prev: &Token, next: &Token) -> bool {
++    // `-` after an operand subtracts
++    fn operand(t: &Token) -> bool {
++        matches!(
++            t,
++            Token::Ident(..) | Token::Int(_) | Token::Float(_) | Token::String(..) | Token::Punct(crate::lexer::Punctuation::RParen | crate::lexer::Punctuation::RBracket)
++        )
++    }
++    let minus = Token::Punct(crate::lexer::Punctuation::Sub);
++    if *next == minus && operand(prev) {
++        return true;
++    }
++    if *prev == minus {
++        return before.is_some_and(operand);
++    }
+     fn binary(t: &Token) -> bool {
+         use crate::lexer::Punctuation::*;
+         matches!(
+-- 
+2.47.3
+
+
+From ea6375b6c37a198e0f2dc949964a77113fd998bc Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:27:25 +0000
+Subject: [PATCH 07/13] Var flags anywhere in a var's path
+
+DreamMaker reads var/list/static/x as a static list; only flags before the
+type were recognised.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/ast.rs | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/crates/dreammaker/src/ast.rs b/crates/dreammaker/src/ast.rs
+index 7a6268c..702617a 100644
+--- a/crates/dreammaker/src/ast.rs
++++ b/crates/dreammaker/src/ast.rs
+@@ -1518,15 +1518,17 @@ impl VarTypeBuilder {
+ 
+ impl FromIterator<Ident> for VarTypeBuilder {
+     fn from_iter<T: IntoIterator<Item = Ident>>(iter: T) -> Self {
++        // DreamMaker takes `static`, `const` and the rest anywhere in the
++        // path: `var/list/static/x` is a static list
+         let mut flags = VarTypeFlags::default();
+         let type_path = iter
+             .into_iter()
+-            .skip_while(|p| {
++            .filter(|p| {
+                 if let Some(flag) = VarTypeFlags::from_ident(p) {
+                     flags |= flag;
+-                    true
+-                } else {
+                     false
++                } else {
++                    true
+                 }
+             })
+             .collect();
+-- 
+2.47.3
+
+
+From 557b2b724a6dfa97f7642e25840bfe65214dd137 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:29:10 +0000
+Subject: [PATCH 08/13] EXCEPTION() passes __FILE__ and __LINE__, as in BYOND's
+ stddef.dm
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/builtins.rs | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/crates/dreammaker/src/builtins.rs b/crates/dreammaker/src/builtins.rs
+index 845438d..10541ca 100644
+--- a/crates/dreammaker/src/builtins.rs
++++ b/crates/dreammaker/src/builtins.rs
+@@ -15,7 +15,7 @@ pub fn default_defines(defines: &mut DefineMap) {
+     use crate::lexer::Token::{self, *};
+     let location = Location::BUILTINS;
+ 
+-    // #define EXCEPTION(value) new /exception(value)
++    // #define EXCEPTION(value) new /exception(value, __FILE__, __LINE__)
+     defines.insert(
+         ident!("EXCEPTION"),
+         Define {
+@@ -28,6 +28,10 @@ pub fn default_defines(defines: &mut DefineMap) {
+                 Ident(ident!("exception"), false),
+                 Token!['('],
+                 Ident(ident!("value"), false),
++                Token![,],
++                Ident(ident!("__FILE__"), false),
++                Token![,],
++                Ident(ident!("__LINE__"), false),
+                 Token![')'],
+             ],
+             docs: Default::default(),
+-- 
+2.47.3
+
+
+From 72b5add0344bca3ce1378a3e7839b8b5325fab91 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:30:47 +0000
+Subject: [PATCH 09/13] A macro call's expansion is placed at its closing
+ parenthesis
+
+DreamMaker's __LINE__ in a call spanning lines is the last line.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/preprocessor.rs | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/crates/dreammaker/src/preprocessor.rs b/crates/dreammaker/src/preprocessor.rs
+index 13c24a0..1668873 100644
+--- a/crates/dreammaker/src/preprocessor.rs
++++ b/crates/dreammaker/src/preprocessor.rs
+@@ -1229,6 +1229,9 @@ impl<'ctx> Preprocessor<'ctx> {
+                                         arg_trailing.push(trailing_gap(&this_spans, span.0));
+                                         args.push(this_arg);
+                                         arg_spans.push(this_spans);
++                                        // The expansion is where the call ends, as in
++                                        // DreamMaker: __LINE__ is the line of the `)`
++                                        self.last_input_loc = span.0;
+                                         break;
+                                     }
+                                     parens -= 1;
+-- 
+2.47.3
+
+
+From 7ea6fdd56476024db8ae2b48e7532c4767ce399f Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 14:58:27 +0000
+Subject: [PATCH 10/13] Raw strings get the escapes a normal string's text has
+
+Term::String holds a string as written, escapes and all. A raw string's
+text was stored as is, so a backslash in @"..." read as an escape.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/parser.rs | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/crates/dreammaker/src/parser.rs b/crates/dreammaker/src/parser.rs
+index 8db01b7..99d80e1 100644
+--- a/crates/dreammaker/src/parser.rs
++++ b/crates/dreammaker/src/parser.rs
+@@ -2636,6 +2636,9 @@ impl<'ctx, 'an, 'inp> Parser<'ctx, 'an, 'inp> {
+             },
+ 
+             // term :: str_lit | num_lit
++            // A raw string's text is written the way a normal string's is, with
++            // escapes, so the two mean the same: @"a\b" is "a\\b"
++            Token::String(val, crate::lexer::StringKind::Raw) => Term::String(escape_raw(&val).into()),
+             Token::String(val, _) => Term::String(val),
+             Token::Resource(val) => {
+                 self.annotate_precise(start..start.add_columns(2 + val.len() as u16), || Annotation::Resource((*val).into()));
+@@ -2953,3 +2956,15 @@ fn reconstruct_path(
+     }
+     result
+ }
++
++/// Writes a raw string's text with the escapes a normal string would need.
++fn escape_raw(text: &str) -> String {
++    let mut out = String::with_capacity(text.len());
++    for ch in text.chars() {
++        if matches!(ch, '\\' | '"' | '[') {
++            out.push('\\');
++        }
++        out.push(ch);
++    }
++    out
++}
+-- 
+2.47.3
+
+
+From de20184cc1a10e282b54a9992a548b91fbef9bd8 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 16:15:34 +0000
+Subject: [PATCH 11/13] Parameter: remember a leading slash (BYOND doesn't
+ declare such a parameter)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/ast.rs     | 3 +++
+ crates/dreammaker/src/objtree.rs | 1 +
+ crates/dreammaker/src/parser.rs  | 4 +++-
+ 3 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/crates/dreammaker/src/ast.rs b/crates/dreammaker/src/ast.rs
+index 702617a..48f77ef 100644
+--- a/crates/dreammaker/src/ast.rs
++++ b/crates/dreammaker/src/ast.rs
+@@ -1443,6 +1443,9 @@ pub struct Parameter {
+     pub default: Option<Expression>,
+     pub in_list: Option<Expression>,
+     pub location: Location,
++    /// Written with a leading slash (`/obj/x`), which BYOND doesn't take as a
++    /// parameter at all.
++    pub absolute: bool,
+ }
+ 
+ impl fmt::Display for Parameter {
+diff --git a/crates/dreammaker/src/objtree.rs b/crates/dreammaker/src/objtree.rs
+index 5ce20b0..7ef69e2 100644
+--- a/crates/dreammaker/src/objtree.rs
++++ b/crates/dreammaker/src/objtree.rs
+@@ -1359,6 +1359,7 @@ impl ObjectTreeBuilder {
+                 default: None,
+                 in_list: None,
+                 location: Location::BUILTINS,
++                absolute: false,
+             })
+             .collect();
+         let (parent, mut proc_name) = self.get_from_path(location, &mut path, len).unwrap();
+diff --git a/crates/dreammaker/src/parser.rs b/crates/dreammaker/src/parser.rs
+index 99d80e1..4044d00 100644
+--- a/crates/dreammaker/src/parser.rs
++++ b/crates/dreammaker/src/parser.rs
+@@ -1346,12 +1346,13 @@ impl<'ctx, 'an, 'inp> Parser<'ctx, 'an, 'inp> {
+                 default: None,
+                 in_list: None,
+                 location: self.location,
++                absolute: false,
+             });
+         }
+ 
+         // `name` or `obj/name` or `var/obj/name` or ...
+         let leading_loc = self.updated_location();
+-        let (_absolute, mut path) = leading!(self.tree_path(true));
++        let (absolute, mut path) = leading!(self.tree_path(true));
+         let name = match path.pop() {
+             Some(name) => name,
+             None => {
+@@ -1399,6 +1400,7 @@ impl<'ctx, 'an, 'inp> Parser<'ctx, 'an, 'inp> {
+             default,
+             in_list,
+             location,
++            absolute,
+         })
+     }
+ 
+-- 
+2.47.3
+
+
+From 46e3bb708e7fb5c9ea97d134072c3069100e4444 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 16:58:49 +0000
+Subject: [PATCH 12/13] Preprocessor: #pragma takes the rest of its line
+ (#pragma ignore unused_var left a stray token in the code)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/preprocessor.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/crates/dreammaker/src/preprocessor.rs b/crates/dreammaker/src/preprocessor.rs
+index 1668873..8ce0541 100644
+--- a/crates/dreammaker/src/preprocessor.rs
++++ b/crates/dreammaker/src/preprocessor.rs
+@@ -1074,6 +1074,13 @@ impl<'ctx> Preprocessor<'ctx> {
+                             self.multiple_locations
+                                 .insert(pragma_use_loc.file, pragma_use_loc);
+                         }
++                        // The rest of the line (`#pragma ignore unused_var`) is
++                        // the pragma's, not code
++                        while let Some(lt) = self.inner_next() {
++                            if lt.token == Token!['\n'] {
++                                break;
++                            }
++                        }
+                     },
+                     // none of this other stuff should even exist
+                     other => {
+-- 
+2.47.3
+
+
+From 34f4d554fa1cc889529b3bea6d75261a9fee8ad6 Mon Sep 17 00:00:00 2001
+From: "Sophie Wallace (Cloub)" <sophie@wiox.me>
+Date: Sun, 8 Nov 2026 17:15:08 +0000
+Subject: [PATCH 13/13] Preprocessor: __LINE__ in a macro body counts the line
+ breaks inside the arguments before it
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/dreammaker/src/preprocessor.rs | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/crates/dreammaker/src/preprocessor.rs b/crates/dreammaker/src/preprocessor.rs
+index 8ce0541..6030434 100644
+--- a/crates/dreammaker/src/preprocessor.rs
++++ b/crates/dreammaker/src/preprocessor.rs
+@@ -1272,6 +1272,25 @@ impl<'ctx> Preprocessor<'ctx> {
+                             return Err(self.error("wrong number of arguments to macro call"));
+                         }
+ 
++                        // DreamMaker rescans the expansion as text, so a `__LINE__` in the
++                        // body is the line of the `)` plus the line breaks inside the
++                        // arguments pasted before it (not those around an argument)
++                        let arg_breaks: Vec<u32> = args
++                            .iter()
++                            .map(|arg| {
++                                let start = arg.iter().position(|t| *t != Token!['\n']);
++                                let end = arg.iter().rposition(|t| *t != Token!['\n']);
++                                match (start, end) {
++                                    (Some(start), Some(end)) => arg[start..=end]
++                                        .iter()
++                                        .filter(|t| **t == Token!['\n'])
++                                        .count() as u32,
++                                    _ => 0,
++                                }
++                            })
++                            .collect();
++                        let mut breaks = 0;
++
+                         // paste them into the expansion
+                         let mut expansion = VecDeque::new();
+                         let mut input = subst.iter().cloned();
+@@ -1280,7 +1299,12 @@ impl<'ctx> Preprocessor<'ctx> {
+                                 // just an ident = expand it
+                                 Token::Ident(ident, ws) => {
+                                     match params.iter().position(|x| *x == ident) {
+-                                        Some(i) => expansion.extend(args[i].iter().cloned()),
++                                        Some(i) => {
++                                            breaks += arg_breaks[i];
++                                            expansion.extend(args[i].iter().cloned())
++                                        },
++                                        None if ident == ident!("__LINE__") && breaks > 0 => expansion
++                                            .push_back(Token::Int((self.last_input_loc.line + breaks) as i32)),
+                                         None => expansion.push_back(Token::Ident(ident, ws)),
+                                     }
+                                 },
+-- 
+2.47.3
+
