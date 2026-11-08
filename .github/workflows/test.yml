@@ -1,0 +1,25 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # dreammaker with the parser fixes in patches/, at ../SpacemanDMM
+      - name: Set up SpacemanDMM
+        run: scripts/setup-spacemandmm.sh
+
+      - name: Test
+        run: cargo test --verbose
