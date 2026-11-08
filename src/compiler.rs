@@ -268,6 +268,7 @@ impl Compiler<'_> {
             _ => EvalKind::Var(Variable::Global(GlobalVar {
                 name: DMString(ident.into_owned().into_bytes()),
                 id: None,
+                scope: None,
             })),
         }
     }
