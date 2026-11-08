@@ -1,4 +1,4 @@
-use dreammaker::ast::{Follow, ListAccessKind, PropertyAccessKind};
+use dreammaker::ast::{Follow, ListAccessKind, PropertyAccessKind, UnaryOp};
 
 use crate::{
     compiler::{
@@ -13,15 +13,128 @@ pub(super) fn emit(
     follow: Vec<Follow>,
     kind: EvalKind,
 ) -> Result<EvalKind, CompileError> {
+    emit_typed(compiler, follow, kind, None)
+}
+
+/// What `x.name()` calls on a `ty`: `x:name()` finds the proc on a subtype
+/// too, and on a value of unknown type DreamMaker goes by the first proc or
+/// verb declared with the name.
+fn callee_var<'a>(
+    compiler: &Compiler<'a>,
+    ty: Option<dreammaker::objtree::TypeRef<'a>>,
+    access: PropertyAccessKind,
+    name: &str,
+) -> Variable {
+    let ty = match ty {
+        Some(t) if access == PropertyAccessKind::Colon => {
+            Some(super::procs::colon_proc_type(t, name).unwrap_or(t))
+        }
+        Some(t) => Some(t),
+        None => compiler
+            .proc
+            .as_ref()
+            .and_then(|ctx| super::procs::first_declaring_type(ctx.tree, name)),
+    };
+    super::procs::call_var(ty, name)
+}
+
+/// `ty` is the static type of the value being followed, when known.
+pub(super) fn emit_typed<'a>(
+    compiler: &mut Compiler<'a>,
+    follow: Vec<Follow>,
+    kind: EvalKind,
+    ty: Option<dreammaker::objtree::TypeRef<'a>>,
+) -> Result<EvalKind, CompileError> {
     let mut kind = kind;
+    let mut ty = ty;
+    // what indexing the value gives, for a `/list/T` var
+    let mut elem_ty = compiler.list_elem_type.take();
 
     // sequential field accessors (example: a.b.c) get buffered into a single operation
     // TODO: Move this state and the commit function into a struct!
     let mut field_buffer = vec![];
 
-    for sub_expr in follow {
+    let mut follow = follow.into_iter();
+    while let Some(sub_expr) = follow.next() {
+        let more_fields = matches!(
+            follow.as_slice().first(),
+            Some(
+                Follow::Field(PropertyAccessKind::Dot | PropertyAccessKind::Colon, _)
+                    | Follow::Call(PropertyAccessKind::Dot | PropertyAccessKind::Colon, _, _)
+            )
+        );
+        if compiler.proc.is_some() && is_safe(&sub_expr) {
+            kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+            compiler.emit_move_to_stack(kind)?;
+            return emit_safe(compiler, sub_expr, follow.collect(), ty);
+        }
+        if matches!(sub_expr, Follow::Field(..) | Follow::Call(..)) {
+            compiler.global_field = true;
+        }
+        if !matches!(sub_expr, Follow::Field(..) | Follow::Index(..)) {
+            elem_ty = None;
+        }
         match sub_expr {
             Follow::Field(access_kind, ident) => {
+                // A static var is a global: DreamMaker reads it directly and
+                // doesn't evaluate what it was reached through
+                let field_ty = ty.and_then(|t| match access_kind {
+                    PropertyAccessKind::Colon => super::procs::colon_var(t, ident.as_str()),
+                    _ => super::procs::member_var(t, ident.as_str()),
+                });
+                ty =
+                    field_ty.and_then(|d| super::procs::declared_type(compiler, &d.get().var_type));
+                elem_ty = field_ty.and_then(|d| {
+                    super::procs::list_elem_type(compiler, &d.get().var_type.type_path.to_string())
+                });
+                // global.x: the global's declared type
+                if matches!(kind, EvalKind::Global) && field_buffer.is_empty() && field_ty.is_none() {
+                    ty = compiler
+                        .proc
+                        .as_ref()
+                        .and_then(|p| p.tree.root().get_var_declaration(ident.as_str()))
+                        .and_then(|d| super::procs::declared_type(compiler, &d.get().var_type));
+                }
+                if let Some(decl) = field_ty {
+                    let is_static = super::procs::is_global_member(&decl)
+                        && matches!(
+                            access_kind,
+                            PropertyAccessKind::Dot | PropertyAccessKind::Colon
+                        );
+                    // Further along a chain it's read through the chain
+                    let scope = decl.ty().get().path.clone();
+                    if is_static && more_fields {
+                        let mut name = super::chain_builder::STATIC_MARKER.to_vec();
+                        name.extend_from_slice(ident.as_str().as_bytes());
+                        name.push(0);
+                        name.extend_from_slice(scope.as_bytes());
+                        field_buffer.push(String::from_utf8(name).unwrap());
+                        continue;
+                    }
+                    if is_static
+                        && matches!(
+                            kind,
+                            EvalKind::Var(_) | EvalKind::Field(..) | EvalKind::Global
+                        )
+                    {
+                        field_buffer.clear();
+                        kind = EvalKind::Var(Variable::Global(GlobalVar::named(
+                            ident.as_str().as_bytes(),
+                            Some(scope),
+                        )));
+                        continue;
+                    }
+                    // (a value, like a list element, is still evaluated into the cache)
+                    if is_static && matches!(kind, EvalKind::Stack | EvalKind::ListRef) {
+                        compiler.emit_move_to_stack(kind)?;
+                        compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+                        kind = EvalKind::Var(Variable::Global(GlobalVar::named(
+                            ident.as_str().as_bytes(),
+                            Some(scope),
+                        )));
+                        continue;
+                    }
+                }
                 // We currently treat `.` and `:` as the same
                 // TODO: Should we type check?
                 match access_kind {
@@ -48,6 +161,7 @@ pub(super) fn emit(
             }
 
             Follow::Index(access_kind, expr) => {
+                ty = elem_ty.take();
                 kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
 
                 match access_kind {
@@ -83,6 +197,7 @@ pub(super) fn emit(
             }
 
             Follow::Call(index_kind, ident, args) => {
+                let receiver_ty = ty.take();
                 let arg_count = args.len() as u32;
 
                 match index_kind {
@@ -118,9 +233,45 @@ pub(super) fn emit(
 
                     // We just treat these as the same
                     // TODO: Should we type check?
-                    PropertyAccessKind::Dot
+                    access @ (PropertyAccessKind::Dot
                     | PropertyAccessKind::Colon
-                    | PropertyAccessKind::Scope => {
+                    | PropertyAccessKind::Scope)
+                        if compiler.proc.is_some()
+                            && (!field_buffer.is_empty()
+                                || matches!(kind, EvalKind::Var(_) | EvalKind::Field(..))) =>
+                    {
+                        let callee = callee_var(compiler, receiver_ty, access, &ident);
+                        // The receiver is a variable chain, so it goes in the
+                        // call's own operand, after the arguments; a value
+                        // parked in the cache is kept around them
+                        let parked = matches!(kind, EvalKind::Stack | EvalKind::ListRef);
+                        kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+                        let builder = match kind {
+                            EvalKind::Var(var) => ChainBuilder::begin(var),
+                            EvalKind::Field(mut builder, field) => {
+                                builder.append(DMString(field.into()));
+                                builder
+                            }
+                            _ => unreachable!(),
+                        };
+                        if parked {
+                            compiler.emit_ins(Instruction::PushCache);
+                        }
+                        // (a `src.` the receiver was written with is its own,
+                        // not the arguments')
+                        let explicit_src = std::mem::take(&mut compiler.explicit_src);
+                        let count = compiler.emit_call_args(args.into_vec())?;
+                        compiler.explicit_src = explicit_src;
+                        if parked {
+                            compiler.emit_ins(Instruction::PopCache);
+                        }
+                        compiler.emit_ins(Instruction::Call(builder.get_leaf(callee), count));
+                    }
+
+                    access @ (PropertyAccessKind::Dot
+                    | PropertyAccessKind::Colon
+                    | PropertyAccessKind::Scope) => {
+                        let callee = callee_var(compiler, receiver_ty, access, &ident);
                         // TODO: Can emit much cleaner code when no params
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
@@ -134,7 +285,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(super::dynamic_name(&ident)),
+                                    callee.clone(),
                                     arg_count,
                                 ));
                             }
@@ -145,7 +296,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(super::dynamic_name(&ident)),
+                                    callee.clone(),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -154,7 +305,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(super::dynamic_name(&ident)),
+                                    callee.clone(),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -210,17 +361,59 @@ pub(super) fn emit(
             }
 
             Follow::Unary(op) => {
+                ty = None;
                 kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                 kind = unary::emit(compiler, vec![op], kind)?;
             }
 
+            // x::name: a static var directly, or else the var's initial value
+            Follow::StaticField(ident) if compiler.proc.is_some() => {
+                let decl = ty.and_then(|t| super::procs::member_var(t, ident.as_str()));
+                let static_scope = decl
+                    .filter(super::procs::is_global_member)
+                    .map(|d| d.ty().get().path.clone());
+                let is_static = static_scope.is_some();
+                // In x::a::b, where b is static, nothing before it is evaluated
+                let mut names = vec![ident.as_str()];
+                for f in follow.as_slice() {
+                    match f {
+                        Follow::StaticField(name) => names.push(name.as_str()),
+                        _ => break,
+                    }
+                }
+                let leads_to_static = !is_static
+                    && (2..=names.len()).any(|n| {
+                        super::procs::static_chain(compiler, ty, &names[..n])
+                            .is_some_and(|d| super::procs::is_global_member(&d))
+                    });
+                if leads_to_static {
+                    ty =
+                        decl.and_then(|d| super::procs::declared_type(compiler, &d.get().var_type));
+                    continue;
+                }
+                kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+                if is_static {
+                    if kind == EvalKind::Stack {
+                        compiler.emit_ins(Instruction::Pop);
+                    }
+                    kind = EvalKind::Var(Variable::Global(GlobalVar::named(
+                        ident.as_str().as_bytes(),
+                        static_scope,
+                    )));
+                } else {
+                    compiler.emit_move_to_stack(kind)?;
+                    compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+                    compiler.emit_ins(Instruction::GetVar(Variable::Initial(Box::new(
+                        Variable::Field(DMString(ident.as_str().into())),
+                    ))));
+                    kind = EvalKind::Stack;
+                }
+                ty = decl.and_then(|d| super::procs::declared_type(compiler, &d.get().var_type));
+            }
+
             Follow::ProcReference(ident) | Follow::StaticField(ident) => {
                 compiler.emit_ins(Instruction::GetVar(Variable::Initial(Box::new(
-                    Variable::Global(GlobalVar {
-                        name: DMString(ident.as_str().into()),
-                        id: None,
-                        scope: None,
-                    }),
+                    Variable::Global(GlobalVar::named(ident.as_str().as_bytes(), None)),
                 ))));
             }
         }
@@ -259,11 +452,8 @@ fn commit_field_buffer(
         // Bit hacky.
         EvalKind::Global => {
             let name = field_chain.remove(0);
-            let var = Variable::Global(GlobalVar {
-                name: DMString(name.into()),
-                id: None,
-                scope: None,
-            });
+            // global.x
+            let var = Variable::Global(GlobalVar::named(name.as_bytes(), Some(String::new())));
             return commit_field_buffer(compiler, EvalKind::Var(var), field_chain);
         }
 
@@ -283,4 +473,174 @@ fn commit_field_buffer(
 
     field_chain.clear();
     Ok(EvalKind::Field(builder, last_field))
+}
+
+fn is_safe(follow: &Follow) -> bool {
+    matches!(
+        follow,
+        Follow::Field(
+            PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon,
+            _
+        ) | Follow::Call(
+            PropertyAccessKind::SafeDot | PropertyAccessKind::SafeColon,
+            _,
+            _
+        ) | Follow::Index(ListAccessKind::Safe, _)
+    )
+}
+
+/// `x?.rest` with x on the stack: skips the rest when x is null. Unless the
+/// rest is plain field access, the cache is saved around it, and restored
+/// before a call or at the end.
+/// `ty` is the static type of the value the `?` applies to, when known.
+fn emit_safe<'a>(
+    compiler: &mut Compiler<'a>,
+    first: Follow,
+    mut rest: Vec<Follow>,
+    ty: Option<dreammaker::objtree::TypeRef<'a>>,
+) -> Result<EvalKind, CompileError> {
+    // Unary operators apply to the whole chain's result, after it
+    let mut unary = vec![];
+    while let Some(Follow::Unary(_)) = rest.last() {
+        unary.insert(0, rest.pop().unwrap());
+    }
+    // `a?.b++` changes a.b when a isn't null
+    if let [Follow::Unary(
+        op @ (UnaryOp::PreIncr | UnaryOp::PostIncr | UnaryOp::PreDecr | UnaryOp::PostDecr),
+    )] = unary.as_slice()
+    {
+        let op = *op;
+        let mut follows = vec![first.clone()];
+        follows.extend(rest.iter().cloned());
+        let step = move |var: Variable| {
+            vec![match op {
+                UnaryOp::PreIncr => Instruction::PreInc(var),
+                UnaryOp::PostIncr => Instruction::PostInc(var),
+                UnaryOp::PreDecr => Instruction::PreDec(var),
+                _ => Instruction::PostDec(var),
+            }]
+        };
+        let write = super::statements::SafeWrite::Change(&step);
+        if let Some(chain) = super::statements::safe_chain(&follows) {
+            if chain.writable(&write, true) {
+                super::statements::emit_safe_chain_write(compiler, chain, None, None, write, true)?;
+                return Ok(EvalKind::Stack);
+            }
+        }
+    }
+    let kind = emit_safe_inner(compiler, first, rest, ty)?;
+    if unary.is_empty() {
+        return Ok(kind);
+    }
+    emit(compiler, unary, kind)
+}
+
+fn emit_safe_inner<'a>(
+    compiler: &mut Compiler<'a>,
+    first: Follow,
+    rest: Vec<Follow>,
+    ty: Option<dreammaker::objtree::TypeRef<'a>>,
+) -> Result<EvalKind, CompileError> {
+    let end = compiler.new_label();
+    compiler.emit_ins(Instruction::SetCacheJmpIfNull(Label::Named(end.clone())));
+
+    // The access the `?` applies to, done against the cache
+    let mut follows = vec![match first {
+        Follow::Field(_, ident) => Follow::Field(PropertyAccessKind::Dot, ident),
+        Follow::Call(_, ident, args) => Follow::Call(PropertyAccessKind::Dot, ident, args),
+        Follow::Index(_, expr) => Follow::Index(ListAccessKind::Normal, expr),
+        other => other,
+    }];
+    follows.extend(rest);
+
+    let plain = follows.iter().all(|f| {
+        matches!(
+            f,
+            Follow::Field(PropertyAccessKind::Dot | PropertyAccessKind::Colon, _)
+        )
+    });
+    if plain {
+        let kind = emit_typed(compiler, follows, EvalKind::Var(Variable::Cache), ty)?;
+        compiler.emit_move_to_stack(kind)?;
+        compiler.emit_label(end);
+        return Ok(EvalKind::Stack);
+    }
+
+    compiler.emit_ins(Instruction::PushCache);
+    let mut popped = false;
+    let mut called = false;
+    let mut kind = EvalKind::Var(Variable::Cache);
+    let mut field_buffer: Vec<String> = vec![];
+    let mut ty = ty;
+    let mut it = follows.into_iter();
+    while let Some(f) = it.next() {
+        if is_safe(&f) {
+            kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+            compiler.emit_move_to_stack(kind)?;
+            kind = emit_safe(compiler, f, it.by_ref().collect(), ty)?;
+            break;
+        }
+        let receiver_ty = ty;
+        ty = None;
+        match f {
+            Follow::Field(_, ident) => {
+                let decl = receiver_ty.and_then(|t| super::procs::member_var(t, ident.as_str()));
+                ty = decl.and_then(|d| super::procs::declared_type(compiler, &d.get().var_type));
+                match decl {
+                    // A static var is read directly
+                    Some(decl) if super::procs::is_global_member(&decl) => {
+                        field_buffer.clear();
+                        let scope = decl.ty().get().path.clone();
+                        kind = EvalKind::Var(Variable::Global(GlobalVar::named(
+                            ident.as_str().as_bytes(),
+                            Some(scope),
+                        )));
+                    }
+                    _ => field_buffer.push(ident.into_owned()),
+                }
+            }
+            Follow::Call(_, ident, args) if !called => {
+                called = true;
+                kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+                let builder = match kind {
+                    EvalKind::Var(var) => ChainBuilder::begin(var),
+                    EvalKind::Field(mut builder, field) => {
+                        builder.append(DMString(field.into()));
+                        builder
+                    }
+                    other => {
+                        compiler.emit_move_to_stack(other)?;
+                        compiler.emit_ins(Instruction::SetVar(Variable::Cache));
+                        ChainBuilder::begin(Variable::Cache)
+                    }
+                };
+                // The cache is restored before the call, unless the arguments
+                // don't change it and the chain goes on after it
+                let start = compiler.nodes.len();
+                let count = compiler.emit_call_args(args.into_vec())?;
+                let touched = compiler.nodes[start..].iter().any(|n| {
+                    matches!(n, crate::Node::Instruction(i, _) if super::procs::touches_cache(i))
+                });
+                let pop = touched || it.as_slice().is_empty();
+                if pop {
+                    compiler.emit_ins(Instruction::PopCache);
+                    popped = true;
+                }
+                let var = super::procs::call_var(receiver_ty, &ident);
+                compiler.emit_ins(Instruction::Call(builder.get_leaf(var), count));
+                kind = EvalKind::Stack;
+            }
+            other => {
+                kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+                kind = emit(compiler, vec![other], kind)?;
+            }
+        }
+    }
+    kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
+    compiler.emit_move_to_stack(kind)?;
+    if !popped {
+        compiler.emit_ins(Instruction::PopCache);
+    }
+    compiler.emit_label(end);
+    Ok(EvalKind::Stack)
 }

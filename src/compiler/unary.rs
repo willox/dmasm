@@ -46,9 +46,6 @@ fn emit_single(
         | UnaryOp::PostDecr
         | UnaryOp::Reference
         | UnaryOp::Dereference => {
-            let label = format!("LAB_{:0>4X}", compiler.label_count);
-            compiler.label_count += 1;
-
             // These ops require an l-value
             let var = match kind {
                 EvalKind::Var(var) if is_writable(&var) => var,
@@ -75,8 +72,6 @@ fn emit_single(
                 }
                 _ => unreachable!(),
             }
-
-            compiler.emit_label(label);
         }
     }
 
