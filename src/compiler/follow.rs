@@ -219,6 +219,7 @@ pub(super) fn emit(
                     Variable::Global(GlobalVar {
                         name: DMString(ident.as_str().into()),
                         id: None,
+                        scope: None,
                     }),
                 ))));
             }
@@ -261,6 +262,7 @@ fn commit_field_buffer(
             let var = Variable::Global(GlobalVar {
                 name: DMString(name.into()),
                 id: None,
+                scope: None,
             });
             return commit_field_buffer(compiler, EvalKind::Var(var), field_chain);
         }

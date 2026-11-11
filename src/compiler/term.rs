@@ -36,6 +36,7 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
         Term::GlobalIdent(ident) => Ok(EvalKind::Var(Variable::Global(GlobalVar {
             name: DMString(ident.as_str().into()),
             id: None,
+            scope: None,
         }))),
 
         // Resources
