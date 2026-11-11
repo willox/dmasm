@@ -2,12 +2,14 @@ mod access_modifiers;
 pub mod assembler;
 mod bytecode;
 pub mod compiler;
+pub mod debug_files;
 pub mod disassembler;
 mod instructions;
 mod list_operands;
 mod operands;
 mod operands_deserialize;
 mod parser;
+pub mod reload;
 
 pub use bytecode::{
     reads_caller, scan, BytecodeError, InstructionSpan, LabelOperand, ScannedBytecode,
@@ -21,7 +23,50 @@ pub use operands::{
 };
 use std::fmt::Write;
 
+/// Target BYOND version and build. Instruction selection, folding and parsing
+/// follow that build's DreamMaker. Build numbers increase across supported
+/// major versions (515.1647, then 516.1648), allowing build-only thresholds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ByondVersion {
+    pub major: u32,
+    pub build: u32,
+}
+
+impl ByondVersion {
+    /// The newest build the compiler was checked against.
+    pub const LATEST: ByondVersion = ByondVersion::new(516, 1688);
+
+    pub const fn new(major: u32, build: u32) -> Self {
+        ByondVersion { major, build }
+    }
+
+    /// Whether this is `build` or a later one.
+    pub const fn at_least(self, build: u32) -> bool {
+        self.build >= build
+    }
+
+    /// Configure version-specific parsing before compiling for this build.
+    /// Before 515.1644, clamp overflowing integer literals to 2147483647.
+    pub fn read_as(self, ctx: &dreammaker::Context) {
+        ctx.set_clamp_integer_literals(!self.at_least(1644));
+    }
+}
+
+impl Default for ByondVersion {
+    fn default() -> Self {
+        Self::LATEST
+    }
+}
+
+impl std::fmt::Display for ByondVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.build)
+    }
+}
+
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Node<D = ()> {
     Comment(String),
     Label(Label),

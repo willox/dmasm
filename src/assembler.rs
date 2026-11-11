@@ -8,8 +8,20 @@ pub trait AssembleEnv {
     fn get_proc_index(&mut self, path: &str) -> Option<u32>;
     fn get_type(&mut self, path: &str) -> Option<(u8, u32)>;
 
+    /// Resolve a global or static variable ID by name and optional scope.
+    /// Use `""` for globals, a declaring type path for type statics, and
+    /// `"proc:/path/of/proc"` for proc statics resolved from existing bytecode.
+    fn get_global_index(&mut self, name: &[u8], _scope: Option<&str>) -> Option<u32> {
+        self.get_variable_name_index(name)
+    }
+
     /// Finds the id of a resource (a single-quoted file like `'icon.dmi'`) in the destination context
     fn get_resource_index(&mut self, _path: &str) -> Option<u32> {
+        None
+    }
+
+    /// Find a prefab instance of `path` initialized by assembled `init` code.
+    fn get_instance(&mut self, _path: &str, _init: &[u32]) -> Option<u32> {
         None
     }
 }
@@ -21,6 +33,7 @@ pub enum AssembleError {
     VariableNameNotFound(Vec<u8>),
     TypeNotFound(String),
     ResourceNotFound(String),
+    InstanceNotFound(String),
     LabelNotFound(String),
 }
 

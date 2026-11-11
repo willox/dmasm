@@ -33,6 +33,21 @@ bitflags! {
     }
 }
 
+// As its bits, which keeps flags no name covers (see the TODO above)
+#[cfg(feature = "serde")]
+impl serde::Serialize for TypeFilter {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u32(self.bits())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for TypeFilter {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <u32 as serde::Deserialize>::deserialize(deserializer).map(Self::from_bits_retain)
+    }
+}
+
 impl Operand for TypeFilter {
     fn assemble<'a, E: AssembleEnv>(
         &'a self,

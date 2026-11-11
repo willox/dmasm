@@ -19,6 +19,7 @@ macro_rules! instructions {
         ),* $(,)? ) )?
     ),* $(,)? ) => {
         #[derive(PartialEq, Clone, Debug)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
         pub enum Instruction {
             $(
                 $name$( ( $( $operand_type, )* ) )?,
@@ -88,6 +89,19 @@ macro_rules! instructions {
 
             pub const fn name(&self) -> &'static str {
                 self.opcode().name()
+            }
+
+            /// The instruction's variable operands.
+            pub fn variables(&self) -> Vec<&Variable> {
+                let mut out = vec![];
+                match self {
+                    $(
+                        Self::$name$( ( $( $operand_name, )* ) )? => {
+                            $( $( $operand_name.variables(&mut out); )* )?
+                        }
+                    )*
+                }
+                out
             }
 
             pub fn assemble<'a, E: AssembleEnv>(&'a self, asm: &mut Assembler<'a, E>) -> Result<(), AssembleError> {

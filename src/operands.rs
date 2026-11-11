@@ -13,6 +13,9 @@ pub trait Operand: Sized {
         -> Result<Self, DisassembleError>;
 
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+
+    /// Adds this operand to `out` if it's a variable.
+    fn variables<'a>(&'a self, _out: &mut Vec<&'a Variable>) {}
 }
 
 // keeping the nom bullshit separate makes everything else easier to dig thru
@@ -84,6 +87,7 @@ impl Operand for f32 {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Label {
     Named(String),
     Offset(u32),
@@ -125,6 +129,7 @@ impl Operand for Label {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Proc(pub String);
 
 impl Operand for Proc {
@@ -164,6 +169,7 @@ impl Operand for Proc {
 // DMString
 //
 #[derive(PartialEq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DMString(pub Vec<u8>);
 
 impl fmt::Debug for DMString {
@@ -295,6 +301,7 @@ impl Operand for DMString {
 // Each form pops a different depth - 3, 2, 3, 7 with the tested value on top -
 // so a consumer that lumps them together gets the stack wrong.
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IsInParams {
     Range,
     Value,
@@ -353,6 +360,7 @@ impl Operand for IsInParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SwitchParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -405,6 +413,7 @@ impl Operand for SwitchParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PickSwitchParams {
     pub default: Label,
     pub cases: Vec<(u32, Label)>,
@@ -458,6 +467,7 @@ impl Operand for PickSwitchParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SwitchRangeParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -539,6 +549,7 @@ impl Operand for SwitchRangeParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PickProbParams {
     pub cases: Vec<Label>,
 }
@@ -580,6 +591,7 @@ impl Operand for PickProbParams {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Value {
     Null,
     Number(f32),
@@ -587,7 +599,16 @@ pub enum Value {
     Path(String),
     Resource(String),
     File,
-    Raw { tag: u8, data: u32 },
+    Raw {
+        tag: u8,
+        data: u32,
+    },
+    /// Prefab instance with variable overrides. `vars` contains initializer
+    /// code such as `src.a = 1`; assembly orders it by variable-name string ID.
+    Prefab {
+        path: String,
+        vars: Vec<(String, Vec<crate::Node>)>,
+    },
     /*/
     DatumPath(DMString),
     ClientPath,
@@ -631,6 +652,21 @@ impl Operand for Value {
             },
 
             Self::File => (0x27, 0x00),
+
+            Self::Prefab { path, vars } => {
+                let mut parts = vec![];
+                for (name, nodes) in vars {
+                    let id = asm.env.get_string_index(name.as_bytes());
+                    parts.push((id, crate::assembler::assemble(nodes, &mut *asm.env)?));
+                }
+                parts.sort_by_key(|(id, _)| *id);
+                let mut code: Vec<u32> = parts.into_iter().flat_map(|(_, c)| c).collect();
+                code.push(0); // End
+                match asm.env.get_instance(path, &code) {
+                    Some(id) => (0x29, id),
+                    None => return Err(AssembleError::InstanceNotFound(path.clone())),
+                }
+            }
         };
 
         // The top 8 bits of data live in tag
@@ -718,6 +754,10 @@ impl Operand for Value {
             Value::Resource(value) => write!(f, "'{}'", value),
             Value::File => write!(f, "/file"),
             Value::Raw { tag, data } => write!(f, "ref({:X}{:08X})", tag, data),
+            Value::Prefab { path, vars } => {
+                let names: Vec<&str> = vars.iter().map(|(n, _)| n.as_str()).collect();
+                write!(f, "{}{{{}}}", path, names.join("; "))
+            }
         }
     }
 }
@@ -730,14 +770,30 @@ impl Operand for Value {
 /// the same name in one proc are two slots sharing one name - anything keying a
 /// global by name alone silently merges them.
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GlobalVar {
     pub name: DMString,
     /// Index into BYOND's `global_values`, read straight off the bytecode.
     /// `None` when built from source, where the assembler resolves the name.
     pub id: Option<u32>,
+    /// Declaration scope for global lookup: `Some("")` for globals, a type path
+    /// for type statics, `proc:PATH` for proc statics, or `None` if unknown.
+    /// Same-named statics can occupy different slots.
+    pub scope: Option<String>,
+}
+
+impl GlobalVar {
+    pub fn named(name: &[u8], scope: Option<String>) -> Self {
+        GlobalVar {
+            name: DMString(name.to_vec()),
+            id: None,
+            scope,
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Variable {
     Null,
     World,
@@ -767,46 +823,46 @@ pub enum Variable {
     //RuntimeProcField(Box<Variable>, Vec<DMString>, DMString),
 }
 
+impl Variable {
+    /// The global vars this reads or writes, including any inside it (the
+    /// base of a cached chain, an `initial()`).
+    pub fn globals(&self) -> Vec<&GlobalVar> {
+        match self {
+            Self::Global(global) => vec![global],
+            Self::SetCache(a, b) => {
+                let mut globals = a.globals();
+                globals.extend(b.globals());
+                globals
+            }
+            Self::Initial(v) | Self::IsSaved(v) | Self::PtrRef(v) | Self::PtrDeref(v) => {
+                v.globals()
+            }
+            _ => vec![],
+        }
+    }
+}
+
 impl Operand for Variable {
+    fn variables<'a>(&'a self, out: &mut Vec<&'a Variable>) {
+        out.push(self);
+    }
+
     fn assemble<'a, E: AssembleEnv>(
         &'a self,
         asm: &mut Assembler<'a, E>,
     ) -> Result<(), AssembleError> {
         use crate::access_modifiers;
 
-        fn write_variable_name<E: AssembleEnv>(
-            asm: &mut Assembler<E>,
-            name: &DMString,
-        ) -> Result<(), AssembleError> {
-            let id = asm
-                .env
-                .get_variable_name_index(&name.0)
-                .ok_or_else(|| AssembleError::VariableNameNotFound(name.0.clone()))?;
-            asm.emit(id);
-            Ok(())
-        }
-
+        // Preserve stored names. The compiler normalizes identifiers;
+        // explicit verb display names retain underscores.
         fn write_dynamic_name<E: AssembleEnv>(
             asm: &mut Assembler<E>,
             name: &DMString,
         ) -> Result<(), AssembleError> {
-            let mut formatted;
-            let bytes = if name.0.contains(&b'_') {
-                formatted = name.0.clone();
-                formatted.iter_mut().for_each(|byte| {
-                    if *byte == b'_' {
-                        *byte = b' ';
-                    }
-                });
-                formatted.as_slice()
-            } else {
-                name.0.as_slice()
-            };
-
             let id = asm
                 .env
-                .get_string_index(bytes)
-                .ok_or_else(|| AssembleError::StringNotFound(bytes.to_vec()))?;
+                .get_string_index(&name.0)
+                .ok_or_else(|| AssembleError::StringNotFound(name.0.clone()))?;
             asm.emit(id);
             Ok(())
         }
@@ -846,7 +902,15 @@ impl Operand for Variable {
                 asm.emit(access_modifiers::Global);
                 match global.id {
                     Some(id) => asm.emit(id),
-                    None => write_variable_name(asm, &global.name)?,
+                    None => {
+                        let id = asm
+                            .env
+                            .get_global_index(&global.name.0, global.scope.as_deref())
+                            .ok_or_else(|| {
+                                AssembleError::VariableNameNotFound(global.name.0.clone())
+                            })?;
+                        asm.emit(id);
+                    }
                 }
             }
             Variable::SetCache(lhs, rhs) => {
@@ -911,6 +975,7 @@ impl Operand for Variable {
             Ok(GlobalVar {
                 name: DMString(string),
                 id: Some(id),
+                scope: None,
             })
         }
 

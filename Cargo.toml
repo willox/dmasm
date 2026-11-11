@@ -11,4 +11,9 @@ repository = "https://github.com/willox/dmasm"
 [dependencies]
 nom = "7"
 bitflags = "2"
-dreammaker = { git = "https://github.com/SpaceManiac/SpacemanDMM", tag = "suite-1.10" }
+serde = { version = "1", features = ["derive"], optional = true }
+# auxtools' SpacemanDMM, with parser fixes SpaceManiac/SpacemanDMM doesn't have yet
+dreammaker = { git = "https://github.com/auxtools/SpacemanDMM", branch = "master" }
+# md5() and sha1() of constant text fold, as in DreamMaker
+md-5 = "0.10.6"
+sha1 = "0.10.7"
