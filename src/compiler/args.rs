@@ -15,7 +15,7 @@ fn unroll(expr: &Expression) -> &Expression {
         Expression::Base { term, follow } => {
             if follow.is_empty() {
                 if let Term::Expr(inner) = &term.elem {
-                    unroll(inner.as_ref());
+                    return unroll(inner.as_ref());
                 }
             }
 
@@ -62,6 +62,7 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
     for arg in args {
         match context {
             // Proc arguments are only treated as associative if they contain an unwrapped assign operation where the LHS is not a nested expression
+            // (anything else is a key worked out: `f(a + 1 = 2)`)
             ArgsContext::Proc => {
                 if let Expression::AssignOp {
                     op: AssignOp::Assign,
@@ -69,16 +70,14 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
                     rhs: _,
                 } = arg
                 {
-                    // BYOND's behavior for short-circuiting ops here is mad, so I'm going to error instead of matching it
-                    // TODO: Move to emit code?
+                    // `a?.b = x` is an assignment, as an argument like any other
                     if can_short_circuit(unroll(lhs)) {
-                        return Err(CompileError::AmbiguousListConstructor);
+                        continue;
                     }
 
-                    if let Expression::Base { term, follow: _ } = lhs.as_ref() {
-                        if !matches!(term.elem, Term::Expr(_)) {
-                            found_associative = true;
-                        }
+                    if !matches!(lhs.as_ref(), Expression::Base { term, .. } if matches!(term.elem, Term::Expr(_)))
+                    {
+                        found_associative = true;
                     }
                 }
             }
@@ -91,10 +90,9 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
                     rhs: _,
                 } = unroll(arg)
                 {
-                    // BYOND's behavior for short-circuiting ops here is mad, so I'm going to error instead of matching it
-                    // TODO: Move to emit code?
+                    // `a?.b = x` is an assignment, as an argument like any other
                     if can_short_circuit(unroll(lhs)) {
-                        return Err(CompileError::AmbiguousListConstructor);
+                        continue;
                     }
 
                     // Finding an assign op means these args are associative
@@ -108,6 +106,7 @@ fn has_assoc_argument(context: ArgsContext, args: &[Expression]) -> Result<bool,
 }
 
 // TODO: The differences between these are... weird. We should pick a behavior that counts as a sub-set of BYOND and enforce it with errors.
+#[derive(PartialEq, Clone, Copy)]
 pub(super) enum ArgsContext {
     Proc,
     List,
@@ -130,7 +129,7 @@ pub(super) fn emit(
     args: Vec<Expression>,
 ) -> Result<ArgsResult, CompileError> {
     if has_assoc_argument(context, &args)? {
-        return do_assoc(compiler, args);
+        return do_assoc(compiler, context, args);
     }
 
     do_normal(compiler, args)
@@ -162,6 +161,7 @@ fn do_normal(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResul
     let args_len = args.len();
 
     for arg in args {
+        compiler.regroup_root = true;
         let expr = compiler.emit_expr(arg)?;
 
         // If our param is an arg list and it's the only param, we're an arg list!
@@ -177,7 +177,11 @@ fn do_normal(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResul
     Ok(ArgsResult::Normal)
 }
 
-fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult, CompileError> {
+fn do_assoc(
+    compiler: &mut Compiler,
+    context: ArgsContext,
+    args: Vec<Expression>,
+) -> Result<ArgsResult, CompileError> {
     // TODO: Lots of cloning in here :(
     for (idx, arg) in args.into_iter().enumerate() {
         let idx = idx + 1;
@@ -191,13 +195,32 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
         {
             if let Expression::Base { term, follow } = lhs.as_ref() {
                 if follow.is_empty() {
-                    // TODO: BYOND would change null to "null" here.
+                    // `null = x` is keyed by "null"
+                    if let Term::Null = &term.elem {
+                        compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
+                            b"null".to_vec(),
+                        ))));
+                        compiler.regroup_root = true;
+                        let kind = compiler.emit_expr((**rhs).to_owned())?;
+                        compiler.emit_move_to_stack(kind)?;
+                        continue;
+                    }
 
                     if let Term::Ident(ident) = &term.elem {
-                        compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
-                            ident.as_str().as_bytes().to_vec(),
-                        ))));
+                        // In a list, a builtin constant key is its value (MALE is "male")
+                        if context == ArgsContext::List
+                            && super::procs::is_builtin_const(compiler, ident.as_str())
+                        {
+                            let value =
+                                super::procs::const_value(compiler, ident.as_str()).unwrap();
+                            compiler.emit_constant(value)?;
+                        } else {
+                            compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
+                                ident.as_str().as_bytes().to_vec(),
+                            ))));
+                        }
 
+                        compiler.regroup_root = true;
                         let kind = compiler.emit_expr((**rhs).to_owned())?;
                         compiler.emit_move_to_stack(kind)?;
                         continue;
@@ -216,9 +239,11 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
                 lhs,
                 rhs,
             } => {
+                compiler.regroup_root = true;
                 let kind = compiler.emit_expr((**lhs).to_owned())?;
                 compiler.emit_move_to_stack(kind)?;
 
+                compiler.regroup_root = true;
                 let kind = compiler.emit_expr((**rhs).to_owned())?;
                 compiler.emit_move_to_stack(kind)?;
             }
@@ -227,6 +252,7 @@ fn do_assoc(compiler: &mut Compiler, args: Vec<Expression>) -> Result<ArgsResult
             other => {
                 compiler.emit_ins(Instruction::PushInt(idx as i32));
 
+                compiler.regroup_root = true;
                 let kind = compiler.emit_expr(other.to_owned())?;
                 compiler.emit_move_to_stack(kind)?;
             }
