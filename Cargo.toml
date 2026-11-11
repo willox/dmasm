@@ -11,5 +11,6 @@ repository = "https://github.com/willox/dmasm"
 [dependencies]
 nom = "7"
 bitflags = "2"
+serde = { version = "1", features = ["derive"], optional = true }
 # auxtools' SpacemanDMM, with parser fixes SpaceManiac/SpacemanDMM doesn't have yet
 dreammaker = { git = "https://github.com/auxtools/SpacemanDMM", branch = "master" }

@@ -19,6 +19,7 @@ macro_rules! instructions {
         ),* $(,)? ) )?
     ),* $(,)? ) => {
         #[derive(PartialEq, Clone, Debug)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
         pub enum Instruction {
             $(
                 $name$( ( $( $operand_type, )* ) )?,

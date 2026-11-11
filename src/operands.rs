@@ -87,6 +87,7 @@ impl Operand for f32 {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Label {
     Named(String),
     Offset(u32),
@@ -128,6 +129,7 @@ impl Operand for Label {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Proc(pub String);
 
 impl Operand for Proc {
@@ -167,6 +169,7 @@ impl Operand for Proc {
 // DMString
 //
 #[derive(PartialEq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DMString(pub Vec<u8>);
 
 impl fmt::Debug for DMString {
@@ -298,6 +301,7 @@ impl Operand for DMString {
 // Each form pops a different depth - 3, 2, 3, 7 with the tested value on top -
 // so a consumer that lumps them together gets the stack wrong.
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IsInParams {
     Range,
     Value,
@@ -356,6 +360,7 @@ impl Operand for IsInParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SwitchParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -408,6 +413,7 @@ impl Operand for SwitchParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PickSwitchParams {
     pub default: Label,
     pub cases: Vec<(u32, Label)>,
@@ -461,6 +467,7 @@ impl Operand for PickSwitchParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SwitchRangeParams {
     pub default: Label,
     pub cases: Vec<(Value, Label)>,
@@ -542,6 +549,7 @@ impl Operand for SwitchRangeParams {
 }
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PickProbParams {
     pub cases: Vec<Label>,
 }
@@ -583,6 +591,7 @@ impl Operand for PickProbParams {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Value {
     Null,
     Number(f32),
@@ -761,6 +770,7 @@ impl Operand for Value {
 /// the same name in one proc are two slots sharing one name - anything keying a
 /// global by name alone silently merges them.
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GlobalVar {
     pub name: DMString,
     /// Index into BYOND's `global_values`, read straight off the bytecode.
@@ -783,6 +793,7 @@ impl GlobalVar {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Variable {
     Null,
     World,

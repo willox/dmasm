@@ -78,6 +78,7 @@ dependencies = [
  "bitflags",
  "dreammaker",
  "nom",
+ "serde",
 ]
 
 [[package]]

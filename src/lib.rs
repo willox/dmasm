@@ -22,6 +22,7 @@ pub use operands::{
 use std::fmt::Write;
 
 #[derive(PartialEq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Node<D = ()> {
     Comment(String),
     Label(Label),
