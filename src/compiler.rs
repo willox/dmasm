@@ -38,6 +38,12 @@ fn is_writable(var: &Variable) -> bool {
     }
 }
 
+/// The name BYOND stores for a call it resolves by name at runtime: a proc or
+/// verb's name with each `_` replaced by a space.
+fn dynamic_name(ident: &str) -> DMString {
+    DMString(ident.replace('_', " ").into_bytes())
+}
+
 #[derive(Debug)]
 pub enum CompileError {
     ParseError(dreammaker::DMError),

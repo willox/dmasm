@@ -786,27 +786,16 @@ impl Operand for Variable {
             Ok(())
         }
 
+        // Preserve stored names. The compiler normalizes identifiers;
+        // explicit verb display names retain underscores.
         fn write_dynamic_name<E: AssembleEnv>(
             asm: &mut Assembler<E>,
             name: &DMString,
         ) -> Result<(), AssembleError> {
-            let mut formatted;
-            let bytes = if name.0.contains(&b'_') {
-                formatted = name.0.clone();
-                formatted.iter_mut().for_each(|byte| {
-                    if *byte == b'_' {
-                        *byte = b' ';
-                    }
-                });
-                formatted.as_slice()
-            } else {
-                name.0.as_slice()
-            };
-
             let id = asm
                 .env
-                .get_string_index(bytes)
-                .ok_or_else(|| AssembleError::StringNotFound(bytes.to_vec()))?;
+                .get_string_index(&name.0)
+                .ok_or_else(|| AssembleError::StringNotFound(name.0.clone()))?;
             asm.emit(id);
             Ok(())
         }

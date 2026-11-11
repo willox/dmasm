@@ -134,7 +134,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.as_str().into())),
+                                    Variable::DynamicProc(super::dynamic_name(&ident)),
                                     arg_count,
                                 ));
                             }
@@ -145,7 +145,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.as_str().into())),
+                                    Variable::DynamicProc(super::dynamic_name(&ident)),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -154,7 +154,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.as_str().into())),
+                                    Variable::DynamicProc(super::dynamic_name(&ident)),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -178,7 +178,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.as_str().into())),
+                                    Variable::DynamicProc(super::dynamic_name(&ident)),
                                     arg_count,
                                 ));
                             }
@@ -189,7 +189,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.as_str().into())),
+                                    Variable::DynamicProc(super::dynamic_name(&ident)),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
@@ -198,7 +198,7 @@ pub(super) fn emit(
                                 compiler.emit_ins(Instruction::PopCache);
 
                                 compiler.emit_ins(Instruction::Call(
-                                    Variable::DynamicProc(DMString(ident.as_str().into())),
+                                    Variable::DynamicProc(super::dynamic_name(&ident)),
                                     65535, // TODO: remove hardcoded value
                                 ));
                             }
