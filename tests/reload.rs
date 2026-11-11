@@ -94,6 +94,57 @@ fn a_changed_body_is_compiled() {
     );
 }
 
+/// Nested .dme includes can use non-project-relative debug names,
+/// e.g. _std/tgs.dm becomes tgs.dm.
+#[test]
+fn files_of_an_included_environment_are_named_as_it_names_them() {
+    let world = World::new("names", "/proc/a()\n\treturn 1\n");
+    let dir = &world.dir;
+    std::fs::create_dir_all(dir.join("lib/sub")).unwrap();
+    std::fs::write(
+        dir.join("world.dme"),
+        "#include \"code/code.dm\"\n#include \"lib\\lib.dme\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lib/lib.dme"),
+        "#include \"std.dm\"\n#include \"sub\\more.dm\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("lib/std.dm"), "/proc/b()\n\treturn 2\n").unwrap();
+    std::fs::write(dir.join("lib/sub/more.dm"), "/proc/c()\n\treturn 3\n").unwrap();
+    let old = world.parse();
+
+    let file_of = |snapshot: &Snapshot, proc: &str| match snapshot
+        .compile(&key(proc, 0))
+        .unwrap()
+        .nodes
+        .first()
+    {
+        Some(Node::Instruction(Instruction::DbgFile(name), ())) => {
+            String::from_utf8(name.0.clone()).unwrap()
+        }
+        other => panic!("{proc} starts with {other:?}"),
+    };
+    assert_eq!(file_of(&old, "/a"), "code/code.dm");
+    assert_eq!(file_of(&old, "/b"), "std.dm");
+    assert_eq!(file_of(&old, "/c"), "sub/more.dm");
+    // Diagnostic source paths remain project-relative.
+    assert_eq!(old.proc_file(&key("/b", 0)).as_deref(), Some("lib/std.dm"));
+
+    // Reloaded bytecode retains the original debug source name.
+    std::fs::write(dir.join("lib/std.dm"), "/proc/b()\n\treturn 4\n").unwrap();
+    let changes = diff(&old, &world.parse(), None);
+    assert_eq!(reloaded(&changes), [key("/b", 0)]);
+    assert_eq!(
+        changes.reloads[0].nodes.first(),
+        Some(&Node::Instruction(
+            Instruction::DbgFile(dmasm::DMString(b"std.dm".to_vec())),
+            ()
+        ))
+    );
+}
+
 #[test]
 fn procs_below_an_edit_move_lines() {
     let changes = changes(

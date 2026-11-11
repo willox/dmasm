@@ -465,6 +465,9 @@ pub struct Snapshot {
     byond: ByondVersion,
     /// The `.dme`'s directory, when parsed from one
     root: Option<PathBuf>,
+    /// Nonstandard debug source names indexed by project-relative path
+    /// (see `debug_files`).
+    debug_names: HashMap<PathBuf, String>,
     /// Names referenced through `::` in each file, with source lines.
     scope_names: HashMap<FileId, Vec<(String, u32)>>,
     /// The procs defined in each file, once asked for
@@ -534,6 +537,17 @@ impl Snapshot {
                 }
             });
             snapshot.scope_names = scope_names;
+
+            let read: HashSet<PathBuf> = snapshot
+                .files()
+                .iter()
+                .map(|path| crate::debug_files::normalize(path))
+                .collect();
+            snapshot.debug_names = crate::debug_files::names(dme, &|path| read.contains(path))
+                .into_iter()
+                .filter(|(name, path)| Path::new(name) != path)
+                .map(|(name, path)| (path, name))
+                .collect();
         }
         if let Some((major, build)) = options.byond {
             snapshot.byond = ByondVersion::new(major, build);
@@ -802,6 +816,7 @@ impl Snapshot {
             patched: HashMap::new(),
             byond: ByondVersion::LATEST,
             root: None,
+            debug_names: HashMap::new(),
             scope_names: HashMap::new(),
             procs_by_file: std::sync::OnceLock::new(),
             default_lines: std::sync::Mutex::new(HashMap::new()),
@@ -843,7 +858,7 @@ impl Snapshot {
         self.procs.keys()
     }
 
-    /// The file a proc is in, as DreamMaker names it in `DbgFile`.
+    /// The file a proc is in, from the `.dme`'s directory.
     pub fn proc_file(&self, key: &ProcKey) -> Option<String> {
         let (_, value) = self.find(key)?;
         Some(self.file_name(value.location.file))
@@ -1018,7 +1033,7 @@ impl Snapshot {
             code: Some(block),
             body_range: None,
         };
-        let file = self.file_name(location.file);
+        let file = self.debug_file_name(location.file);
         let source = ProcSource {
             tree: &self.tree,
             ty,
@@ -1028,7 +1043,7 @@ impl Snapshot {
             debug_info,
             index: None,
             byond: self.byond,
-            file_names: Some(&|id| self.file_name(id)),
+            file_names: Some(&|id| self.debug_file_name(id)),
         };
         let path = format!("{}/{}", ty.get().path, name);
         let compiled = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1075,7 +1090,7 @@ impl Snapshot {
     pub fn compile(&self, key: &ProcKey) -> Result<CompiledProc, String> {
         let (ty, value) = self.find(key).ok_or_else(|| format!("no proc {key}"))?;
         let (_, name, index) = &self.procs[key];
-        let file = self.file_name(value.location.file);
+        let file = self.debug_file_name(value.location.file);
         let source = ProcSource {
             tree: &self.tree,
             ty,
@@ -1085,7 +1100,7 @@ impl Snapshot {
             debug_info: true,
             index: Some(*index),
             byond: self.byond,
-            file_names: Some(&|id| self.file_name(id)),
+            file_names: Some(&|id| self.debug_file_name(id)),
         };
         // A compiler panic for one proc must not terminate the source watcher.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile_proc(&source))) {
@@ -1127,7 +1142,7 @@ impl Snapshot {
     /// Whether a proc embeds a moved default's previous source location
     /// through `::`.
     fn reads_moved_default(&self, file: FileId, moved: &[(&String, u32)]) -> Option<ProcKey> {
-        let file_name = self.file_name(file).into_bytes();
+        let file_name = self.debug_file_name(file).into_bytes();
         let procs_by_file = self.procs_by_file.get_or_init(|| {
             let mut by_file: HashMap<FileId, Vec<ProcKey>> = HashMap::new();
             for key in self.procs.keys() {
@@ -1181,7 +1196,7 @@ impl Snapshot {
         let (Some((_, value)), Ok(code)) = (self.find(key), self.compile(key)) else {
             return vec![];
         };
-        let own_file = self.file_name(value.location.file).into_bytes();
+        let own_file = self.debug_file_name(value.location.file).into_bytes();
         let own = proc_lines(value);
         let mut file = own_file.clone();
         let mut lines = vec![];
@@ -1232,6 +1247,16 @@ impl Snapshot {
             .file_path(file)
             .to_string_lossy()
             .replace('\\', "/")
+    }
+
+    /// Resolve DreamMaker's debug name for a project-relative source path
+    /// (see `debug_files`).
+    fn debug_file_name(&self, file: FileId) -> String {
+        let path = self.ctx.file_path(file);
+        match self.debug_names.get(&crate::debug_files::normalize(&path)) {
+            Some(name) => name.clone(),
+            None => self.file_name(file),
+        }
     }
 }
 

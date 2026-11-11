@@ -2,6 +2,7 @@ mod access_modifiers;
 pub mod assembler;
 mod bytecode;
 pub mod compiler;
+pub mod debug_files;
 pub mod disassembler;
 mod instructions;
 mod list_operands;
