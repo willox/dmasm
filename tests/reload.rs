@@ -1580,3 +1580,31 @@ fn a_constant_beyond_32_bits_at_a_bit_operator_is_warned_about() {
     );
     assert!(changes.warnings.is_empty(), "{:?}", changes.warnings);
 }
+
+#[test]
+fn a_static_local_s_initializer_names_its_own_proc() {
+    // Static initializers such as tgstation verb registration use the containing proc's `__PROC__`.
+    let before = "/datum/a\n/datum/a/proc/f()\n\treturn 1\n";
+    let after = "/proc/reg(p)\n\treturn p\n/datum/a\n/datum/a/proc/f()\n\tvar/static/r = reg(__PROC__)\n\treturn 1\n";
+    let changes = changes("static-proc", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let reload = changes
+        .reloads
+        .iter()
+        .find(|r| r.proc.path == "/datum/a/proc/f" || r.proc.path == "/datum/a/f")
+        .expect("f is reloaded");
+    let init = reload.statics[0].init.as_ref().expect("code to run once");
+    let pushed: Vec<String> = init
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::Instruction(Instruction::PushVal(dmasm::Value::Path(p)), _) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        pushed.iter().any(|p| p == "/datum/a/proc/f"),
+        "__PROC__ gave {:?}",
+        pushed
+    );
+}

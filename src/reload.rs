@@ -880,11 +880,13 @@ impl Snapshot {
         for s in compiled.statics {
             let constant = s.value.as_ref().and_then(const_value);
             let init = match (&constant, &s.expression) {
+                // `__PROC__` must name the containing proc.
                 (None, Some(expression)) => Some(Box::new(self.compile_value(
                     ty,
                     expression,
                     &s.type_path,
                     value_location(expression, value.location),
+                    static_proc_path(&s.scope),
                 )?)),
                 _ => None,
             };
@@ -949,7 +951,7 @@ impl Snapshot {
             location,
             Statement::Return(Some(expression.clone())),
         )]);
-        self.compile_synthetic(ty, "(in list)", block, location, true)
+        self.compile_synthetic(ty, "(in list)", block, location, true, None)
     }
 
     /// Compile a computed global or static initializer in `ty`'s scope
@@ -960,6 +962,7 @@ impl Snapshot {
         expression: &dreammaker::ast::Expression,
         declared: &str,
         location: dreammaker::Location,
+        proc_path: Option<&str>,
     ) -> Result<ProcReload, String> {
         use dreammaker::ast::{Expression, Ident, PathOp, Prefab, RelativePath, Spanned, Term};
         // A `new` with no type makes the var's declared type
@@ -981,7 +984,7 @@ impl Snapshot {
             }
         }
         let block: Block = Box::new([Spanned::new(location, Statement::Return(Some(expression)))]);
-        self.compile_synthetic(ty, "(value)", block, ty.get().location, false)
+        self.compile_synthetic(ty, "(value)", block, ty.get().location, false, proc_path)
     }
 
     /// Compiles a type's init proc: an assignment to `src.var` for each of
@@ -1014,10 +1017,11 @@ impl Snapshot {
                 )
             })
             .collect();
-        self.compile_synthetic(ty, "(init)", block, ty.get().location, false)
+        self.compile_synthetic(ty, "(init)", block, ty.get().location, false, None)
     }
 
-    /// Compile synthetic proc `name` on `ty`, optionally including debug locations.
+    /// Compile a synthetic proc on `ty`, optionally emitting debug locations
+    /// and overriding `__PROC__` with `proc_path`.
     fn compile_synthetic(
         &self,
         ty: TypeRef,
@@ -1025,6 +1029,7 @@ impl Snapshot {
         block: Block,
         location: dreammaker::Location,
         debug_info: bool,
+        proc_path: Option<&str>,
     ) -> Result<ProcReload, String> {
         let value = ProcValue {
             location,
@@ -1047,7 +1052,7 @@ impl Snapshot {
         };
         let path = format!("{}/{}", ty.get().path, name);
         let compiled = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_proc(&source)
+            crate::compiler::compile_proc_as(&source, proc_path)
         })) {
             Ok(Ok(compiled)) => compiled,
             Ok(Err(e)) => return Err(e.to_string()),
@@ -2647,8 +2652,13 @@ fn byond_flags(flags: dreammaker::ast::VarTypeFlags, global: bool) -> u32 {
     byond_flags
 }
 
-/// Return a static/global/const initializer as a constant, or null plus
-/// code to evaluate once.
+/// Extract a static local's containing proc from its `proc:PATH#N` scope.
+fn static_proc_path(scope: &str) -> Option<&str> {
+    let path = scope.strip_prefix("proc:")?;
+    Some(path.rsplit_once('#').map_or(path, |(path, _)| path))
+}
+
+/// Return an initial constant, or null with code for the world to run once.
 fn static_initial(
     snapshot: &Snapshot,
     n: TypeRef,
@@ -2667,7 +2677,7 @@ fn static_initial(
         .map(|d| d.var_type.type_path.to_string())
         .unwrap_or_default();
     let code = snapshot
-        .compile_value(n, expression, &declared, location)
+        .compile_value(n, expression, &declared, location, None)
         .map_err(|e| e.to_string())?;
     Ok((ConstValue::Null, Some(Box::new(code))))
 }

@@ -182,6 +182,15 @@ impl ProcCtx<'_> {
 }
 
 pub fn compile_proc(source: &ProcSource) -> Result<CompiledProc, CompileError> {
+    compile_proc_as(source, None)
+}
+
+/// Compile with an optional `__PROC__` override. Static initializers must name
+/// their containing proc rather than the synthetic initializer proc.
+pub(crate) fn compile_proc_as(
+    source: &ProcSource,
+    proc_path: Option<&str>,
+) -> Result<CompiledProc, CompileError> {
     // Exclude `...` and absolute-path parameters, matching BYOND.
     let declared: Vec<&dreammaker::ast::Parameter> = source
         .value
@@ -198,7 +207,11 @@ pub fn compile_proc(source: &ProcSource) -> Result<CompiledProc, CompileError> {
         .map(|p| p.var_type.type_path.to_string())
         .collect();
 
-    let mut compiler = Compiler::new(params.clone(), Some(proc_ctx(source, param_types)));
+    let mut ctx = proc_ctx(source, param_types);
+    if let Some(path) = proc_path {
+        ctx.proc_path = path.to_owned();
+    }
+    let mut compiler = Compiler::new(params.clone(), Some(ctx));
     compiler.debug_info = source.debug_info;
     compiler.byond = source.byond;
     compiler.emit_ins(Instruction::DbgFile(DMString(

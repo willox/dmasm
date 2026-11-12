@@ -12,6 +12,7 @@ mod fold;
 mod procs;
 mod statements;
 
+pub(crate) use procs::compile_proc_as;
 pub use procs::{compile_proc, CompiledProc, ProcSource, StaticLocal};
 
 mod args;
