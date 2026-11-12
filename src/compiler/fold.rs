@@ -574,6 +574,10 @@ fn binary_value(c: &Compiler, expr: &Expression) -> Option<Constant> {
             let b = value(c, rhs)?;
             match (a, b) {
                 (Constant::Number(a), Constant::Number(b)) => {
+                    // Let BYOND convert wide bit operands when evaluating debugger code.
+                    if is_bit_op(*op) && c.expr_scope.is_some() && (wide(a) || wide(b)) {
+                        return None;
+                    }
                     if is_bit_op(*op) {
                         warn_bits(c, a);
                         warn_bits(c, b);
@@ -625,10 +629,15 @@ fn is_bit_op(op: BinaryOp) -> bool {
     )
 }
 
+/// Whether a bit operand is beyond the 32-bit range.
+pub(super) fn wide(x: f32) -> bool {
+    !(-2147483648.0..2147483648.0).contains(&x)
+}
+
 /// A constant beyond the 32-bit range next to a bit operator: DreamMaker
 /// makes erratic bits of it, by build (an expected difference)
 pub(super) fn warn_bits(c: &Compiler, x: f32) {
-    if !(-2147483648.0..2147483648.0).contains(&x) {
+    if wide(x) {
         c.warn(&format!(
             "bit operand {x} is outside the 32-bit range; its conversion differs from DreamMaker"
         ));

@@ -366,6 +366,27 @@ fn astype_of_a_var_with_a_world_type_casts_to_that_type() {
 }
 
 #[test]
+fn a_bit_operand_beyond_32_bits_is_left_to_the_world() {
+    // Leave wide bit operands to BYOND: it evaluates `-1e10 | 0` as 1, while dmasm folds it to 0.
+    for code in [
+        "return -1e10 | 0",
+        "return 2**31 | 0",
+        "var/x = 1\nreturn 1e10 & x",
+    ] {
+        let (text, _) = body(code).expect("compiles");
+        assert!(
+            text.iter().any(|l| l == "Bor" || l == "Band"),
+            "{}: {:?}",
+            code,
+            text
+        );
+    }
+    // In-range constants still fold.
+    let (text, _) = body("return 6 | 1").expect("compiles");
+    assert!(text.iter().any(|l| l == "PushInt 7"), "{:?}", text);
+}
+
+#[test]
 fn a_body_can_end_with_a_bare_label() {
     // A trailing goto label must not become the result.
     let (code, _) = body("var/y = 1\nif (y) goto done\ny = 2\ndone").expect("compiles");
