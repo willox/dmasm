@@ -248,3 +248,37 @@ fn global_vars_is_the_globals_list() {
     let (code, _) = body("var/n = length(global.vars)\nn").unwrap();
     assert_has(&code, &["GetVar arg(3)", "Length", "SetVar local(0)"]);
 }
+
+#[test]
+fn a_builtin_that_is_only_a_statement_is_a_body() {
+    for code in [
+        "sleep(1)",
+        "sleep()",
+        "sleep(by)",
+        "flick(\"x\", src)",
+        "walk(src, 1)",
+    ] {
+        assert!(is_body(code), "{:?} should be a body", code);
+    }
+    // Builtins with value forms remain expressions.
+    for code in [
+        "sleep",
+        "sleep(1) + 1",
+        "animate(src, alpha = 0)",
+        "rand(1)",
+    ] {
+        assert!(!is_body(code), "{:?} shouldn't be a body", code);
+    }
+    // A final statement-only builtin leaves `.` as the result.
+    let (code, _) = body("sleep(1)").unwrap();
+    assert_has(&code, &["PushInt 1", "Sleep"]);
+    assert!(
+        !code.iter().any(|l| l.contains("sleep")),
+        "{}",
+        code.join("\n")
+    );
+    assert_has(&code, &RETURN);
+    let (code, _) = body("by = 2; sleep(by)").unwrap();
+    assert_has(&code, &["GetVar arg(2)", "Sleep"]);
+    assert_has(&code, &RETURN);
+}

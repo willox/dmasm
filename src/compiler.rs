@@ -312,8 +312,9 @@ const BODY_PROC: &str = "dmasm_body";
 const BODY_FILE: &str = "<dmasm expression>";
 
 /// Whether debugger input parses as a proc body containing multiple
-/// statements or a single non-expression statement. Leave invalid input
-/// to the expression compiler for diagnostics.
+/// statements, a single non-expression statement, or a single call to a
+/// statement-only builtin such as `sleep(1)`. Leave invalid input to the
+/// expression compiler for diagnostics.
 pub fn is_body(code: &str) -> bool {
     use dreammaker::ast::Statement;
     let Ok(tree) = parse_body(code, ByondVersion::LATEST) else {
@@ -321,9 +322,40 @@ pub fn is_body(code: &str) -> bool {
     };
     match body_statements(&tree) {
         [] => false,
-        [only] => !matches!(only.elem, Statement::Expr(_)),
+        [only] => match &only.elem {
+            Statement::Expr(expr) => is_statement_builtin(expr, ByondVersion::LATEST),
+            _ => true,
+        },
         _ => true,
     }
+}
+
+/// Identify calls to builtins with no expression form, such as `sleep(1)`.
+/// Compile these as statements rather than global proc calls or return values.
+fn is_statement_builtin(expr: &Expression, byond: ByondVersion) -> bool {
+    use dreammaker::ast::Term;
+    let Expression::Base { term, follow } = expr else {
+        return false;
+    };
+    let Term::Call(name, args) = &term.elem else {
+        return false;
+    };
+    if !follow.is_empty() {
+        return false;
+    }
+    // Try the builtin compilers on a scratch compiler and discard its code.
+    let mut compiler = Compiler::new(vec![], None);
+    compiler.byond = byond;
+    if !matches!(
+        builtin_procs::emit(&mut compiler, name.as_str(), &args.to_vec()),
+        Ok(None)
+    ) {
+        return false;
+    }
+    !matches!(
+        builtin_procs::emit_statement_builtin(&mut compiler, name.as_str(), args),
+        Ok(false)
+    )
 }
 
 /// Compile debugger input as a proc body using `scope` for names outside
@@ -344,7 +376,7 @@ pub fn compile_body_in(
     let mut statements = body_statements(&parsed).to_vec();
     if let Some(last) = statements.last_mut() {
         if let Statement::Expr(expr) = &last.elem {
-            // (but `x << y` and `x >> y` alone are output and input)
+            // Standalone shifts are input/output statements; `sleep(1)` also has no value.
             let io = matches!(
                 expr,
                 Expression::BinaryOp {
@@ -352,7 +384,7 @@ pub fn compile_body_in(
                     ..
                 }
             );
-            if !io {
+            if !io && !is_statement_builtin(expr, byond) {
                 last.elem = Statement::Return(Some(expr.clone()));
             }
         }
