@@ -315,11 +315,13 @@ fn base_value(c: &Compiler, term: &Term) -> Option<Constant> {
             Constant::New
         }
         // A proc's type (null in a global proc) and its own path
-        Term::__TYPE__ => match c.proc.as_ref()? {
+        Term::__TYPE__ if c.proc_macros_known() => match c.proc.as_ref()? {
             p if p.ty.is_root() => Constant::Null,
             p => Constant::Path(p.ty.get().path.clone()),
         },
-        Term::__PROC__ if c.byond.at_least(super::versions::PROC_MACRO) => {
+        Term::__PROC__
+            if c.proc_macros_known() && c.byond.at_least(super::versions::PROC_MACRO) =>
+        {
             Constant::Path(c.proc.as_ref()?.proc_path.clone())
         }
         Term::Call(name, args) if name.as_str() == "newlist" && constant_args(c, args) => {
@@ -572,6 +574,10 @@ fn binary_value(c: &Compiler, expr: &Expression) -> Option<Constant> {
             let b = value(c, rhs)?;
             match (a, b) {
                 (Constant::Number(a), Constant::Number(b)) => {
+                    // Let BYOND convert wide bit operands when evaluating debugger code.
+                    if is_bit_op(*op) && c.expr_scope.is_some() && (wide(a) || wide(b)) {
+                        return None;
+                    }
                     if is_bit_op(*op) {
                         warn_bits(c, a);
                         warn_bits(c, b);
@@ -623,10 +629,15 @@ fn is_bit_op(op: BinaryOp) -> bool {
     )
 }
 
+/// Whether a bit operand is beyond the 32-bit range.
+pub(super) fn wide(x: f32) -> bool {
+    !(-2147483648.0..2147483648.0).contains(&x)
+}
+
 /// A constant beyond the 32-bit range next to a bit operator: DreamMaker
 /// makes erratic bits of it, by build (an expected difference)
 pub(super) fn warn_bits(c: &Compiler, x: f32) {
-    if !(-2147483648.0..2147483648.0).contains(&x) {
+    if wide(x) {
         c.warn(&format!(
             "bit operand {x} is outside the 32-bit range; its conversion differs from DreamMaker"
         ));

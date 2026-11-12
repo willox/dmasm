@@ -474,6 +474,10 @@ pub struct Snapshot {
     procs_by_file: std::sync::OnceLock<HashMap<FileId, Vec<ProcKey>>>,
     /// Cached source locations of defaults embedded in each proc's debug info.
     default_lines: std::sync::Mutex<HashMap<ProcKey, Vec<(Vec<u8>, u32)>>>,
+    /// Initializer locations folded by dmasm after SpacemanDMM evaluation failed.
+    folded: std::collections::BTreeSet<dreammaker::Location>,
+    /// Files reparsed successfully by `keep`; their original parse errors no longer apply.
+    mended: HashSet<FileId>,
 }
 
 /// Incremental changes from reparsing one file (see `Snapshot::reload_file`).
@@ -552,6 +556,7 @@ impl Snapshot {
         if let Some((major, build)) = options.byond {
             snapshot.byond = ByondVersion::new(major, build);
         }
+        snapshot.fold_const_initializers();
         Ok(snapshot)
     }
 
@@ -740,6 +745,8 @@ impl Snapshot {
         }
         self.patched.extend(reload.patched);
         self.scope_names.insert(reload.file, reload.scope_names);
+        // This successful reparse preserved the definitions, so the old error hid no code.
+        self.mended.insert(reload.file);
     }
 
     /// Run `f` against the original parse, excluding incremental replacements.
@@ -753,6 +760,7 @@ impl Snapshot {
     /// Discard incremental file replacements.
     pub fn clear_patches(&mut self) {
         self.patched.clear();
+        self.mended.clear();
     }
 
     /// What `file` defines: vars, proc declarations and definitions
@@ -787,6 +795,7 @@ impl Snapshot {
     /// A snapshot of code already parsed into `tree`, with `ctx` holding its
     /// file names relative to the `.dme`'s directory.
     pub fn from_tree(ctx: Context, tree: ObjectTree) -> Snapshot {
+        crate::compiler::new_tree();
         let mut procs = BTreeMap::new();
         for ty in tree.iter_types() {
             for (name, type_proc) in ty.get().procs.iter() {
@@ -820,6 +829,71 @@ impl Snapshot {
             scope_names: HashMap::new(),
             procs_by_file: std::sync::OnceLock::new(),
             default_lines: std::sync::Mutex::new(HashMap::new()),
+            folded: Default::default(),
+            mended: Default::default(),
+        }
+    }
+
+    /// Fold const initializers beyond SpacemanDMM's evaluator and suppress their errors.
+    /// Repeat to resolve consts that depend on other consts.
+    fn fold_const_initializers(&mut self) {
+        let described: Vec<(dreammaker::Location, String)> = self
+            .ctx
+            .errors()
+            .iter()
+            .filter(|e| e.severity() == Severity::Error)
+            .map(|e| (e.location(), e.description().to_owned()))
+            .collect();
+        let errors: Vec<dreammaker::Location> = described.iter().map(|(at, _)| *at).collect();
+        if errors.is_empty() {
+            return;
+        }
+        let mut names: HashSet<String> = HashSet::new();
+        loop {
+            let mut found = vec![];
+            for ty in self.tree.iter_types() {
+                for (name, var) in ty.get().vars.iter() {
+                    let location = var.value.location;
+                    if var.value.constant.is_some()
+                        || !errors.contains(&location)
+                        || self.folded.contains(&location)
+                    {
+                        continue;
+                    }
+                    let Some(expression) = var.value.expression.as_ref() else {
+                        continue;
+                    };
+                    let is_const = ty
+                        .get_var_declaration(name.as_str())
+                        .is_some_and(|d| d.var_type.flags.is_const());
+                    if !is_const {
+                        continue;
+                    }
+                    if let Some(constant) =
+                        crate::compiler::fold_initializer(&self.tree, ty, expression, self.byond)
+                    {
+                        found.push((ty.index(), name.clone(), constant, location));
+                    }
+                }
+            }
+            if found.is_empty() {
+                break;
+            }
+            for (ty, name, constant, location) in found {
+                if let Some(var) = self.tree[ty].vars.get_mut(&name) {
+                    var.value.constant = Some(constant);
+                }
+                self.folded.insert(location);
+                names.insert(name.to_string());
+            }
+        }
+        // SpacemanDMM also reports recursive-reference errors for vars using a const
+        // it could not evaluate. Suppress those after resolving the const.
+        for (location, description) in described {
+            let of = description.strip_prefix("recursive constant reference: ");
+            if of.is_some_and(|name| names.contains(name)) {
+                self.folded.insert(location);
+            }
         }
     }
 
@@ -880,11 +954,13 @@ impl Snapshot {
         for s in compiled.statics {
             let constant = s.value.as_ref().and_then(const_value);
             let init = match (&constant, &s.expression) {
+                // `__PROC__` must name the containing proc.
                 (None, Some(expression)) => Some(Box::new(self.compile_value(
                     ty,
                     expression,
                     &s.type_path,
                     value_location(expression, value.location),
+                    static_proc_path(&s.scope),
                 )?)),
                 _ => None,
             };
@@ -949,7 +1025,7 @@ impl Snapshot {
             location,
             Statement::Return(Some(expression.clone())),
         )]);
-        self.compile_synthetic(ty, "(in list)", block, location, true)
+        self.compile_synthetic(ty, "(in list)", block, location, true, None)
     }
 
     /// Compile a computed global or static initializer in `ty`'s scope
@@ -960,6 +1036,7 @@ impl Snapshot {
         expression: &dreammaker::ast::Expression,
         declared: &str,
         location: dreammaker::Location,
+        proc_path: Option<&str>,
     ) -> Result<ProcReload, String> {
         use dreammaker::ast::{Expression, Ident, PathOp, Prefab, RelativePath, Spanned, Term};
         // A `new` with no type makes the var's declared type
@@ -981,7 +1058,7 @@ impl Snapshot {
             }
         }
         let block: Block = Box::new([Spanned::new(location, Statement::Return(Some(expression)))]);
-        self.compile_synthetic(ty, "(value)", block, ty.get().location, false)
+        self.compile_synthetic(ty, "(value)", block, ty.get().location, false, proc_path)
     }
 
     /// Compiles a type's init proc: an assignment to `src.var` for each of
@@ -1014,10 +1091,11 @@ impl Snapshot {
                 )
             })
             .collect();
-        self.compile_synthetic(ty, "(init)", block, ty.get().location, false)
+        self.compile_synthetic(ty, "(init)", block, ty.get().location, false, None)
     }
 
-    /// Compile synthetic proc `name` on `ty`, optionally including debug locations.
+    /// Compile a synthetic proc on `ty`, optionally emitting debug locations
+    /// and overriding `__PROC__` with `proc_path`.
     fn compile_synthetic(
         &self,
         ty: TypeRef,
@@ -1025,6 +1103,7 @@ impl Snapshot {
         block: Block,
         location: dreammaker::Location,
         debug_info: bool,
+        proc_path: Option<&str>,
     ) -> Result<ProcReload, String> {
         let value = ProcValue {
             location,
@@ -1047,7 +1126,7 @@ impl Snapshot {
         };
         let path = format!("{}/{}", ty.get().path, name);
         let compiled = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_proc(&source)
+            crate::compiler::compile_proc_as(&source, proc_path)
         })) {
             Ok(Ok(compiled)) => compiled,
             Ok(Err(e)) => return Err(e.to_string()),
@@ -1110,14 +1189,25 @@ impl Snapshot {
         }
     }
 
-    /// Parse errors formatted without line numbers so moving an existing
-    /// error does not make it appear new.
-    fn errors(&self) -> Vec<String> {
+    /// Return unresolved parse errors, excluding recovered const initializers and
+    /// successfully reparsed files. Each pair contains a line-independent comparison
+    /// key and a diagnostic with the source line, so moving an error does not make it new.
+    pub fn parse_errors(&self) -> Vec<(String, String)> {
         self.ctx
             .errors()
             .iter()
-            .filter(|e| e.severity() == Severity::Error)
-            .map(|e| format!("{}: {}", self.file_name(e.location().file), e.description()))
+            .filter(|e| {
+                e.severity() == Severity::Error
+                    && !self.folded.contains(&e.location())
+                    && !self.mended.contains(&e.location().file)
+            })
+            .map(|e| {
+                let file = self.file_name(e.location().file);
+                (
+                    format!("{file}: {}", e.description()),
+                    format!("{file}:{}: {}", e.location().line, e.description()),
+                )
+            })
             .collect()
     }
 
@@ -1273,13 +1363,13 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     // New parse errors can omit declarations and falsely appear as removals.
     // Reject them before comparing definitions.
     let mut old_errors: HashMap<String, usize> = HashMap::new();
-    for e in old.errors() {
+    for (e, _) in old.parse_errors() {
         *old_errors.entry(e).or_default() += 1;
     }
-    for e in new.errors() {
+    for (e, shown) in new.parse_errors() {
         match old_errors.get_mut(&e) {
             Some(n) if *n > 0 => *n -= 1,
-            _ => changes.refused.push(format!("parse error: {e}")),
+            _ => changes.refused.push(format!("parse error: {shown}")),
         }
     }
     if !changes.refused.is_empty() {
@@ -2456,6 +2546,17 @@ fn compare_types(
                     let static_like =
                         |v: &dreammaker::objtree::TypeVar| kind(v).is_some_and(|k| k.0 || k.1);
                     let redeclared = kind(old_var) != kind(var) && !n.is_root();
+                    if needs_constant(var) {
+                        changes.refused.push(format!(
+                            "{shown}: var {name} is const but has a non-constant value (DreamMaker: constant initializer required)"
+                        ));
+                        continue;
+                    }
+                    if let Some(why) = dm_refused_const(var) {
+                        changes
+                            .warnings
+                            .push(refused_const_warning(&shown, name, why));
+                    }
                     if redeclared {
                         redeclare(new, n, name.as_str(), old_var, var, changes);
                     }
@@ -2590,6 +2691,29 @@ fn new_var(
         .as_ref()
         .map(|d| d.var_type.flags)
         .unwrap_or_default();
+    // Validate declarations DreamMaker would reject.
+    let place = var
+        .declaration
+        .as_ref()
+        .map_or(var.value.location, |d| d.location);
+    let place = format!("{}:{}", snapshot.file_name(place.file), place.line);
+    if let Some(other) = declared_elsewhere(n, name) {
+        changes.refused.push(format!(
+            "{place}: {name}: duplicate definition ({other} declares it too)"
+        ));
+        return false;
+    }
+    if needs_constant(var) {
+        changes
+            .refused
+            .push(format!("{place}: {name}: constant initializer required"));
+        return false;
+    }
+    if let Some(why) = dm_refused_const(var) {
+        changes
+            .warnings
+            .push(refused_const_warning(&place, name, why));
+    }
     let static_like = flags.is_static() || flags.is_const() || n.is_root();
     let (value, init) = if static_like {
         // The world sets it when it starts, so the reload sets it now
@@ -2632,6 +2756,121 @@ fn new_var(
     true
 }
 
+/// Find an ancestor or descendant whose declaration of `name` would conflict with `n`.
+fn declared_elsewhere(n: TypeRef, name: &str) -> Option<String> {
+    let declares = |t: TypeRef| {
+        t.get()
+            .vars
+            .get(name)
+            .is_some_and(|v| v.declaration.is_some())
+    };
+    // Same-named globals do not conflict with type vars.
+    let mut at = n.parent_type().filter(|t| !t.is_root());
+    while let Some(t) = at {
+        if declares(t) {
+            return Some(t.get().path.clone());
+        }
+        at = t.parent_type().filter(|t| !t.is_root());
+    }
+    if n.is_root() {
+        return None;
+    }
+    // Follow actual parents, not path prefixes: `/obj` inherits from `/atom/movable`,
+    // and `parent_type` can change a type's ancestry.
+    let descends = |t: TypeRef| {
+        let mut at = t.parent_type();
+        while let Some(parent) = at {
+            if parent == n {
+                return true;
+            }
+            at = parent.parent_type();
+        }
+        false
+    };
+    n.tree()
+        .iter_types()
+        .find(|t| *t != n && declares(*t) && descends(*t))
+        .map(|t| t.get().path.clone())
+}
+
+/// Whether a const initializer lacks a valid constant value. Lists, `new`,
+/// constructors such as `matrix()` and `icon()`, and runtime expressions are invalid.
+fn needs_constant(var: &dreammaker::objtree::TypeVar) -> bool {
+    use dreammaker::constants::Constant;
+    let is_const = var
+        .declaration
+        .as_ref()
+        .is_some_and(|d| d.var_type.flags.is_const());
+    let Some(expression) = var.value.expression.as_ref().filter(|_| is_const) else {
+        return false;
+    };
+    let constant = var
+        .value
+        .constant
+        .clone()
+        .or_else(|| expression.simple_evaluate(var.value.location).ok());
+    matches!(
+        constant,
+        None | Some(Constant::List(_)) | Some(Constant::New { .. }) | Some(Constant::Call(..))
+    )
+}
+
+/// Reject a changed const value if it is no longer constant. Return whether rejected.
+fn refused_const_value(new: &Snapshot, n: TypeRef, name: &str, changes: &mut Changes) -> bool {
+    let Some(var) = n.get().vars.get(name).filter(|var| needs_constant(var)) else {
+        return false;
+    };
+    let at = var.value.location;
+    changes.refused.push(format!(
+        "{}:{}: {name}: constant initializer required",
+        new.file_name(at.file),
+        at.line
+    ));
+    true
+}
+
+/// Find initializers SpacemanDMM folds but DreamMaker rejects: `type`,
+/// `parent_type` and comparisons. Reload accepts these with a warning.
+fn dm_refused_const(var: &dreammaker::objtree::TypeVar) -> Option<&'static str> {
+    use dreammaker::ast::{BinaryOp, Expression, Term};
+    fn why(expr: &Expression) -> Option<&'static str> {
+        match expr {
+            Expression::Base { term, .. } => match &term.elem {
+                Term::Ident(name) if name.as_str() == "type" => Some("it reads type"),
+                Term::Ident(name) if name.as_str() == "parent_type" => Some("it reads parent_type"),
+                Term::Expr(inner) => why(inner),
+                _ => None,
+            },
+            Expression::BinaryOp { op, lhs, rhs } => match op {
+                BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Less
+                | BinaryOp::LessEq
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEq
+                | BinaryOp::Equiv
+                | BinaryOp::NotEquiv => Some("it compares"),
+                _ => why(lhs).or_else(|| why(rhs)),
+            },
+            Expression::TernaryOp { cond, if_, else_ } => {
+                why(cond).or_else(|| why(if_)).or_else(|| why(else_))
+            }
+            _ => None,
+        }
+    }
+    let is_const = var
+        .declaration
+        .as_ref()
+        .is_some_and(|d| d.var_type.flags.is_const());
+    why(var.value.expression.as_ref().filter(|_| is_const)?)
+}
+
+fn refused_const_warning(place: &str, name: &str, why: &str) -> String {
+    format!(
+        "{place}: const {name}: DreamMaker refuses this initializer ({why}; constant initializer required). Accepted for hot reload, but a rebuild will fail"
+    )
+}
+
 /// A declared var's flags, as BYOND keeps them
 fn byond_flags(flags: dreammaker::ast::VarTypeFlags, global: bool) -> u32 {
     let mut byond_flags = 0;
@@ -2647,8 +2886,13 @@ fn byond_flags(flags: dreammaker::ast::VarTypeFlags, global: bool) -> u32 {
     byond_flags
 }
 
-/// Return a static/global/const initializer as a constant, or null plus
-/// code to evaluate once.
+/// Extract a static local's containing proc from its `proc:PATH#N` scope.
+fn static_proc_path(scope: &str) -> Option<&str> {
+    let path = scope.strip_prefix("proc:")?;
+    Some(path.rsplit_once('#').map_or(path, |(path, _)| path))
+}
+
+/// Return an initial constant, or null with code for the world to run once.
 fn static_initial(
     snapshot: &Snapshot,
     n: TypeRef,
@@ -2667,7 +2911,7 @@ fn static_initial(
         .map(|d| d.var_type.type_path.to_string())
         .unwrap_or_default();
     let code = snapshot
-        .compile_value(n, expression, &declared, location)
+        .compile_value(n, expression, &declared, location, None)
         .map_err(|e| e.to_string())?;
     Ok((ConstValue::Null, Some(Box::new(code))))
 }
@@ -2811,8 +3055,16 @@ fn var_default(
     // A global const is set now (no code writes it), and the code it was
     // folded into compiled again
     if n.is_root() && flags.is_const() && !is_new {
+        if refused_const_value(new, n, name, changes) {
+            return;
+        }
         if !changes.consts.iter().any(|c| c == name) {
             changes.consts.push(name.to_owned());
+        }
+        if let Some(why) = n.get().vars.get(name).and_then(dm_refused_const) {
+            changes
+                .warnings
+                .push(refused_const_warning(shown, name, why));
         }
         if let Some(var) = n.get().vars.get(name) {
             match static_initial(new, n, var) {
@@ -2846,8 +3098,16 @@ fn var_default(
         if is_new {
             return;
         }
+        if refused_const_value(new, n, name, changes) {
+            return;
+        }
         if !changes.consts.iter().any(|c| c == name) {
             changes.consts.push(name.to_owned());
+        }
+        if let Some(why) = n.get().vars.get(name).and_then(dm_refused_const) {
+            changes
+                .warnings
+                .push(refused_const_warning(shown, name, why));
         }
         // (a built-in one, like `parent_type`, isn't a global)
         if builtin {

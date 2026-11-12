@@ -90,6 +90,8 @@ pub(super) struct ProcCtx<'a> {
     pub try_depth: u32,
     /// The for-in iterators active at each `label:` of the proc.
     pub label_iterators: std::collections::HashMap<String, u32>,
+    /// The labels written as a bare name, not yet emitted.
+    pub bare_labels: std::collections::HashSet<String>,
     /// Cleanup instructions for enclosing loops, innermost last.
     /// For-in uses IterPop; range loops use PopN for bounds.
     pub cleanups: Vec<Instruction>,
@@ -180,6 +182,15 @@ impl ProcCtx<'_> {
 }
 
 pub fn compile_proc(source: &ProcSource) -> Result<CompiledProc, CompileError> {
+    compile_proc_as(source, None)
+}
+
+/// Compile with an optional `__PROC__` override. Static initializers must name
+/// their containing proc rather than the synthetic initializer proc.
+pub(crate) fn compile_proc_as(
+    source: &ProcSource,
+    proc_path: Option<&str>,
+) -> Result<CompiledProc, CompileError> {
     // Exclude `...` and absolute-path parameters, matching BYOND.
     let declared: Vec<&dreammaker::ast::Parameter> = source
         .value
@@ -196,7 +207,11 @@ pub fn compile_proc(source: &ProcSource) -> Result<CompiledProc, CompileError> {
         .map(|p| p.var_type.type_path.to_string())
         .collect();
 
-    let mut compiler = Compiler::new(params.clone(), Some(proc_ctx(source, param_types)));
+    let mut ctx = proc_ctx(source, param_types);
+    if let Some(path) = proc_path {
+        ctx.proc_path = path.to_owned();
+    }
+    let mut compiler = Compiler::new(params.clone(), Some(ctx));
     compiler.debug_info = source.debug_info;
     compiler.byond = source.byond;
     compiler.emit_ins(Instruction::DbgFile(DMString(
@@ -236,6 +251,7 @@ pub(super) fn proc_ctx<'a>(source: &ProcSource<'a>, param_types: Vec<String>) ->
         clear_new_vars: false,
         try_depth: 0,
         label_iterators: Default::default(),
+        bare_labels: Default::default(),
         cleanups: vec![],
         local_consts: Default::default(),
         proc_path: {
@@ -431,14 +447,26 @@ pub(super) fn colon_var<'a>(
     ty.children().find_map(|child| colon_var(child, name))
 }
 
+/// Generation counter for trees registered through `new_tree`.
+static TREES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Invalidate address-based caches when a new compilation tree is created.
+pub(crate) fn new_tree() {
+    TREES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Resolve an unknown receiver's call using the first declaration's
 /// display name, matching DreamMaker.
 pub(super) fn first_declaring_type<'a>(tree: &'a ObjectTree, name: &str) -> Option<TypeRef<'a>> {
     thread_local! {
-        static FIRST: std::cell::RefCell<(usize, HashMap<String, String>)> =
-            std::cell::RefCell::new((0, HashMap::new()));
+        static FIRST: std::cell::RefCell<((usize, usize), HashMap<String, String>)> =
+            std::cell::RefCell::new(((0, 0), HashMap::new()));
     }
-    let key = tree as *const ObjectTree as usize;
+    // Include the generation because a new tree can reuse an old tree's address.
+    let key = (
+        tree as *const ObjectTree as usize,
+        TREES.load(std::sync::atomic::Ordering::Relaxed),
+    );
     let path = FIRST.with(|cell| {
         let mut cell = cell.borrow_mut();
         if cell.0 != key {
@@ -615,18 +643,28 @@ pub(super) fn expr_type<'a>(
 /// proc declaration it names (`/obj/proc/foo`).
 pub(super) fn resolve_proc_path(compiler: &Compiler, path: &str) -> Option<String> {
     let ctx = compiler.proc.as_ref()?;
-    let (type_part, kind, name) = ["proc", "verb"].iter().find_map(|kind| {
+    let (type_part, sep, kind, name) = ["proc", "verb"].iter().find_map(|kind| {
         for sep in ['.', '/', ':'] {
             // (`/type/proc.name` too)
             for end in ['/', '.'] {
                 let marker = format!("{}{}{}", sep, kind, end);
                 if let Some(i) = path.find(&marker) {
-                    return Some((&path[..i], *kind, &path[i + marker.len()..]));
+                    return Some((&path[..i], sep, *kind, &path[i + marker.len()..]));
                 }
             }
         }
         None
     })?;
+    // DreamMaker requires `/type/proc/name` on the declaring type;
+    // `.proc/name` searches the ancestry.
+    let written_on_type = sep == '/' && !type_part.is_empty();
+    let warn_elsewhere = |found: &str| {
+        if written_on_type {
+            compiler.warn(&format!(
+                "{path}: DreamMaker refuses this path, since {name} isn't declared on {type_part}; this is {found}"
+            ));
+        }
+    };
     let ty = if type_part.is_empty() {
         if path.starts_with('/') {
             ctx.tree.root()
@@ -645,14 +683,22 @@ pub(super) fn resolve_proc_path(compiler: &Compiler, path: &str) -> Option<Strin
                 } else {
                     t.get().path.as_str()
                 };
-                return Some(format!("{}/{}/{}", prefix, kind, name));
+                let found = format!("{}/{}/{}", prefix, kind, name);
+                if t != ty {
+                    warn_elsewhere(&found);
+                }
+                return Some(found);
             }
         }
         current = t.parent_type();
     }
     // Global procs are reachable from any type
     if ctx.tree.root().get().procs.contains_key(name) {
-        return Some(format!("/{}/{}", kind, name));
+        let found = format!("/{}/{}", kind, name);
+        if ty != ctx.tree.root() {
+            warn_elsewhere(&found);
+        }
+        return Some(found);
     }
     None
 }

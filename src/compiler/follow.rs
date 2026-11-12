@@ -37,6 +37,27 @@ fn callee_var<'a>(
     super::procs::call_var(ty, name)
 }
 
+/// Whether the known types declare proc or verb `name` for `ty`.
+/// With no receiver type, search all known types.
+fn proc_known(
+    compiler: &Compiler,
+    ty: Option<dreammaker::objtree::TypeRef>,
+    access: PropertyAccessKind,
+    name: &str,
+) -> bool {
+    match ty {
+        Some(t) if access == PropertyAccessKind::Colon => {
+            super::procs::colon_proc_type(t, name).is_some()
+        }
+        Some(t) => t.get_proc(name).is_some(),
+        None => compiler
+            .proc
+            .as_ref()
+            .and_then(|ctx| super::procs::first_declaring_type(ctx.tree, name))
+            .is_some(),
+    }
+}
+
 /// `ty` is the static type of the value being followed, when known.
 pub(super) fn emit_typed<'a>(
     compiler: &mut Compiler<'a>,
@@ -238,10 +259,12 @@ pub(super) fn emit_typed<'a>(
                         }
                     }
 
-                    // Debugger expressions lack static types. Dynamic call-by-name
-                    // lookup resolves either a proc or a verb.
-                    PropertyAccessKind::Dot | PropertyAccessKind::Colon
-                        if compiler.proc.is_none() =>
+                    // Debugger expressions lack types, and bodies know only builtins.
+                    // Call unknown names dynamically to resolve both procs and verbs.
+                    access @ (PropertyAccessKind::Dot | PropertyAccessKind::Colon)
+                        if compiler.proc.is_none()
+                            || (compiler.expr_scope.is_some()
+                                && !proc_known(compiler, receiver_ty, access, &ident)) =>
                     {
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;
@@ -451,10 +474,10 @@ pub(super) fn emit_typed<'a>(
                 ty = None;
             }
 
-            // which proc that is takes the types
+            // DreamMaker resolves proc references from a constant type, not a runtime value.
             Follow::ProcReference(_) => {
                 return Err(CompileError::UnsupportedStatement(
-                    "`::` naming a proc, without the code's types",
+                    "type::procname() must have a constant type path",
                 ))
             }
         }
@@ -495,7 +518,15 @@ fn commit_field_buffer(
             let name = field_chain.remove(0);
             // global.x. A debugger's expression reads it by name (see
             // `ExprScope::globals`).
-            if compiler.expr_scope.is_some() {
+            if let Some(scope) = compiler.expr_scope {
+                // The scope already supplies BYOND's `global.vars` list. The list itself
+                // is read-only, but its entries can be assigned.
+                if name == "vars" && (scope.global)("vars").is_none() {
+                    if let Some(index) = compiler.params.iter().rposition(|x| *x == scope.globals) {
+                        compiler.emit_ins(Instruction::GetVar(Variable::Arg(index as u32)));
+                        return commit_field_buffer(compiler, EvalKind::Stack, field_chain);
+                    }
+                }
                 let kind = compiler.emit_global_by_name(&name)?;
                 return commit_field_buffer(compiler, kind, field_chain);
             }

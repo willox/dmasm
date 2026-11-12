@@ -746,11 +746,14 @@ fn emit_overloaded(
                 let known = super::fold::number(compiler, &args[0])
                     .and_then(|x| super::versions::nan_test(name, x));
                 if let Some(result) = known {
-                    compiler.warn(&format!(
-                        "{name}() of a constant returns the previous test flag on this build, matching DreamMaker"
-                    ));
                     compiler.emit_ins(Instruction::PushInt(result as i32));
-                    compiler.emit_ins(Instruction::GetFlag);
+                    // Only affected builds read the previous test flag after folding.
+                    if !super::versions::clean_nan_fold(compiler.byond) {
+                        compiler.warn(&format!(
+                            "{name}() of a constant returns the previous test flag on this build, matching DreamMaker"
+                        ));
+                        compiler.emit_ins(Instruction::GetFlag);
+                    }
                     return Ok(Some(EvalKind::Stack));
                 }
             }
@@ -835,6 +838,17 @@ fn emit_overloaded(
         // Without a type to go by, astype(x) uses x's own
         "astype" if n == 1 && compiler.static_type_name(&args[0]).is_some() => {
             let path = compiler.static_type_name(&args[0]).unwrap();
+            push_args(compiler, args)?;
+            compiler.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
+            compiler.emit_ins(Instruction::AsType);
+        }
+        // Resolve the declared world type during assembly; the parse has only builtins.
+        "astype" if n == 1 && compiler.expr_scope.is_some() => {
+            let path = declared_world_type(compiler, &args[0]).ok_or(
+                CompileError::UnsupportedBuiltin {
+                    proc: "astype with an untyped value".to_owned(),
+                },
+            )?;
             push_args(compiler, args)?;
             compiler.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
             compiler.emit_ins(Instruction::AsType);
@@ -1000,6 +1014,11 @@ fn emit_overloaded(
             let mut name = last_identifier(&args[0]).ok_or(CompileError::ExpectedFieldReference)?;
             // nameof(__PROC__) is the proc's own name
             if name == "__PROC__" {
+                if !compiler.proc_macros_known() {
+                    return Err(CompileError::UnsupportedCompilerMacro {
+                        name: "__PROC__".to_string(),
+                    });
+                }
                 let ctx = compiler
                     .proc
                     .as_ref()
@@ -1016,12 +1035,13 @@ fn emit_overloaded(
             ))));
         }
         "istype" if n == 1 => {
-            let path =
-                compiler
-                    .static_type_name(&args[0])
-                    .ok_or(CompileError::UnsupportedBuiltin {
-                        proc: "istype with an untyped value".to_owned(),
-                    })?;
+            // Resolve declared world types during assembly, beyond the builtin-only parse.
+            let path = compiler
+                .static_type_name(&args[0])
+                .or_else(|| declared_world_type(compiler, &args[0]))
+                .ok_or(CompileError::UnsupportedBuiltin {
+                    proc: "istype with an untyped value".to_owned(),
+                })?;
             push_args(compiler, args)?;
             compiler.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
             compiler.emit_ins(Instruction::IsType);
@@ -1031,13 +1051,25 @@ fn emit_overloaded(
     Ok(Some(EvalKind::Stack))
 }
 
+/// Resolve the declared type for one-argument `istype()` and `astype()` in debugger code.
+/// Use `/list` for list vars; assembly resolves other paths against the world.
+fn declared_world_type(compiler: &Compiler, arg: &Expression) -> Option<String> {
+    compiler.expr_scope?;
+    let path = super::procs::declared_type_path(compiler, arg).filter(|path| !path.is_empty())?;
+    Some(if path.split('/').any(|part| part == "list") {
+        "/list".to_owned()
+    } else {
+        path
+    })
+}
+
 pub(super) fn last_identifier(expr: &Expression) -> Option<String> {
     use dreammaker::ast::{Follow, Term};
     match expr {
         Expression::Base { term, follow } => match follow.last().map(|f| &f.elem) {
-            Some(Follow::Field(_, ident) | Follow::StaticField(ident)) => {
-                Some(ident.as_str().to_owned())
-            }
+            Some(
+                Follow::Field(_, ident) | Follow::StaticField(ident) | Follow::ProcReference(ident),
+            ) => Some(ident.as_str().to_owned()),
             Some(_) => None,
             None => match &term.elem {
                 Term::Ident(ident) => Some(ident.as_str().to_owned()),

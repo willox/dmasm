@@ -313,7 +313,11 @@ pub(super) fn emit(
             for (i, operand) in vec![lhs, rhs].into_iter().enumerate() {
                 match super::fold::number(compiler, &operand) {
                     // (only on the left)
-                    Some(n) if bit_op && i == 0 => {
+                    Some(n)
+                        if bit_op
+                            && i == 0
+                            && !(compiler.expr_scope.is_some() && super::fold::wide(n)) =>
+                    {
                         super::fold::warn_bits(compiler, n);
                         compiler.emit_number(super::fold::bits(n) as f32)
                     }

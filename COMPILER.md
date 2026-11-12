@@ -133,6 +133,11 @@ Two copied quirks also warn:
 - Before 516.1685, changing a list element through `?.` with an RHS that uses
   the cache resolves the list from the cache value left by the RHS.
 
+After `a.b.f()`, DreamMaker keeps `a.b` cached: a later `a.b.x` in the same
+flow uses the old object even if `f()` replaced `a.b`. dmasm preserves this
+behavior without warning because the pattern is common and only matters when
+the call replaces the field. Read the field into a local when a call may replace it.
+
 Debug-location and encoding-only differences do not warn. In the validation corpora,
 most warnings are tgstation parameter-default divisions; older builds also expose
 the safe-list-assignment quirk.

@@ -1580,3 +1580,306 @@ fn a_constant_beyond_32_bits_at_a_bit_operator_is_warned_about() {
     );
     assert!(changes.warnings.is_empty(), "{:?}", changes.warnings);
 }
+
+#[test]
+fn a_static_local_s_initializer_names_its_own_proc() {
+    // Static initializers such as tgstation verb registration use the containing proc's `__PROC__`.
+    let before = "/datum/a\n/datum/a/proc/f()\n\treturn 1\n";
+    let after = "/proc/reg(p)\n\treturn p\n/datum/a\n/datum/a/proc/f()\n\tvar/static/r = reg(__PROC__)\n\treturn 1\n";
+    let changes = changes("static-proc", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let reload = changes
+        .reloads
+        .iter()
+        .find(|r| r.proc.path == "/datum/a/proc/f" || r.proc.path == "/datum/a/f")
+        .expect("f is reloaded");
+    let init = reload.statics[0].init.as_ref().expect("code to run once");
+    let pushed: Vec<String> = init
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::Instruction(Instruction::PushVal(dmasm::Value::Path(p)), _) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        pushed.iter().any(|p| p == "/datum/a/proc/f"),
+        "__PROC__ gave {:?}",
+        pushed
+    );
+}
+
+#[test]
+fn what_dreammaker_refuses_to_build_is_refused() {
+    let before = "var/x = 1\n/datum/a\n/datum/a/b\n/datum/c\n\tvar/list/l = list(1)\n";
+    // Reject conflicting declarations on a type and its subtype.
+    for (name, after) in [(
+        "dup-down",
+        before
+            .replace("/datum/a\n", "/datum/a\n\tvar/v = 1\n")
+            .replace("/datum/a/b\n", "/datum/a/b\n\tvar/v = 2\n"),
+    )] {
+        let changes = changes(name, before, &after);
+        assert!(
+            changes
+                .refused
+                .iter()
+                .any(|r| r.contains("v: duplicate definition")),
+            "{:?}",
+            changes.refused
+        );
+    }
+    // Follow parent types rather than path prefixes: /obj inherits from /atom/movable.
+    let obj = "/obj/item\n\tvar/foo = 1\n";
+    let refused = changes(
+        "dup-parents",
+        obj,
+        &format!("{obj}/atom/movable\n\tvar/foo = 2\n"),
+    )
+    .refused;
+    assert!(
+        refused
+            .iter()
+            .any(|r| r.contains("foo: duplicate definition (/obj/item declares it too)")),
+        "{:?}",
+        refused
+    );
+    // Globals may share a name with type vars.
+    let changes_ok = changes(
+        "dup-global",
+        before,
+        &before.replace("/datum/a\n", "/datum/a\n\tvar/x = 2\n"),
+    );
+    assert!(changes_ok.refused.is_empty(), "{:?}", changes_ok.refused);
+    // Reject non-constant values in new consts and vars changed to const.
+    let new_const = before.replace("/datum/a\n", "/datum/a\n\tvar/const/list/k = list(1, 2)\n");
+    let refused = changes("const-new", before, &new_const).refused;
+    assert!(
+        refused
+            .iter()
+            .any(|r| r.contains("constant initializer required")),
+        "{:?}",
+        refused
+    );
+    let to_const = before.replace("var/list/l", "var/const/list/l");
+    let refused = changes("const-to", before, &to_const).refused;
+    assert!(
+        refused
+            .iter()
+            .any(|r| r.contains("constant initializer required")),
+        "{:?}",
+        refused
+    );
+    // Reject non-constant replacements for existing const values.
+    let had_const = "var/const/g = 1\n/datum/a\n\tvar/const/k = 1\n";
+    for (name, after) in [
+        ("const-list", had_const.replace("k = 1", "k = list(1, 2)")),
+        ("const-new", had_const.replace("k = 1", "k = new /datum")),
+        ("const-global", had_const.replace("g = 1", "g = list(1, 2)")),
+    ] {
+        let refused = changes(name, had_const, &after).refused;
+        assert!(
+            refused
+                .iter()
+                .any(|r| r.starts_with("code/code.dm:")
+                    && r.contains("constant initializer required")),
+            "{name}: {:?}",
+            refused
+        );
+    }
+    // Allow constant replacements and expressions using other consts.
+    let had_const = format!("{had_const}\tvar/const/k2 = k + 1\n");
+    for after in [
+        had_const.replace("k = 1", "k = 2"),
+        had_const.replace("k + 1", "k + 2"),
+        had_const.replace("g = 1", "g = 2"),
+    ] {
+        let refused = changes("const-other", &had_const, &after).refused;
+        assert!(refused.is_empty(), "{:?}", refused);
+    }
+    // Constructors are invalid const values, but valid for non-const vars.
+    for value in [
+        "matrix()",
+        "icon('x.dmi')",
+        "sound('x.ogg')",
+        "file(\"x\")",
+        "newlist(/datum)",
+        "vector(1, 2)",
+        "generator(\"num\", 0, 1)",
+        "filter(type = \"blur\")",
+    ] {
+        let new_const = before.replace(
+            "/datum/a\n",
+            &format!("/datum/a\n\tvar/const/k = {value}\n"),
+        );
+        let refused = changes("const-call", before, &new_const).refused;
+        assert!(
+            refused
+                .iter()
+                .any(|r| r.contains("constant initializer required")),
+            "{value}: {:?}",
+            refused
+        );
+        let plain = before.replace("/datum/a\n", &format!("/datum/a\n\tvar/k = {value}\n"));
+        let changes_ok = changes("plain-call", before, &plain);
+        assert!(
+            !changes_ok
+                .refused
+                .iter()
+                .any(|r| r.contains("constant initializer")),
+            "{value}: {:?}",
+            changes_ok.refused
+        );
+    }
+    // Numbers, text and paths are valid constants.
+    let fine = before.replace(
+        "/datum/a\n",
+        "/datum/a\n\tvar/const/n = 1 << 3\n\tvar/const/t = \"text\"\n\tvar/const/p = /datum/c\n",
+    );
+    let changes_ok = changes("const-ok", before, &fine);
+    assert!(changes_ok.refused.is_empty(), "{:?}", changes_ok.refused);
+}
+
+#[test]
+fn consts_dreammaker_folds_are_taken_and_those_it_refuses_warned_about() {
+    let before = "var/const/gconst = 3\n/datum/a\n/datum/c\n\tvar/const/c1 = 1\n";
+    // Accept constants DreamMaker folds beyond SpacemanDMM's evaluator.
+    for value in [
+        "sqrt(4)",
+        "round(1.5)",
+        "abs(-1)",
+        "md5(\"x\")",
+        "global.gconst",
+        "1 in list(1)",
+        "2 in list(1, \"a\" = 3)",
+        "floor(sqrt(4)) * 2",
+    ] {
+        let after = before.replace(
+            "/datum/a\n",
+            &format!("/datum/a\n\tvar/const/k = {value}\n"),
+        );
+        let got = changes("const-folded", before, &after);
+        assert!(got.refused.is_empty(), "{value}: {:?}", got.refused);
+    }
+    // Non-const vars may use recovered consts.
+    let after = before.replace(
+        "/datum/a\n",
+        "/datum/a\n\tvar/const/k = sqrt(16)\n\tvar/y = k + 1\n",
+    );
+    let got = changes("const-used", before, &after);
+    assert!(got.refused.is_empty(), "{:?}", got.refused);
+    // Check the folded values against DreamMaker.
+    let world = World::new(
+        "const-values",
+        &before.replace(
+            "/datum/a\n",
+            "/datum/a\n\tvar/const/k = sqrt(16)\n\tvar/const/k2 = k + 1\n\tvar/const/h = md5(\"x\")\n\tvar/const/i = 3 in list(1, 3)\n",
+        ),
+    );
+    let snapshot = world.parse();
+    let a = snapshot.tree().find("/datum/a").unwrap();
+    let value = |name: &str| {
+        a.get()
+            .vars
+            .get(name)
+            .and_then(|v| v.value.constant.clone())
+            .map(|c| c.to_string())
+    };
+    assert_eq!(value("k").as_deref(), Some("4"));
+    assert_eq!(value("k2").as_deref(), Some("5"));
+    assert_eq!(
+        value("h").as_deref(),
+        Some("\"9dd4e461268c8034f5c8564e155c67a6\"")
+    );
+    assert_eq!(value("i").as_deref(), Some("1"));
+    // Resolve chains of const dependencies.
+    let after = before.replace(
+        "/datum/a\n",
+        "/datum/a\n\tvar/const/k = sqrt(16)\n\tvar/const/k2 = k + 1\n",
+    );
+    let got = changes("const-chain", before, &after);
+    assert!(got.refused.is_empty(), "{:?}", got.refused);
+    // Warn when SpacemanDMM accepts an initializer DreamMaker rejects.
+    for (value, why) in [
+        ("type", "it reads type"),
+        ("parent_type", "it reads parent_type"),
+        ("\"a\" == \"a\"", "it compares"),
+        ("1 < 2", "it compares"),
+        ("(1 + (2 != 3))", "it compares"),
+    ] {
+        let after = before.replace(
+            "/datum/a\n",
+            &format!("/datum/a\n\tvar/const/k = {value}\n"),
+        );
+        let got = changes("const-refused", before, &after);
+        assert!(got.refused.is_empty(), "{value}: {:?}", got.refused);
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.contains("const k: DreamMaker refuses") && w.contains(why)),
+            "{value}: {:?}",
+            got.warnings
+        );
+    }
+    // Do not warn for valid const initializers.
+    let after = before.replace("/datum/a\n", "/datum/a\n\tvar/const/k = 1 + 2\n");
+    let got = changes("const-plain", before, &after);
+    assert!(
+        !got.warnings
+            .iter()
+            .any(|w| w.contains("DreamMaker refuses")),
+        "{:?}",
+        got.warnings
+    );
+    // Reject initializers neither evaluator can fold.
+    let after = before.replace("/datum/a\n", "/datum/a\n\tvar/const/k = min(1, 2)\n");
+    let got = changes("const-unfolded", before, &after);
+    assert!(
+        !got.refused.is_empty(),
+        "non-constant min() initializer was accepted"
+    );
+}
+
+#[test]
+fn a_var_declared_twice_on_one_type_is_refused_where_it_is() {
+    let before = "var/x = 1\n/datum/a\n/datum/t\n";
+    let after = before.replace("/datum/t\n", "/datum/t\n\tvar/w = 1\n\tvar/w = 2\n");
+    let refused = changes("dup-same", before, &after).refused;
+    assert_eq!(
+        refused,
+        ["parse error: code/code.dm:5: duplicate definition of var/w"]
+    );
+    // Locate a valueless declaration at the end of its source file, rather than in the .dme.
+    let after = before.replace("/datum/t\n", "/datum/t\n\tvar/vars\n");
+    let refused = changes("dup-builtin", before, &after).refused;
+    assert_eq!(
+        refused,
+        ["code/code.dm:4: vars: duplicate definition (/datum declares it too)"]
+    );
+}
+
+#[test]
+fn an_error_mended_by_reading_its_file_again_is_gone() {
+    // A proc-body error hides no definitions; recovered consts are not parse errors.
+    let broken =
+        "/datum/a\n\tvar/const/k = sqrt(16)\n/datum/a/proc/f()\n\tvar/x = 1 +\n\treturn x\n";
+    let world = World::new("mended", broken);
+    let mut old = world.parse();
+    let errors = old.parse_errors();
+    assert_eq!(errors.len(), 1, "{:?}", errors);
+    assert!(errors[0].1.starts_with("code/code.dm:4: "), "{:?}", errors);
+
+    world.write(&broken.replace("1 +", "1 + 2"));
+    let reload = old
+        .reload_file(&world.dir, std::path::Path::new("code/code.dm"))
+        .unwrap();
+    old.keep(reload);
+    assert!(old.parse_errors().is_empty(), "{:?}", old.parse_errors());
+    // A repaired error must not block later additions.
+    world.write(&format!(
+        "{}/proc/g()\n\treturn 2\n",
+        broken.replace("1 +", "1 + 2")
+    ));
+    let changes = diff(&old, &world.parse(), None);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+}

@@ -1,6 +1,6 @@
 //! Debugger proc-body compilation and frame variable writeback.
 
-use dmasm::compiler::{compile_body_in, is_body, CompileError, ExprGlobal, ExprScope};
+use dmasm::compiler::{compile_body_in, is_body, CompileError, ExprGlobal, ExprScope, FoundProc};
 use dmasm::ByondVersion;
 
 /// Compile with src variable hp, src proc bump and global ticks.
@@ -12,6 +12,32 @@ fn body(code: &str) -> Result<(Vec<String>, Vec<String>), CompileError> {
         has_src_proc: &|name| name == "bump",
         global: &|name| (name == "ticks").then_some(ExprGlobal::Listed),
         globals: "globals",
+        proc_ref: &|ty, name| match (ty, name) {
+            ("/datum/foo", "double") => Ok(FoundProc {
+                tag: 0x26,
+                data: 5,
+                warning: None,
+            }),
+            ("/datum/foo/bar" | "/datum/foo/bar/baz", "double") => Ok(FoundProc {
+                tag: 0x26,
+                data: 6,
+                warning: None,
+            }),
+            _ => Err(format!("{ty} has no proc called {name}")),
+        },
+        proc_path: &|path| match path {
+            "/datum/foo/proc/double" => Some(FoundProc {
+                tag: 0x26,
+                data: 5,
+                warning: None,
+            }),
+            "/datum/foo/bar/proc/twice" => Some(FoundProc {
+                tag: 0x26,
+                data: 7,
+                warning: Some("not declared on /datum/foo/bar".to_owned()),
+            }),
+            _ => None,
+        },
     };
     let compiled = compile_body_in(
         code,
@@ -114,8 +140,17 @@ fn every_way_out_returns_the_params() {
             "Ret",
         ],
     );
-    // the last statement, an assignment, is the result
-    assert_has(&code, &["PushInt 2", "SetVarExpr arg(2)"]);
+    // A final assignment returns `.`, as in a proc.
+    assert_has(&code, &["PushInt 2", "SetVar arg(2)"]);
+    assert_has(&code, &RETURN);
+    for code in ["by = 2", "by += 2", "by++", "--by"] {
+        let (text, _) = body(code).unwrap();
+        assert_has(&text, &RETURN);
+    }
+    // A final value expression is returned directly.
+    let (text, _) = body("by = 2\nby + 1").unwrap();
+    let (dot, _) = body("by = 2\nreturn").unwrap();
+    assert_ne!(text, dot);
     // Fallthrough and bare return use the frame's dot value.
     let (code, _) = body("var/x = 1\nreturn").unwrap();
     assert_has(&code, &RETURN);
@@ -128,11 +163,11 @@ fn names_are_the_body_s_then_the_frame_s_then_src_s_then_globals() {
     assert_has(&code, &["GetVar cache = arg(1); cache[\"hp\"]"]);
     assert_has(&code, &["GetVar arg(2)"]);
     assert_has(&code, &["GetVar arg(3)", "PushVal \"ticks\"", "ListGet"]);
-    // a bare call is src's proc when it has one
+    // Resolve bare calls on src by name, since its runtime type may supply a verb.
     let (code, _) = body("var/x = bump(1)\nx").unwrap();
+    assert_has(&code, &["GetVar arg(1)", "PushVal \"bump\""]);
     assert!(
-        code.iter()
-            .any(|l| l.contains("arg(1)") && l.starts_with("Call")),
+        code.iter().any(|l| l.starts_with("CallName")),
         "{}",
         code.join("\n")
     );
@@ -185,4 +220,254 @@ fn the_debug_info_names_lines_in_the_code() {
     assert_eq!(code[0], "DbgFile \"<dmasm expression>\"");
     assert_has(&code, &["DbgLine 1"]);
     assert_has(&code, &["DbgLine 3"]);
+}
+
+#[test]
+fn a_call_the_builtin_types_dont_have_goes_by_name() {
+    // Call by name to find a world verb absent from the builtin-only parse.
+    let (code, _) = body("var/mob/M = new\nM.plain_verb()\nM:examinate(M)").expect("compiles");
+    let joined = code.join("\n");
+    assert!(joined.contains("CallName 0"), "{}", joined);
+    assert!(joined.contains("CallName 1"), "{}", joined);
+    assert!(!joined.contains("dynamic_proc"), "{}", joined);
+    // Known builtin calls keep their existing compilation.
+    let (code, _) = body("var/mob/M = new\nM.Move(null)").expect("compiles");
+    let joined = code.join("\n");
+    assert!(!joined.contains("CallName"), "{}", joined);
+}
+
+#[test]
+fn an_implicit_new_of_a_world_type_makes_the_declared_type() {
+    // Assembly resolves world types absent from the builtin-only parse.
+    let (code, _) = body("var/datum/apiModel/Error/m = new\nm").expect("compiles");
+    assert!(
+        code.iter().any(|l| l == "PushVal /datum/apiModel/Error"),
+        "{}",
+        code.join("\n")
+    );
+}
+
+#[test]
+fn a_body_may_be_indented_with_spaces() {
+    let tabs = body("var/n = 0\nfor(var/i in 1 to 3)\n\tn++\nn").unwrap();
+    for code in [
+        "var/n = 0\nfor(var/i in 1 to 3)\n    n++\nn",
+        "var/n = 0\nfor(var/i in 1 to 3)\n  n++\nn",
+        // Also accept a body pasted with common leading indentation.
+        "    var/n = 0\n    for(var/i in 1 to 3)\n        n++\n    n",
+    ] {
+        assert!(is_body(code), "{:?} should be a body", code);
+        assert_eq!(body(code).unwrap(), tabs, "{:?}", code);
+    }
+    // Nested blocks indented with spaces.
+    let (code, _) = body("var/n = 0\nfor(var/i in 1 to 3)\n    if(i > 1)\n        n++\nn").unwrap();
+    assert_has(&code, &["Inc local(0)"]);
+    // Error columns must refer to the original input.
+    for (code, at) in [
+        ("var/x = 1\nif(x)\n    x x", "3:7:"),
+        ("var/x = 1\nif(x)\n\tx x", "3:4:"),
+        ("  var/x = 1\n  if(x)\n      x x", "3:9:"),
+    ] {
+        let error = body(code).unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!("parser error: {} error: got `x`", at)),
+            "{:?}: {}",
+            code,
+            error
+        );
+    }
+}
+
+#[test]
+fn a_body_refuses_the_procs_own_macros_as_an_expression_does() {
+    // Reject proc macros rather than exposing the synthetic body proc's type and path.
+    for code in [
+        "return __TYPE__",
+        "var/t = __TYPE__\nreturn \"[t]\"",
+        "return __PROC__",
+        "return nameof(__PROC__)",
+        "return __TYPE__ ? 1 : 2",
+    ] {
+        let error = body(code).unwrap_err();
+        assert!(
+            format!("{}", error).contains("unsupported compiler macro"),
+            "{}: {}",
+            code,
+            error
+        );
+    }
+}
+
+#[test]
+fn global_vars_is_the_globals_list() {
+    let (code, _) = body("var/n = length(global.vars)\nn").unwrap();
+    assert_has(&code, &["GetVar arg(3)", "Length", "SetVar local(0)"]);
+}
+
+#[test]
+fn a_builtin_that_is_only_a_statement_is_a_body() {
+    for code in [
+        "sleep(1)",
+        "sleep()",
+        "sleep(by)",
+        "flick(\"x\", src)",
+        "walk(src, 1)",
+    ] {
+        assert!(is_body(code), "{:?} should be a body", code);
+    }
+    // Builtins with value forms remain expressions.
+    for code in [
+        "sleep",
+        "sleep(1) + 1",
+        "animate(src, alpha = 0)",
+        "rand(1)",
+    ] {
+        assert!(!is_body(code), "{:?} shouldn't be a body", code);
+    }
+    // A final statement-only builtin leaves `.` as the result.
+    let (code, _) = body("sleep(1)").unwrap();
+    assert_has(&code, &["PushInt 1", "Sleep"]);
+    assert!(
+        !code.iter().any(|l| l.contains("sleep")),
+        "{}",
+        code.join("\n")
+    );
+    assert_has(&code, &RETURN);
+    let (code, _) = body("by = 2; sleep(by)").unwrap();
+    assert_has(&code, &["GetVar arg(2)", "Sleep"]);
+    assert_has(&code, &RETURN);
+}
+
+#[test]
+fn istype_of_a_var_with_a_world_type_checks_that_type() {
+    // Assembly resolves the declared world type.
+    let (code, _) =
+        body("var/datum/round_event/vent_clog/E = by\nreturn istype(E)").expect("compiles");
+    assert!(
+        code.iter()
+            .any(|l| l == "PushVal /datum/round_event/vent_clog"),
+        "{}",
+        code.join("\n")
+    );
+    let (code, _) = body("var/list/L = by\nreturn istype(L)").expect("compiles");
+    assert!(
+        code.iter().any(|l| l == "PushVal /list"),
+        "{}",
+        code.join("\n")
+    );
+    // One-argument istype still requires a declared type.
+    let error = body("var/x = by\nreturn istype(x)").unwrap_err();
+    assert!(
+        error.to_string().contains("istype with an untyped value"),
+        "{}",
+        error
+    );
+}
+
+#[test]
+fn a_parser_warning_does_not_refuse_a_body() {
+    let (text, _) = body("var/x = 4294967295\nreturn x").expect("compiles");
+    assert!(
+        text.iter().any(|l| l.starts_with("PushVal 4294967")),
+        "{:?}",
+        text
+    );
+}
+
+#[test]
+fn a_bare_label_in_a_body_can_be_jumped_to() {
+    let (text, _) =
+        body("var/i = 0\nagain\ni++\nif (i < 5)\n\tgoto again\nreturn i").expect("compiles");
+    assert!(text.iter().any(|l| l == "USER_again:"), "{:?}", text);
+    assert!(text.iter().any(|l| l == "JmpLoop USER_again"), "{:?}", text);
+}
+
+#[test]
+fn astype_of_a_var_with_a_world_type_casts_to_that_type() {
+    // Resolve /datum/foo during assembly.
+    let (text, _) = body("var/datum/foo/x = null\nreturn astype(x)").expect("compiles");
+    let at = text.iter().position(|l| l == "AsType").expect("AsType");
+    assert_eq!(text[at - 1], "PushVal /datum/foo", "{:?}", text);
+    let (text, _) = body("var/list/datum/foo/L = null\nreturn astype(L)").expect("compiles");
+    let at = text.iter().position(|l| l == "AsType").expect("AsType");
+    assert_eq!(text[at - 1], "PushVal /list", "{:?}", text);
+    // One-argument astype requires a declared type.
+    let error = body("var/x = null\nreturn astype(x)").unwrap_err();
+    assert!(
+        format!("{:?}", error).contains("astype with an untyped value"),
+        "{:?}",
+        error
+    );
+}
+
+#[test]
+fn a_bit_operand_beyond_32_bits_is_left_to_the_world() {
+    // Leave wide bit operands to BYOND: it evaluates `-1e10 | 0` as 1, while dmasm folds it to 0.
+    for code in [
+        "return -1e10 | 0",
+        "return 2**31 | 0",
+        "var/x = 1\nreturn 1e10 & x",
+    ] {
+        let (text, _) = body(code).expect("compiles");
+        assert!(
+            text.iter().any(|l| l == "Bor" || l == "Band"),
+            "{}: {:?}",
+            code,
+            text
+        );
+    }
+    // In-range constants still fold.
+    let (text, _) = body("return 6 | 1").expect("compiles");
+    assert!(text.iter().any(|l| l == "PushInt 7"), "{:?}", text);
+}
+
+#[test]
+fn a_body_gives_its_warnings_with_its_own_lines() {
+    let body = dmasm::compiler::compile_body_in(
+        "var/x = 1\nvar/list/L = list(1)\nL.Cut()\nreturn L.len",
+        &[],
+        None,
+        dmasm::ByondVersion::LATEST,
+    )
+    .unwrap();
+    assert!(body.warnings.is_empty(), "{:?}", body.warnings);
+    let (_, warnings) = dmasm::compiler::compile_expr_warned(
+        "isnan(1)",
+        &[],
+        None,
+        dmasm::ByondVersion::new(516, 1659),
+    )
+    .unwrap();
+    assert!(
+        warnings.iter().any(|w| w.contains("previous test flag")),
+        "{:?}",
+        warnings
+    );
+    let body = dmasm::compiler::compile_body_in(
+        "var/x = 1\nreturn isnan(x) + isnan(1)",
+        &[],
+        None,
+        dmasm::ByondVersion::new(516, 1659),
+    )
+    .unwrap();
+    assert_eq!(
+        body.warnings
+            .iter()
+            .filter(|w| w.starts_with("line 2: ") && w.contains("previous test flag"))
+            .count(),
+        1,
+        "{:?}",
+        body.warnings
+    );
+}
+
+#[test]
+fn a_body_can_end_with_a_bare_label() {
+    // A trailing goto label must not become the result.
+    let (code, _) = body("var/y = 1\nif (y) goto done\ny = 2\ndone").expect("compiles");
+    let joined = code.join("\n");
+    assert!(joined.contains("USER_done:"), "{}", joined);
+    // A name not targeted by goto remains a value expression.
+    let (code, _) = body("var/y = 1\ny").expect("compiles");
+    assert_has(&code, &["GetVar local(0)"]);
 }

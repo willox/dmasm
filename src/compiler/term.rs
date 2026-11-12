@@ -33,12 +33,9 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             compiler.emit_ins(Instruction::PushVal(Value::Null));
             Ok(EvalKind::Stack)
         }
-        Term::Int(i) if compiler.proc.is_some() => {
-            compiler.emit_number(i as f32);
-            Ok(EvalKind::Stack)
-        }
+        // PushInt has a 16-bit operand; larger values need PushVal.
         Term::Int(i) => {
-            compiler.emit_ins(Instruction::PushInt(i));
+            compiler.emit_number(i as f32);
             Ok(EvalKind::Stack)
         }
         Term::Float(f) => {
@@ -88,6 +85,14 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             let mut path = prefab.path.to_string();
             if let Some(resolved) = super::procs::resolve_proc_path(compiler, &path) {
                 path = resolved;
+            }
+            // Resolve debugger proc paths against the running world.
+            if let Some(found) = compiler
+                .expr_scope
+                .and_then(|scope| (scope.proc_path)(&path))
+            {
+                compiler.emit_found_proc(found);
+                return Ok(EvalKind::Stack);
             }
             // `/type/proc` (as in typesof(/type/proc)) is text
             if path.ends_with("/proc") || path.ends_with("/verb") {
@@ -578,17 +583,21 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             input_type,
             in_list,
         } => emit_input(compiler, args.into_vec(), input_type, in_list.map(|l| *l)),
-        Term::__TYPE__ if compiler.proc.as_ref().is_some_and(|p| !p.ty.is_root()) => {
+        // Debugger proc macros cannot use the synthetic body proc (see `proc_macros_known`).
+        Term::__TYPE__
+            if compiler.proc_macros_known()
+                && compiler.proc.as_ref().is_some_and(|p| !p.ty.is_root()) =>
+        {
             let path = compiler.proc.as_ref().unwrap().ty.get().path.clone();
             compiler.emit_ins(Instruction::PushVal(Value::Path(path)));
             Ok(EvalKind::Stack)
         }
         // A global proc's (and a global var's initial value's)
-        Term::__TYPE__ if compiler.proc.is_some() => {
+        Term::__TYPE__ if compiler.proc_macros_known() => {
             compiler.emit_ins(Instruction::PushVal(Value::Null));
             Ok(EvalKind::Stack)
         }
-        Term::__PROC__ if compiler.proc.is_some() => {
+        Term::__PROC__ if compiler.proc_macros_known() => {
             if !compiler.proc_macro_ok {
                 super::versions::require(compiler.byond, super::versions::PROC_MACRO, "__PROC__")?;
             }
@@ -801,6 +810,12 @@ fn prefab_value(
     compiler: &mut Compiler,
     prefab: &dreammaker::ast::Prefab,
 ) -> Result<Value, CompileError> {
+    // Reject modified types in debugger code: their instances would persist in BYOND's tables.
+    if compiler.expr_scope.is_some() && !prefab.vars.is_empty() {
+        return Err(CompileError::UnsupportedStatement(
+            "modified types (/type{var = value}) are unsupported in debugger code; use new and assign the vars",
+        ));
+    }
     // (a proc of its own: nothing is in the cache at its start)
     let saved = std::mem::take(&mut compiler.nodes);
     let saved_cache = compiler.cache.take();
