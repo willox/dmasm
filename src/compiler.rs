@@ -362,7 +362,8 @@ fn is_statement_builtin(expr: &Expression, byond: ByondVersion) -> bool {
 /// its local declarations. Return `list(result, params...)` so the caller
 /// can restore modified frame variables.
 ///
-/// A final expression becomes the result; otherwise return `.` on fallthrough.
+/// A final expression becomes the result; otherwise, as after a final
+/// assignment or `x++`, return `.` on fallthrough.
 /// Diagnostic line numbers are relative to `code`.
 pub fn compile_body_in(
     code: &str,
@@ -389,7 +390,21 @@ pub fn compile_body_in(
                     ..
                 }
             );
-            if !io && !is_statement_builtin(expr, byond) {
+            // Assignments and increments leave `.` as the result, as in a proc.
+            let assigns = match expr {
+                Expression::AssignOp { .. } => true,
+                Expression::Base { follow, .. } => matches!(
+                    follow.last().map(|f| &f.elem),
+                    Some(dreammaker::ast::Follow::Unary(
+                        dreammaker::ast::UnaryOp::PreIncr
+                            | dreammaker::ast::UnaryOp::PostIncr
+                            | dreammaker::ast::UnaryOp::PreDecr
+                            | dreammaker::ast::UnaryOp::PostDecr
+                    ))
+                ),
+                _ => false,
+            };
+            if !io && !assigns && !is_statement_builtin(expr, byond) {
                 last.elem = Statement::Return(Some(expr.clone()));
             }
         }

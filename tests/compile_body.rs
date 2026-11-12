@@ -114,8 +114,17 @@ fn every_way_out_returns_the_params() {
             "Ret",
         ],
     );
-    // the last statement, an assignment, is the result
-    assert_has(&code, &["PushInt 2", "SetVarExpr arg(2)"]);
+    // A final assignment returns `.`, as in a proc.
+    assert_has(&code, &["PushInt 2", "SetVar arg(2)"]);
+    assert_has(&code, &RETURN);
+    for code in ["by = 2", "by += 2", "by++", "--by"] {
+        let (text, _) = body(code).unwrap();
+        assert_has(&text, &RETURN);
+    }
+    // A final value expression is returned directly.
+    let (text, _) = body("by = 2\nby + 1").unwrap();
+    let (dot, _) = body("by = 2\nreturn").unwrap();
+    assert_ne!(text, dot);
     // Fallthrough and bare return use the frame's dot value.
     let (code, _) = body("var/x = 1\nreturn").unwrap();
     assert_has(&code, &RETURN);
