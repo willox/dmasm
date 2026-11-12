@@ -818,6 +818,12 @@ impl<'a> Compiler<'a> {
         })
     }
 
+    /// Whether proc macros have a valid source proc. Debugger bodies use a synthetic
+    /// proc, so `__TYPE__` and `__PROC__` would refer to it rather than the paused frame.
+    fn proc_macros_known(&self) -> bool {
+        self.proc.is_some() && self.expr_scope.is_none()
+    }
+
     /// The type path an expression is declared as, if it's a variable with a
     /// declared type.
     fn static_type_name(&self, expr: &Expression) -> Option<String> {

@@ -244,6 +244,26 @@ fn a_body_may_be_indented_with_spaces() {
 }
 
 #[test]
+fn a_body_refuses_the_procs_own_macros_as_an_expression_does() {
+    // Reject proc macros rather than exposing the synthetic body proc's type and path.
+    for code in [
+        "return __TYPE__",
+        "var/t = __TYPE__\nreturn \"[t]\"",
+        "return __PROC__",
+        "return nameof(__PROC__)",
+        "return __TYPE__ ? 1 : 2",
+    ] {
+        let error = body(code).unwrap_err();
+        assert!(
+            format!("{}", error).contains("unsupported compiler macro"),
+            "{}: {}",
+            code,
+            error
+        );
+    }
+}
+
+#[test]
 fn global_vars_is_the_globals_list() {
     let (code, _) = body("var/n = length(global.vars)\nn").unwrap();
     assert_has(&code, &["GetVar arg(3)", "Length", "SetVar local(0)"]);

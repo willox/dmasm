@@ -1014,6 +1014,11 @@ fn emit_overloaded(
             let mut name = last_identifier(&args[0]).ok_or(CompileError::ExpectedFieldReference)?;
             // nameof(__PROC__) is the proc's own name
             if name == "__PROC__" {
+                if !compiler.proc_macros_known() {
+                    return Err(CompileError::UnsupportedCompilerMacro {
+                        name: "__PROC__".to_string(),
+                    });
+                }
                 let ctx = compiler
                     .proc
                     .as_ref()

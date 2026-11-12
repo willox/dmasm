@@ -575,17 +575,21 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             input_type,
             in_list,
         } => emit_input(compiler, args.into_vec(), input_type, in_list.map(|l| *l)),
-        Term::__TYPE__ if compiler.proc.as_ref().is_some_and(|p| !p.ty.is_root()) => {
+        // Debugger proc macros cannot use the synthetic body proc (see `proc_macros_known`).
+        Term::__TYPE__
+            if compiler.proc_macros_known()
+                && compiler.proc.as_ref().is_some_and(|p| !p.ty.is_root()) =>
+        {
             let path = compiler.proc.as_ref().unwrap().ty.get().path.clone();
             compiler.emit_ins(Instruction::PushVal(Value::Path(path)));
             Ok(EvalKind::Stack)
         }
         // A global proc's (and a global var's initial value's)
-        Term::__TYPE__ if compiler.proc.is_some() => {
+        Term::__TYPE__ if compiler.proc_macros_known() => {
             compiler.emit_ins(Instruction::PushVal(Value::Null));
             Ok(EvalKind::Stack)
         }
-        Term::__PROC__ if compiler.proc.is_some() => {
+        Term::__PROC__ if compiler.proc_macros_known() => {
             if !compiler.proc_macro_ok {
                 super::versions::require(compiler.byond, super::versions::PROC_MACRO, "__PROC__")?;
             }
