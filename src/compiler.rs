@@ -244,6 +244,16 @@ pub fn compile_expr_in(
     scope: Option<&ExprScope>,
     byond: ByondVersion,
 ) -> Result<Vec<Node>, CompileError> {
+    compile_expr_warned(code, params, scope, byond).map(|(nodes, _)| nodes)
+}
+
+/// Compile an expression with compatibility warnings (see `CompiledProc::warnings`).
+pub fn compile_expr_warned(
+    code: &str,
+    params: &[&str],
+    scope: Option<&ExprScope>,
+    byond: ByondVersion,
+) -> Result<(Vec<Node>, Vec<String>), CompileError> {
     let mut compiler = Compiler::new(params.iter().map(|x| x.to_string()).collect(), None);
     compiler.byond = byond;
     compiler.expr_scope = scope;
@@ -296,7 +306,8 @@ pub fn compile_expr_in(
 
     compiler.emit_ins(Instruction::NewList(param_amt + 1));
     compiler.emit_ins(Instruction::Ret);
-    Ok(compiler.nodes)
+    let warnings = compiler.warnings.into_inner();
+    Ok((compiler.nodes, warnings))
 }
 
 /// Compiled debugger proc body.
@@ -305,6 +316,8 @@ pub struct CompiledBody {
     pub nodes: Vec<Node>,
     /// Local names by slot; the evaluation stub must allocate this many locals.
     pub locals: Vec<String>,
+    /// Compatibility warnings (see `CompiledProc::warnings`), with lines relative to the input.
+    pub warnings: Vec<String>,
 }
 
 /// The proc a body is parsed as, and the file its debug info names
@@ -452,6 +465,22 @@ pub fn compile_body_in(
     )?;
     compiler.emit_ins(Instruction::End);
     let locals = compiler.proc.take().unwrap().locals;
+    // Adjust warning lines for the synthetic proc header.
+    let warnings = compiler
+        .warnings
+        .take()
+        .into_iter()
+        .map(|warning| {
+            let line = warning
+                .strip_prefix("line ")
+                .and_then(|rest| rest.split_once(": "))
+                .and_then(|(line, text)| Some((line.parse::<u32>().ok()?, text)));
+            match line {
+                Some((line, text)) => format!("line {}: {text}", line.saturating_sub(1)),
+                None => warning,
+            }
+        })
+        .collect();
 
     // Every way out returns the result and the params, as an expression
     // does; `End` returns `.`, which is the frame's when it's a param
@@ -490,7 +519,11 @@ pub fn compile_body_in(
             ins => nodes.push(Node::Instruction(ins, ())),
         }
     }
-    Ok(CompiledBody { nodes, locals })
+    Ok(CompiledBody {
+        nodes,
+        locals,
+        warnings,
+    })
 }
 
 /// Parse debugger input as global proc `BODY_PROC`. Remove common

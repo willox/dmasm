@@ -396,6 +396,46 @@ fn a_bit_operand_beyond_32_bits_is_left_to_the_world() {
 }
 
 #[test]
+fn a_body_gives_its_warnings_with_its_own_lines() {
+    let body = dmasm::compiler::compile_body_in(
+        "var/x = 1\nvar/list/L = list(1)\nL.Cut()\nreturn L.len",
+        &[],
+        None,
+        dmasm::ByondVersion::LATEST,
+    )
+    .unwrap();
+    assert!(body.warnings.is_empty(), "{:?}", body.warnings);
+    let (_, warnings) = dmasm::compiler::compile_expr_warned(
+        "isnan(1)",
+        &[],
+        None,
+        dmasm::ByondVersion::new(516, 1659),
+    )
+    .unwrap();
+    assert!(
+        warnings.iter().any(|w| w.contains("previous test flag")),
+        "{:?}",
+        warnings
+    );
+    let body = dmasm::compiler::compile_body_in(
+        "var/x = 1\nreturn isnan(x) + isnan(1)",
+        &[],
+        None,
+        dmasm::ByondVersion::new(516, 1659),
+    )
+    .unwrap();
+    assert_eq!(
+        body.warnings
+            .iter()
+            .filter(|w| w.starts_with("line 2: ") && w.contains("previous test flag"))
+            .count(),
+        1,
+        "{:?}",
+        body.warnings
+    );
+}
+
+#[test]
 fn a_body_can_end_with_a_bare_label() {
     // A trailing goto label must not become the result.
     let (code, _) = body("var/y = 1\nif (y) goto done\ny = 2\ndone").expect("compiles");
