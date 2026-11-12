@@ -1608,3 +1608,100 @@ fn a_static_local_s_initializer_names_its_own_proc() {
         pushed
     );
 }
+
+#[test]
+fn what_dreammaker_refuses_to_build_is_refused() {
+    let before = "var/x = 1\n/datum/a\n/datum/a/b\n/datum/c\n\tvar/list/l = list(1)\n";
+    // Reject conflicting declarations on a type and its subtype.
+    for (name, after) in [(
+        "dup-down",
+        before
+            .replace("/datum/a\n", "/datum/a\n\tvar/v = 1\n")
+            .replace("/datum/a/b\n", "/datum/a/b\n\tvar/v = 2\n"),
+    )] {
+        let changes = changes(name, before, &after);
+        assert!(
+            changes
+                .refused
+                .iter()
+                .any(|r| r.contains("v: duplicate definition")),
+            "{:?}",
+            changes.refused
+        );
+    }
+    // Follow parent types rather than path prefixes: /obj inherits from /atom/movable.
+    let obj = "/obj/item\n\tvar/foo = 1\n";
+    let refused = changes(
+        "dup-parents",
+        obj,
+        &format!("{obj}/atom/movable\n\tvar/foo = 2\n"),
+    )
+    .refused;
+    assert!(
+        refused
+            .iter()
+            .any(|r| r.contains("foo: duplicate definition (/obj/item declares it too)")),
+        "{:?}",
+        refused
+    );
+    // Globals may share a name with type vars.
+    let changes_ok = changes(
+        "dup-global",
+        before,
+        &before.replace("/datum/a\n", "/datum/a\n\tvar/x = 2\n"),
+    );
+    assert!(changes_ok.refused.is_empty(), "{:?}", changes_ok.refused);
+    // Reject non-constant values in new consts and vars changed to const.
+    let new_const = before.replace("/datum/a\n", "/datum/a\n\tvar/const/list/k = list(1, 2)\n");
+    let refused = changes("const-new", before, &new_const).refused;
+    assert!(
+        refused
+            .iter()
+            .any(|r| r.contains("constant initializer required")),
+        "{:?}",
+        refused
+    );
+    let to_const = before.replace("var/list/l", "var/const/list/l");
+    let refused = changes("const-to", before, &to_const).refused;
+    assert!(
+        refused
+            .iter()
+            .any(|r| r.contains("constant initializer required")),
+        "{:?}",
+        refused
+    );
+    // Reject non-constant replacements for existing const values.
+    let had_const = "var/const/g = 1\n/datum/a\n\tvar/const/k = 1\n";
+    for (name, after) in [
+        ("const-list", had_const.replace("k = 1", "k = list(1, 2)")),
+        ("const-new", had_const.replace("k = 1", "k = new /datum")),
+        ("const-global", had_const.replace("g = 1", "g = list(1, 2)")),
+    ] {
+        let refused = changes(name, had_const, &after).refused;
+        assert!(
+            refused
+                .iter()
+                .any(|r| r.starts_with("code/code.dm:")
+                    && r.contains("constant initializer required")),
+            "{name}: {:?}",
+            refused
+        );
+    }
+    // Allow constant replacements and expressions using other consts.
+    let had_const = format!("{had_const}\tvar/const/k2 = k + 1\n");
+    for after in [
+        had_const.replace("k = 1", "k = 2"),
+        had_const.replace("k + 1", "k + 2"),
+        had_const.replace("g = 1", "g = 2"),
+    ] {
+        let refused = changes("const-other", &had_const, &after).refused;
+        assert!(refused.is_empty(), "{:?}", refused);
+    }
+    // Numbers, text and paths are valid constants.
+    let fine = before.replace(
+        "/datum/a\n",
+        "/datum/a\n\tvar/const/n = 1 << 3\n\tvar/const/t = \"text\"\n\tvar/const/p = /datum/c\n",
+    );
+    let changes_ok = changes("const-ok", before, &fine);
+    assert!(changes_ok.refused.is_empty(), "{:?}", changes_ok.refused);
+}

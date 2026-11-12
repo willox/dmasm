@@ -2461,6 +2461,12 @@ fn compare_types(
                     let static_like =
                         |v: &dreammaker::objtree::TypeVar| kind(v).is_some_and(|k| k.0 || k.1);
                     let redeclared = kind(old_var) != kind(var) && !n.is_root();
+                    if needs_constant(var) {
+                        changes.refused.push(format!(
+                            "{shown}: var {name} is const but has a non-constant value (DreamMaker: constant initializer required)"
+                        ));
+                        continue;
+                    }
                     if redeclared {
                         redeclare(new, n, name.as_str(), old_var, var, changes);
                     }
@@ -2595,6 +2601,24 @@ fn new_var(
         .as_ref()
         .map(|d| d.var_type.flags)
         .unwrap_or_default();
+    // Validate declarations DreamMaker would reject.
+    let place = var
+        .declaration
+        .as_ref()
+        .map_or(var.value.location, |d| d.location);
+    let place = format!("{}:{}", snapshot.file_name(place.file), place.line);
+    if let Some(other) = declared_elsewhere(n, name) {
+        changes.refused.push(format!(
+            "{place}: {name}: duplicate definition ({other} declares it too)"
+        ));
+        return false;
+    }
+    if needs_constant(var) {
+        changes
+            .refused
+            .push(format!("{place}: {name}: constant initializer required"));
+        return false;
+    }
     let static_like = flags.is_static() || flags.is_const() || n.is_root();
     let (value, init) = if static_like {
         // The world sets it when it starts, so the reload sets it now
@@ -2634,6 +2658,79 @@ fn new_var(
         value,
         init,
     });
+    true
+}
+
+/// Find an ancestor or descendant whose declaration of `name` would conflict with `n`.
+fn declared_elsewhere(n: TypeRef, name: &str) -> Option<String> {
+    let declares = |t: TypeRef| {
+        t.get()
+            .vars
+            .get(name)
+            .is_some_and(|v| v.declaration.is_some())
+    };
+    // Same-named globals do not conflict with type vars.
+    let mut at = n.parent_type().filter(|t| !t.is_root());
+    while let Some(t) = at {
+        if declares(t) {
+            return Some(t.get().path.clone());
+        }
+        at = t.parent_type().filter(|t| !t.is_root());
+    }
+    if n.is_root() {
+        return None;
+    }
+    // Follow actual parents, not path prefixes: `/obj` inherits from `/atom/movable`,
+    // and `parent_type` can change a type's ancestry.
+    let descends = |t: TypeRef| {
+        let mut at = t.parent_type();
+        while let Some(parent) = at {
+            if parent == n {
+                return true;
+            }
+            at = parent.parent_type();
+        }
+        false
+    };
+    n.tree()
+        .iter_types()
+        .find(|t| *t != n && declares(*t) && descends(*t))
+        .map(|t| t.get().path.clone())
+}
+
+/// Whether a const initializer lacks a valid constant value.
+/// Lists, `new` and runtime expressions are invalid.
+fn needs_constant(var: &dreammaker::objtree::TypeVar) -> bool {
+    use dreammaker::constants::Constant;
+    let is_const = var
+        .declaration
+        .as_ref()
+        .is_some_and(|d| d.var_type.flags.is_const());
+    let Some(expression) = var.value.expression.as_ref().filter(|_| is_const) else {
+        return false;
+    };
+    let constant = var
+        .value
+        .constant
+        .clone()
+        .or_else(|| expression.simple_evaluate(var.value.location).ok());
+    matches!(
+        constant,
+        None | Some(Constant::List(_)) | Some(Constant::New { .. })
+    )
+}
+
+/// Reject a changed const value if it is no longer constant. Return whether rejected.
+fn refused_const_value(new: &Snapshot, n: TypeRef, name: &str, changes: &mut Changes) -> bool {
+    let Some(var) = n.get().vars.get(name).filter(|var| needs_constant(var)) else {
+        return false;
+    };
+    let at = var.value.location;
+    changes.refused.push(format!(
+        "{}:{}: {name}: constant initializer required",
+        new.file_name(at.file),
+        at.line
+    ));
     true
 }
 
@@ -2821,6 +2918,9 @@ fn var_default(
     // A global const is set now (no code writes it), and the code it was
     // folded into compiled again
     if n.is_root() && flags.is_const() && !is_new {
+        if refused_const_value(new, n, name, changes) {
+            return;
+        }
         if !changes.consts.iter().any(|c| c == name) {
             changes.consts.push(name.to_owned());
         }
@@ -2854,6 +2954,9 @@ fn var_default(
     // users that folded the old value (see `const_users`).
     if flags.is_const() {
         if is_new {
+            return;
+        }
+        if refused_const_value(new, n, name, changes) {
             return;
         }
         if !changes.consts.iter().any(|c| c == name) {
