@@ -456,3 +456,19 @@ fn a_constant_nan_test_is_its_result_on_builds_that_fold_it_cleanly() {
         old
     );
 }
+
+#[test]
+fn a_parser_warning_does_not_refuse_an_expression() {
+    // Integer precision warnings must not reject otherwise valid debugger code.
+    for (code, value) in [
+        ("4294967295", 4294967295.0f32),
+        ("-2147483648", 2147483648.0),
+    ] {
+        let code = instructions(code, &[]);
+        assert!(
+            code.contains(&Instruction::PushVal(dmasm::Value::Number(value))),
+            "{:?}",
+            code
+        );
+    }
+}

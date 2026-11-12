@@ -281,7 +281,7 @@ pub fn compile_expr_in(
     }
 
     for err in ctx.errors().iter() {
-        if err.severity() >= Severity::Error {
+        if err.severity() == Severity::Error {
             return Err(err.clone().into());
         }
     }
@@ -519,7 +519,7 @@ fn parse_body(
     if let Some(err) = ctx
         .errors()
         .iter()
-        .find(|e| e.severity() >= Severity::Error)
+        .find(|e| e.severity() == Severity::Error)
     {
         // Map locations back to the input by removing the header and added indentation,
         // then restoring the common indentation.

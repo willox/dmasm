@@ -308,3 +308,13 @@ fn istype_of_a_var_with_a_world_type_checks_that_type() {
         error
     );
 }
+
+#[test]
+fn a_parser_warning_does_not_refuse_a_body() {
+    let (text, _) = body("var/x = 4294967295\nreturn x").expect("compiles");
+    assert!(
+        text.iter().any(|l| l.starts_with("PushVal 4294967")),
+        "{:?}",
+        text
+    );
+}
