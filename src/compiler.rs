@@ -374,7 +374,12 @@ pub fn compile_body_in(
 
     let parsed = parse_body(code, byond)?;
     let mut statements = body_statements(&parsed).to_vec();
-    if let Some(last) = statements.last_mut() {
+    // A bare goto label must not become the return value.
+    let ends_with_label = matches!(
+        statements.last().map(|last| &last.elem),
+        Some(Statement::Expr(expr)) if statements::is_bare_label(&statements, expr)
+    );
+    if let Some(last) = statements.last_mut().filter(|_| !ends_with_label) {
         if let Statement::Expr(expr) = &last.elem {
             // Standalone shifts are input/output statements; `sleep(1)` also has no value.
             let io = matches!(

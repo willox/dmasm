@@ -318,3 +318,22 @@ fn a_parser_warning_does_not_refuse_a_body() {
         text
     );
 }
+
+#[test]
+fn a_bare_label_in_a_body_can_be_jumped_to() {
+    let (text, _) =
+        body("var/i = 0\nagain\ni++\nif (i < 5)\n\tgoto again\nreturn i").expect("compiles");
+    assert!(text.iter().any(|l| l == "USER_again:"), "{:?}", text);
+    assert!(text.iter().any(|l| l == "JmpLoop USER_again"), "{:?}", text);
+}
+
+#[test]
+fn a_body_can_end_with_a_bare_label() {
+    // A trailing goto label must not become the result.
+    let (code, _) = body("var/y = 1\nif (y) goto done\ny = 2\ndone").expect("compiles");
+    let joined = code.join("\n");
+    assert!(joined.contains("USER_done:"), "{}", joined);
+    // A name not targeted by goto remains a value expression.
+    let (code, _) = body("var/y = 1\ny").expect("compiles");
+    assert_has(&code, &["GetVar local(0)"]);
+}

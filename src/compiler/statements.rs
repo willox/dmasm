@@ -21,7 +21,16 @@ pub(super) fn emit_proc_body(
         .unwrap_or(source.value.location.line + 1);
 
     compiler.emit_ins(Instruction::DbgLine(first_line));
-    label_iterators(code, 0, &mut ctx(compiler).label_iterators);
+    let mut scan = LabelScan::default();
+    label_iterators(code, 0, &mut scan);
+    // Treat a bare name targeted by goto as a label, unless `name:` declares it.
+    for (name, depth) in scan.bare {
+        if scan.gotos.contains(&name) && !scan.labels.contains_key(&name) {
+            scan.labels.insert(name.clone(), depth);
+            ctx(compiler).bare_labels.insert(name);
+        }
+    }
+    ctx(compiler).label_iterators = scan.labels;
 
     // Default arguments: `if (isnull(arg)) arg = default`, at the header's line
     let params = source
@@ -75,13 +84,23 @@ fn emit_block(compiler: &mut Compiler, block: &Block) -> Result<(), CompileError
     emit_block_inner(compiler, block, false)
 }
 
-/// `skip_first_line`: the first statement's DbgLine was already emitted.
+/// Labels and goto targets in a proc.
+#[derive(Default)]
+struct LabelScan {
+    /// How many for-in iterators are active at each `label:`.
+    labels: std::collections::HashMap<String, u32>,
+    /// Active iterator depth at each bare-name label candidate.
+    bare: std::collections::HashMap<String, u32>,
+    /// The names gotos jump to.
+    gotos: std::collections::HashSet<String>,
+}
+
 /// How many for-in iterators are active at each label of `block`.
-fn label_iterators(block: &Block, depth: u32, out: &mut std::collections::HashMap<String, u32>) {
+fn label_iterators(block: &[Spanned<Statement>], depth: u32, out: &mut LabelScan) {
     for stmt in block.iter() {
         match &stmt.elem {
             Statement::Label { name, block } => {
-                out.insert(name.as_str().to_owned(), depth);
+                out.labels.insert(name.as_str().to_owned(), depth);
                 label_iterators(block, depth, out);
             }
             Statement::ForList(f) => {
@@ -125,11 +144,41 @@ fn label_iterators(block: &Block, depth: u32, out: &mut std::collections::HashMa
                 label_iterators(catch_block, depth, out);
             }
             Statement::Spawn { block, .. } => label_iterators(block, depth, out),
+            Statement::Goto(name) => {
+                out.gotos.insert(name.as_str().to_owned());
+            }
+            Statement::Expr(expr) => {
+                if let Some(name) = bare_name(expr) {
+                    out.bare.entry(name.to_owned()).or_insert(depth);
+                }
+            }
             _ => {}
         }
     }
 }
 
+/// Whether a bare-name statement is a goto target without a matching `name:` label.
+pub(super) fn is_bare_label(block: &[Spanned<Statement>], expr: &Expression) -> bool {
+    let Some(name) = bare_name(expr) else {
+        return false;
+    };
+    let mut scan = LabelScan::default();
+    label_iterators(block, 0, &mut scan);
+    scan.gotos.contains(name) && !scan.labels.contains_key(name)
+}
+
+/// Extract the identifier from a bare-name expression.
+fn bare_name(expr: &Expression) -> Option<&str> {
+    match expr {
+        Expression::Base { term, follow } if follow.is_empty() => match &term.elem {
+            Term::Ident(name) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `skip_first_line`: the first statement's DbgLine was already emitted.
 fn emit_block_inner(
     compiler: &mut Compiler,
     block: &Block,
@@ -217,6 +266,15 @@ fn emit_statement(
     stmt: &Statement,
     line: u32,
 ) -> Result<(), CompileError> {
+    if let Statement::Expr(expr) = stmt {
+        if let Some(name) = bare_name(expr) {
+            if ctx(compiler).bare_labels.remove(name) {
+                ctx(compiler).clear_new_vars = true;
+                compiler.emit_label(format!("USER_{}", name));
+                return Ok(());
+            }
+        }
+    }
     if matches!(
         stmt,
         Statement::ForLoop { .. }

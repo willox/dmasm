@@ -90,6 +90,8 @@ pub(super) struct ProcCtx<'a> {
     pub try_depth: u32,
     /// The for-in iterators active at each `label:` of the proc.
     pub label_iterators: std::collections::HashMap<String, u32>,
+    /// The labels written as a bare name, not yet emitted.
+    pub bare_labels: std::collections::HashSet<String>,
     /// Cleanup instructions for enclosing loops, innermost last.
     /// For-in uses IterPop; range loops use PopN for bounds.
     pub cleanups: Vec<Instruction>,
@@ -236,6 +238,7 @@ pub(super) fn proc_ctx<'a>(source: &ProcSource<'a>, param_types: Vec<String>) ->
         clear_new_vars: false,
         try_depth: 0,
         label_iterators: Default::default(),
+        bare_labels: Default::default(),
         cleanups: vec![],
         local_consts: Default::default(),
         proc_path: {
