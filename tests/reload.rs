@@ -1739,3 +1739,103 @@ fn what_dreammaker_refuses_to_build_is_refused() {
     let changes_ok = changes("const-ok", before, &fine);
     assert!(changes_ok.refused.is_empty(), "{:?}", changes_ok.refused);
 }
+
+#[test]
+fn consts_dreammaker_folds_are_taken_and_those_it_refuses_warned_about() {
+    let before = "var/const/gconst = 3\n/datum/a\n/datum/c\n\tvar/const/c1 = 1\n";
+    // Accept constants DreamMaker folds beyond SpacemanDMM's evaluator.
+    for value in [
+        "sqrt(4)",
+        "round(1.5)",
+        "abs(-1)",
+        "md5(\"x\")",
+        "global.gconst",
+        "1 in list(1)",
+        "2 in list(1, \"a\" = 3)",
+        "floor(sqrt(4)) * 2",
+    ] {
+        let after = before.replace(
+            "/datum/a\n",
+            &format!("/datum/a\n\tvar/const/k = {value}\n"),
+        );
+        let got = changes("const-folded", before, &after);
+        assert!(got.refused.is_empty(), "{value}: {:?}", got.refused);
+    }
+    // Non-const vars may use recovered consts.
+    let after = before.replace(
+        "/datum/a\n",
+        "/datum/a\n\tvar/const/k = sqrt(16)\n\tvar/y = k + 1\n",
+    );
+    let got = changes("const-used", before, &after);
+    assert!(got.refused.is_empty(), "{:?}", got.refused);
+    // Check the folded values against DreamMaker.
+    let world = World::new(
+        "const-values",
+        &before.replace(
+            "/datum/a\n",
+            "/datum/a\n\tvar/const/k = sqrt(16)\n\tvar/const/k2 = k + 1\n\tvar/const/h = md5(\"x\")\n\tvar/const/i = 3 in list(1, 3)\n",
+        ),
+    );
+    let snapshot = world.parse();
+    let a = snapshot.tree().find("/datum/a").unwrap();
+    let value = |name: &str| {
+        a.get()
+            .vars
+            .get(name)
+            .and_then(|v| v.value.constant.clone())
+            .map(|c| c.to_string())
+    };
+    assert_eq!(value("k").as_deref(), Some("4"));
+    assert_eq!(value("k2").as_deref(), Some("5"));
+    assert_eq!(
+        value("h").as_deref(),
+        Some("\"9dd4e461268c8034f5c8564e155c67a6\"")
+    );
+    assert_eq!(value("i").as_deref(), Some("1"));
+    // Resolve chains of const dependencies.
+    let after = before.replace(
+        "/datum/a\n",
+        "/datum/a\n\tvar/const/k = sqrt(16)\n\tvar/const/k2 = k + 1\n",
+    );
+    let got = changes("const-chain", before, &after);
+    assert!(got.refused.is_empty(), "{:?}", got.refused);
+    // Warn when SpacemanDMM accepts an initializer DreamMaker rejects.
+    for (value, why) in [
+        ("type", "it reads type"),
+        ("parent_type", "it reads parent_type"),
+        ("\"a\" == \"a\"", "it compares"),
+        ("1 < 2", "it compares"),
+        ("(1 + (2 != 3))", "it compares"),
+    ] {
+        let after = before.replace(
+            "/datum/a\n",
+            &format!("/datum/a\n\tvar/const/k = {value}\n"),
+        );
+        let got = changes("const-refused", before, &after);
+        assert!(got.refused.is_empty(), "{value}: {:?}", got.refused);
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.contains("const k: DreamMaker refuses") && w.contains(why)),
+            "{value}: {:?}",
+            got.warnings
+        );
+    }
+    // Do not warn for valid const initializers.
+    let after = before.replace("/datum/a\n", "/datum/a\n\tvar/const/k = 1 + 2\n");
+    let got = changes("const-plain", before, &after);
+    assert!(
+        !got.warnings
+            .iter()
+            .any(|w| w.contains("DreamMaker refuses")),
+        "{:?}",
+        got.warnings
+    );
+    // Reject initializers neither evaluator can fold.
+    let after = before.replace("/datum/a\n", "/datum/a\n\tvar/const/k = min(1, 2)\n");
+    let got = changes("const-unfolded", before, &after);
+    assert!(
+        !got.refused.is_empty(),
+        "non-constant min() initializer was accepted"
+    );
+}

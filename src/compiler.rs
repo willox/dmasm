@@ -1414,3 +1414,77 @@ fn first_line(expr: &Expression) -> u32 {
         Expression::TernaryOp { cond, .. } => first_line(cond),
     }
 }
+
+/// Fold a var initializer using DreamMaker rules beyond SpacemanDMM's evaluator,
+/// including `sqrt(4)`, `md5("x")`, `global.x` and `1 in list(1)`.
+/// Return `None` if folding is unsupported.
+pub(crate) fn fold_initializer(
+    tree: &dreammaker::objtree::ObjectTree,
+    ty: dreammaker::objtree::TypeRef,
+    expr: &Expression,
+    byond: ByondVersion,
+) -> Option<dreammaker::constants::Constant> {
+    use dreammaker::constants::Constant as C;
+    let value = dreammaker::objtree::ProcValue {
+        location: dreammaker::Location::BUILTINS,
+        parameters: Box::new([]),
+        docs: Default::default(),
+        code: Some(Box::new([])),
+        body_range: None,
+    };
+    let source = procs::ProcSource {
+        tree,
+        ty,
+        name: "(init)",
+        value: &value,
+        file: "",
+        debug_info: false,
+        index: None,
+        byond,
+        file_names: None,
+    };
+    let ctx = procs::proc_ctx(&source, vec![]);
+    let mut compiler = Compiler::new(vec![], Some(ctx));
+    compiler.byond = byond;
+    // Fold constant list membership here; proc compilation leaves it to runtime.
+    if let Expression::BinaryOp {
+        op: dreammaker::ast::BinaryOp::In,
+        lhs,
+        rhs,
+    } = expr
+    {
+        let item = fold::value(&compiler, lhs)?;
+        let Expression::Base { term, follow } = &**rhs else {
+            return None;
+        };
+        let dreammaker::ast::Term::List(args) = &term.elem else {
+            return None;
+        };
+        if !follow.is_empty() {
+            return None;
+        }
+        let mut found = false;
+        for arg in args.iter() {
+            // Associative list membership tests keys.
+            let key = match arg {
+                Expression::AssignOp { lhs, .. } => &**lhs,
+                arg => arg,
+            };
+            found |= fold::value(&compiler, key)? == item;
+        }
+        return Some(C::Float(found as i32 as f32));
+    }
+    Some(match fold::value(&compiler, expr)? {
+        fold::Constant::Null => C::Null(None),
+        fold::Constant::Number(n) => C::Float(n),
+        // Only preserve plain text that needs no escaping in source.
+        fold::Constant::Text(text) => {
+            let text = String::from_utf8(text).ok()?;
+            if text.contains(['\\', '"', '[', ']']) {
+                return None;
+            }
+            C::String(text.into())
+        }
+        fold::Constant::Path(_) | fold::Constant::New => return None,
+    })
+}

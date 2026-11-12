@@ -474,6 +474,8 @@ pub struct Snapshot {
     procs_by_file: std::sync::OnceLock<HashMap<FileId, Vec<ProcKey>>>,
     /// Cached source locations of defaults embedded in each proc's debug info.
     default_lines: std::sync::Mutex<HashMap<ProcKey, Vec<(Vec<u8>, u32)>>>,
+    /// Initializer locations folded by dmasm after SpacemanDMM evaluation failed.
+    folded: std::collections::BTreeSet<dreammaker::Location>,
 }
 
 /// Incremental changes from reparsing one file (see `Snapshot::reload_file`).
@@ -552,6 +554,7 @@ impl Snapshot {
         if let Some((major, build)) = options.byond {
             snapshot.byond = ByondVersion::new(major, build);
         }
+        snapshot.fold_const_initializers();
         Ok(snapshot)
     }
 
@@ -820,6 +823,70 @@ impl Snapshot {
             scope_names: HashMap::new(),
             procs_by_file: std::sync::OnceLock::new(),
             default_lines: std::sync::Mutex::new(HashMap::new()),
+            folded: Default::default(),
+        }
+    }
+
+    /// Fold const initializers beyond SpacemanDMM's evaluator and suppress their errors.
+    /// Repeat to resolve consts that depend on other consts.
+    fn fold_const_initializers(&mut self) {
+        let described: Vec<(dreammaker::Location, String)> = self
+            .ctx
+            .errors()
+            .iter()
+            .filter(|e| e.severity() == Severity::Error)
+            .map(|e| (e.location(), e.description().to_owned()))
+            .collect();
+        let errors: Vec<dreammaker::Location> = described.iter().map(|(at, _)| *at).collect();
+        if errors.is_empty() {
+            return;
+        }
+        let mut names: HashSet<String> = HashSet::new();
+        loop {
+            let mut found = vec![];
+            for ty in self.tree.iter_types() {
+                for (name, var) in ty.get().vars.iter() {
+                    let location = var.value.location;
+                    if var.value.constant.is_some()
+                        || !errors.contains(&location)
+                        || self.folded.contains(&location)
+                    {
+                        continue;
+                    }
+                    let Some(expression) = var.value.expression.as_ref() else {
+                        continue;
+                    };
+                    let is_const = ty
+                        .get_var_declaration(name.as_str())
+                        .is_some_and(|d| d.var_type.flags.is_const());
+                    if !is_const {
+                        continue;
+                    }
+                    if let Some(constant) =
+                        crate::compiler::fold_initializer(&self.tree, ty, expression, self.byond)
+                    {
+                        found.push((ty.index(), name.clone(), constant, location));
+                    }
+                }
+            }
+            if found.is_empty() {
+                break;
+            }
+            for (ty, name, constant, location) in found {
+                if let Some(var) = self.tree[ty].vars.get_mut(&name) {
+                    var.value.constant = Some(constant);
+                }
+                self.folded.insert(location);
+                names.insert(name.to_string());
+            }
+        }
+        // SpacemanDMM also reports recursive-reference errors for vars using a const
+        // it could not evaluate. Suppress those after resolving the const.
+        for (location, description) in described {
+            let of = description.strip_prefix("recursive constant reference: ");
+            if of.is_some_and(|name| names.contains(name)) {
+                self.folded.insert(location);
+            }
         }
     }
 
@@ -1121,7 +1188,7 @@ impl Snapshot {
         self.ctx
             .errors()
             .iter()
-            .filter(|e| e.severity() == Severity::Error)
+            .filter(|e| e.severity() == Severity::Error && !self.folded.contains(&e.location()))
             .map(|e| format!("{}: {}", self.file_name(e.location().file), e.description()))
             .collect()
     }
@@ -2467,6 +2534,11 @@ fn compare_types(
                         ));
                         continue;
                     }
+                    if let Some(why) = dm_refused_const(var) {
+                        changes
+                            .warnings
+                            .push(refused_const_warning(&shown, name, why));
+                    }
                     if redeclared {
                         redeclare(new, n, name.as_str(), old_var, var, changes);
                     }
@@ -2619,6 +2691,11 @@ fn new_var(
             .push(format!("{place}: {name}: constant initializer required"));
         return false;
     }
+    if let Some(why) = dm_refused_const(var) {
+        changes
+            .warnings
+            .push(refused_const_warning(&place, name, why));
+    }
     let static_like = flags.is_static() || flags.is_const() || n.is_root();
     let (value, init) = if static_like {
         // The world sets it when it starts, so the reload sets it now
@@ -2732,6 +2809,48 @@ fn refused_const_value(new: &Snapshot, n: TypeRef, name: &str, changes: &mut Cha
         at.line
     ));
     true
+}
+
+/// Find initializers SpacemanDMM folds but DreamMaker rejects: `type`,
+/// `parent_type` and comparisons. Reload accepts these with a warning.
+fn dm_refused_const(var: &dreammaker::objtree::TypeVar) -> Option<&'static str> {
+    use dreammaker::ast::{BinaryOp, Expression, Term};
+    fn why(expr: &Expression) -> Option<&'static str> {
+        match expr {
+            Expression::Base { term, .. } => match &term.elem {
+                Term::Ident(name) if name.as_str() == "type" => Some("it reads type"),
+                Term::Ident(name) if name.as_str() == "parent_type" => Some("it reads parent_type"),
+                Term::Expr(inner) => why(inner),
+                _ => None,
+            },
+            Expression::BinaryOp { op, lhs, rhs } => match op {
+                BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Less
+                | BinaryOp::LessEq
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEq
+                | BinaryOp::Equiv
+                | BinaryOp::NotEquiv => Some("it compares"),
+                _ => why(lhs).or_else(|| why(rhs)),
+            },
+            Expression::TernaryOp { cond, if_, else_ } => {
+                why(cond).or_else(|| why(if_)).or_else(|| why(else_))
+            }
+            _ => None,
+        }
+    }
+    let is_const = var
+        .declaration
+        .as_ref()
+        .is_some_and(|d| d.var_type.flags.is_const());
+    why(var.value.expression.as_ref().filter(|_| is_const)?)
+}
+
+fn refused_const_warning(place: &str, name: &str, why: &str) -> String {
+    format!(
+        "{place}: const {name}: DreamMaker refuses this initializer ({why}; constant initializer required). Accepted for hot reload, but a rebuild will fail"
+    )
 }
 
 /// A declared var's flags, as BYOND keeps them
@@ -2924,6 +3043,11 @@ fn var_default(
         if !changes.consts.iter().any(|c| c == name) {
             changes.consts.push(name.to_owned());
         }
+        if let Some(why) = n.get().vars.get(name).and_then(dm_refused_const) {
+            changes
+                .warnings
+                .push(refused_const_warning(shown, name, why));
+        }
         if let Some(var) = n.get().vars.get(name) {
             match static_initial(new, n, var) {
                 Ok((value, init)) => changes.redeclared.push(Redeclared {
@@ -2961,6 +3085,11 @@ fn var_default(
         }
         if !changes.consts.iter().any(|c| c == name) {
             changes.consts.push(name.to_owned());
+        }
+        if let Some(why) = n.get().vars.get(name).and_then(dm_refused_const) {
+            changes
+                .warnings
+                .push(refused_const_warning(shown, name, why));
         }
         // (a built-in one, like `parent_type`, isn't a global)
         if builtin {
