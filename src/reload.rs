@@ -1182,14 +1182,20 @@ impl Snapshot {
         }
     }
 
-    /// Parse errors formatted without line numbers so moving an existing
-    /// error does not make it appear new.
-    fn errors(&self) -> Vec<String> {
+    /// Return parse errors as a line-independent comparison key and a diagnostic
+    /// with its source line. Moving an existing error does not make it new.
+    fn errors(&self) -> Vec<(String, String)> {
         self.ctx
             .errors()
             .iter()
             .filter(|e| e.severity() == Severity::Error && !self.folded.contains(&e.location()))
-            .map(|e| format!("{}: {}", self.file_name(e.location().file), e.description()))
+            .map(|e| {
+                let file = self.file_name(e.location().file);
+                (
+                    format!("{file}: {}", e.description()),
+                    format!("{file}:{}: {}", e.location().line, e.description()),
+                )
+            })
             .collect()
     }
 
@@ -1345,13 +1351,13 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     // New parse errors can omit declarations and falsely appear as removals.
     // Reject them before comparing definitions.
     let mut old_errors: HashMap<String, usize> = HashMap::new();
-    for e in old.errors() {
+    for (e, _) in old.errors() {
         *old_errors.entry(e).or_default() += 1;
     }
-    for e in new.errors() {
+    for (e, shown) in new.errors() {
         match old_errors.get_mut(&e) {
             Some(n) if *n > 0 => *n -= 1,
-            _ => changes.refused.push(format!("parse error: {e}")),
+            _ => changes.refused.push(format!("parse error: {shown}")),
         }
     }
     if !changes.refused.is_empty() {

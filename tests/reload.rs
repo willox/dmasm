@@ -1839,3 +1839,21 @@ fn consts_dreammaker_folds_are_taken_and_those_it_refuses_warned_about() {
         "non-constant min() initializer was accepted"
     );
 }
+
+#[test]
+fn a_var_declared_twice_on_one_type_is_refused_where_it_is() {
+    let before = "var/x = 1\n/datum/a\n/datum/t\n";
+    let after = before.replace("/datum/t\n", "/datum/t\n\tvar/w = 1\n\tvar/w = 2\n");
+    let refused = changes("dup-same", before, &after).refused;
+    assert_eq!(
+        refused,
+        ["parse error: code/code.dm:5: duplicate definition of var/w"]
+    );
+    // Locate a valueless declaration at the end of its source file, rather than in the .dme.
+    let after = before.replace("/datum/t\n", "/datum/t\n\tvar/vars\n");
+    let refused = changes("dup-builtin", before, &after).refused;
+    assert_eq!(
+        refused,
+        ["code/code.dm:4: vars: duplicate definition (/datum declares it too)"]
+    );
+}
