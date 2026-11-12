@@ -447,14 +447,26 @@ pub(super) fn colon_var<'a>(
     ty.children().find_map(|child| colon_var(child, name))
 }
 
+/// Generation counter for trees registered through `new_tree`.
+static TREES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Invalidate address-based caches when a new compilation tree is created.
+pub(crate) fn new_tree() {
+    TREES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Resolve an unknown receiver's call using the first declaration's
 /// display name, matching DreamMaker.
 pub(super) fn first_declaring_type<'a>(tree: &'a ObjectTree, name: &str) -> Option<TypeRef<'a>> {
     thread_local! {
-        static FIRST: std::cell::RefCell<(usize, HashMap<String, String>)> =
-            std::cell::RefCell::new((0, HashMap::new()));
+        static FIRST: std::cell::RefCell<((usize, usize), HashMap<String, String>)> =
+            std::cell::RefCell::new(((0, 0), HashMap::new()));
     }
-    let key = tree as *const ObjectTree as usize;
+    // Include the generation because a new tree can reuse an old tree's address.
+    let key = (
+        tree as *const ObjectTree as usize,
+        TREES.load(std::sync::atomic::Ordering::Relaxed),
+    );
     let path = FIRST.with(|cell| {
         let mut cell = cell.borrow_mut();
         if cell.0 != key {

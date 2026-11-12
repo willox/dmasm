@@ -795,6 +795,7 @@ impl Snapshot {
     /// A snapshot of code already parsed into `tree`, with `ctx` holding its
     /// file names relative to the `.dme`'s directory.
     pub fn from_tree(ctx: Context, tree: ObjectTree) -> Snapshot {
+        crate::compiler::new_tree();
         let mut procs = BTreeMap::new();
         for ty in tree.iter_types() {
             for (name, type_proc) in ty.get().procs.iter() {
