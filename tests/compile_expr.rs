@@ -378,3 +378,25 @@ fn a_type_s_var_by_double_colon_is_its_initial_value() {
     // Proc path resolution requires project types.
     assert!(compile_expr("/obj/item::f()", &[]).is_err());
 }
+
+#[test]
+fn integers_too_big_for_push_int_are_pushed_whole() {
+    use dmasm::Value;
+    for (code, pushed) in [
+        ("65535", Instruction::PushInt(65535)),
+        ("65536", Instruction::PushVal(Value::Number(65536.0))),
+        ("70000", Instruction::PushVal(Value::Number(70000.0))),
+        ("0x11170", Instruction::PushVal(Value::Number(70000.0))),
+    ] {
+        let code_of = instructions(code, &[]);
+        assert_eq!(code_of.get(1), Some(&pushed), "{}: {:?}", code, code_of);
+    }
+    let code = instructions("-70000", &[]);
+    assert!(
+        !code
+            .iter()
+            .any(|ins| matches!(ins, Instruction::PushInt(_))),
+        "{:?}",
+        code
+    );
+}

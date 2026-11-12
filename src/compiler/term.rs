@@ -33,12 +33,9 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             compiler.emit_ins(Instruction::PushVal(Value::Null));
             Ok(EvalKind::Stack)
         }
-        Term::Int(i) if compiler.proc.is_some() => {
-            compiler.emit_number(i as f32);
-            Ok(EvalKind::Stack)
-        }
+        // PushInt has a 16-bit operand; larger values need PushVal.
         Term::Int(i) => {
-            compiler.emit_ins(Instruction::PushInt(i));
+            compiler.emit_number(i as f32);
             Ok(EvalKind::Stack)
         }
         Term::Float(f) => {
