@@ -474,10 +474,10 @@ pub(super) fn emit_typed<'a>(
                 ty = None;
             }
 
-            // which proc that is takes the types
+            // DreamMaker resolves proc references from a constant type, not a runtime value.
             Follow::ProcReference(_) => {
                 return Err(CompileError::UnsupportedStatement(
-                    "`::` naming a proc, without the code's types",
+                    "type::procname() must have a constant type path",
                 ))
             }
         }

@@ -1,6 +1,6 @@
 //! Debugger proc-body compilation and frame variable writeback.
 
-use dmasm::compiler::{compile_body_in, is_body, CompileError, ExprGlobal, ExprScope};
+use dmasm::compiler::{compile_body_in, is_body, CompileError, ExprGlobal, ExprScope, FoundProc};
 use dmasm::ByondVersion;
 
 /// Compile with src variable hp, src proc bump and global ticks.
@@ -12,6 +12,32 @@ fn body(code: &str) -> Result<(Vec<String>, Vec<String>), CompileError> {
         has_src_proc: &|name| name == "bump",
         global: &|name| (name == "ticks").then_some(ExprGlobal::Listed),
         globals: "globals",
+        proc_ref: &|ty, name| match (ty, name) {
+            ("/datum/foo", "double") => Ok(FoundProc {
+                tag: 0x26,
+                data: 5,
+                warning: None,
+            }),
+            ("/datum/foo/bar" | "/datum/foo/bar/baz", "double") => Ok(FoundProc {
+                tag: 0x26,
+                data: 6,
+                warning: None,
+            }),
+            _ => Err(format!("{ty} has no proc called {name}")),
+        },
+        proc_path: &|path| match path {
+            "/datum/foo/proc/double" => Some(FoundProc {
+                tag: 0x26,
+                data: 5,
+                warning: None,
+            }),
+            "/datum/foo/bar/proc/twice" => Some(FoundProc {
+                tag: 0x26,
+                data: 7,
+                warning: Some("not declared on /datum/foo/bar".to_owned()),
+            }),
+            _ => None,
+        },
     };
     let compiled = compile_body_in(
         code,

@@ -101,6 +101,8 @@ pub enum CompileError {
         byond: ByondVersion,
     },
     InvalidLocateArgs,
+    /// No matching proc in the running world for `/type::name()`.
+    BadProcReference(String),
 
     // TODO: Merge these
     IncorrectArgCount(String),
@@ -191,6 +193,7 @@ impl fmt::Display for CompileError {
             CompileError::UnsupportedCompilerMacro { name } => {
                 write!(f, "unsupported compiler macro: {}", name)
             }
+            CompileError::BadProcReference(why) => write!(f, "bad proc reference: {}", why),
         }
     }
 }
@@ -210,6 +213,19 @@ pub struct ExprScope<'a> {
     /// Parameter holding `global.vars` for name-based global access.
     /// Names alone cannot distinguish globals from same-named type statics.
     pub globals: &'a str,
+    /// Resolve `/type::name()` to the nearest definition in the type ancestry.
+    pub proc_ref: &'a dyn Fn(&str, &str) -> Result<FoundProc, String>,
+    /// Resolve a proc path such as `/type/proc/name` or `/type/name`, if it names a proc.
+    pub proc_path: &'a dyn Fn(&str) -> Option<FoundProc>,
+}
+
+/// A proc reference resolved against the running world.
+pub struct FoundProc {
+    /// BYOND value tag for the proc reference.
+    pub tag: u8,
+    pub data: u32,
+    /// Warning when DreamMaker would reject the reference as written.
+    pub warning: Option<String>,
 }
 
 /// How a debugger's expression reaches a global var
@@ -1198,6 +1214,22 @@ impl<'a> Compiler<'a> {
                         let ty = self.proc.as_ref().unwrap().tree.find(&path);
                         return follow::emit_typed(self, unspanned_follows[1..].to_vec(), kind, ty);
                     }
+                    // Resolve debugger proc references against the running world.
+                    if let (Some(scope), Follow::ProcReference(name)) =
+                        (self.expr_scope, &unspanned_follows[0])
+                    {
+                        if prefab.vars.is_empty() {
+                            let path = prefab.path.to_string();
+                            let found = (scope.proc_ref)(&path, name.as_str())
+                                .map_err(CompileError::BadProcReference)?;
+                            self.emit_found_proc(found);
+                            return follow::emit(
+                                self,
+                                unspanned_follows[1..].to_vec(),
+                                EvalKind::Stack,
+                            );
+                        }
+                    }
                 }
                 let ty = procs::term_type(self, &term.elem);
                 // (and, for a `/list/T` var, what its elements are)
@@ -1317,6 +1349,17 @@ impl<'a> Compiler<'a> {
         ) = (saved.0, saved.1, saved.2, saved.3, saved.4, saved.5);
         self.other_file = false;
         found
+    }
+
+    /// Emit a resolved proc reference and any compatibility warning.
+    fn emit_found_proc(&mut self, found: FoundProc) {
+        if let Some(warning) = &found.warning {
+            self.warn(warning);
+        }
+        self.emit_ins(Instruction::PushVal(operands::Value::Raw {
+            tag: found.tag,
+            data: found.data,
+        }));
     }
 
     /// Record a warning once for the current source line.

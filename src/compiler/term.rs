@@ -86,6 +86,14 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
             if let Some(resolved) = super::procs::resolve_proc_path(compiler, &path) {
                 path = resolved;
             }
+            // Resolve debugger proc paths against the running world.
+            if let Some(found) = compiler
+                .expr_scope
+                .and_then(|scope| (scope.proc_path)(&path))
+            {
+                compiler.emit_found_proc(found);
+                return Ok(EvalKind::Stack);
+            }
             // `/type/proc` (as in typesof(/type/proc)) is text
             if path.ends_with("/proc") || path.ends_with("/verb") {
                 compiler.emit_ins(Instruction::PushVal(Value::DMString(DMString(
@@ -802,6 +810,12 @@ fn prefab_value(
     compiler: &mut Compiler,
     prefab: &dreammaker::ast::Prefab,
 ) -> Result<Value, CompileError> {
+    // Reject modified types in debugger code: their instances would persist in BYOND's tables.
+    if compiler.expr_scope.is_some() && !prefab.vars.is_empty() {
+        return Err(CompileError::UnsupportedStatement(
+            "modified types (/type{var = value}) are unsupported in debugger code; use new and assign the vars",
+        ));
+    }
     // (a proc of its own: nothing is in the cache at its start)
     let saved = std::mem::take(&mut compiler.nodes);
     let saved_cache = compiler.cache.take();

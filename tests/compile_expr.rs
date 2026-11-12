@@ -98,7 +98,7 @@ fn an_expression_ends_where_it_ends() {
 
 // Runtime scope supplied by the debugger.
 
-use dmasm::compiler::{compile_expr_in, CompileError, ExprGlobal, ExprScope};
+use dmasm::compiler::{compile_expr_in, CompileError, ExprGlobal, ExprScope, FoundProc};
 use dmasm::ByondVersion;
 
 /// Compile with src variables hp/name, src proc bump and globals ticks/name.
@@ -114,6 +114,32 @@ fn scoped(code: &str, params: &[&str]) -> Result<Vec<Instruction>, CompileError>
             _ => None,
         },
         globals: "globals",
+        proc_ref: &|ty, name| match (ty, name) {
+            ("/datum/foo", "double") => Ok(FoundProc {
+                tag: 0x26,
+                data: 5,
+                warning: None,
+            }),
+            ("/datum/foo/bar" | "/datum/foo/bar/baz", "double") => Ok(FoundProc {
+                tag: 0x26,
+                data: 6,
+                warning: None,
+            }),
+            _ => Err(format!("{ty} has no proc called {name}")),
+        },
+        proc_path: &|path| match path {
+            "/datum/foo/proc/double" => Some(FoundProc {
+                tag: 0x26,
+                data: 5,
+                warning: None,
+            }),
+            "/datum/foo/bar/proc/twice" => Some(FoundProc {
+                tag: 0x26,
+                data: 7,
+                warning: Some("not declared on /datum/foo/bar".to_owned()),
+            }),
+            _ => None,
+        },
     };
     let mut params = params.to_vec();
     params.push("globals");
@@ -469,6 +495,71 @@ fn a_parser_warning_does_not_refuse_an_expression() {
             code.contains(&Instruction::PushVal(dmasm::Value::Number(value))),
             "{:?}",
             code
+        );
+    }
+}
+
+#[test]
+fn a_types_proc_reference_is_the_one_the_world_finds() {
+    use dmasm::Value;
+    let pushed = |code: &str| {
+        scoped(code, &[])
+            .unwrap()
+            .into_iter()
+            .find_map(|ins| match ins {
+                Instruction::PushVal(Value::Raw { tag, data }) => Some((tag, data)),
+                _ => None,
+            })
+    };
+    // Resolve the nearest definition through type ancestry.
+    assert_eq!(pushed("/datum/foo/bar/baz::double()"), Some((0x26, 6)));
+    assert_eq!(pushed("/datum/foo::double()"), Some((0x26, 5)));
+    assert_eq!(pushed("call(/datum/foo/bar::double())(1)"), Some((0x26, 6)));
+    // Resolve proc paths too.
+    assert_eq!(pushed("/datum/foo/proc/double"), Some((0x26, 5)));
+    // Report missing procs.
+    let error = scoped("/datum/foo::triple()", &[]).unwrap_err().to_string();
+    assert!(
+        error.contains("/datum/foo has no proc called triple"),
+        "{}",
+        error
+    );
+    // Proc references through runtime values lack the required constant type.
+    assert!(scoped("src::double()", &[]).is_err());
+}
+
+#[test]
+fn a_proc_path_dreammaker_refuses_is_taken_with_a_warning() {
+    let (_, warnings) = dmasm::compiler::compile_expr_warned(
+        "/datum/foo/bar/proc/twice",
+        &["globals"],
+        Some(&ExprScope {
+            has_src_var: &|_| false,
+            has_src_proc: &|_| false,
+            global: &|_| None,
+            globals: "globals",
+            proc_ref: &|_, _| Err(String::new()),
+            proc_path: &|_| {
+                Some(FoundProc {
+                    tag: 0x26,
+                    data: 7,
+                    warning: Some("not declared on /datum/foo/bar".to_owned()),
+                })
+            },
+        }),
+        ByondVersion::LATEST,
+    )
+    .unwrap();
+    assert_eq!(warnings, ["not declared on /datum/foo/bar"]);
+}
+
+#[test]
+fn a_modified_type_is_refused_in_debugger_code() {
+    for code in ["new /datum/foo{val = 8}()", "/datum/foo{val = 8}"] {
+        let error = scoped(code, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("use new and assign the vars"),
+            "{code}: {error}"
         );
     }
 }

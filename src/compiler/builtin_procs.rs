@@ -1067,9 +1067,9 @@ pub(super) fn last_identifier(expr: &Expression) -> Option<String> {
     use dreammaker::ast::{Follow, Term};
     match expr {
         Expression::Base { term, follow } => match follow.last().map(|f| &f.elem) {
-            Some(Follow::Field(_, ident) | Follow::StaticField(ident)) => {
-                Some(ident.as_str().to_owned())
-            }
+            Some(
+                Follow::Field(_, ident) | Follow::StaticField(ident) | Follow::ProcReference(ident),
+            ) => Some(ident.as_str().to_owned()),
             Some(_) => None,
             None => match &term.elem {
                 Term::Ident(ident) => Some(ident.as_str().to_owned()),

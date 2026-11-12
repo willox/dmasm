@@ -631,18 +631,28 @@ pub(super) fn expr_type<'a>(
 /// proc declaration it names (`/obj/proc/foo`).
 pub(super) fn resolve_proc_path(compiler: &Compiler, path: &str) -> Option<String> {
     let ctx = compiler.proc.as_ref()?;
-    let (type_part, kind, name) = ["proc", "verb"].iter().find_map(|kind| {
+    let (type_part, sep, kind, name) = ["proc", "verb"].iter().find_map(|kind| {
         for sep in ['.', '/', ':'] {
             // (`/type/proc.name` too)
             for end in ['/', '.'] {
                 let marker = format!("{}{}{}", sep, kind, end);
                 if let Some(i) = path.find(&marker) {
-                    return Some((&path[..i], *kind, &path[i + marker.len()..]));
+                    return Some((&path[..i], sep, *kind, &path[i + marker.len()..]));
                 }
             }
         }
         None
     })?;
+    // DreamMaker requires `/type/proc/name` on the declaring type;
+    // `.proc/name` searches the ancestry.
+    let written_on_type = sep == '/' && !type_part.is_empty();
+    let warn_elsewhere = |found: &str| {
+        if written_on_type {
+            compiler.warn(&format!(
+                "{path}: DreamMaker refuses this path, since {name} isn't declared on {type_part}; this is {found}"
+            ));
+        }
+    };
     let ty = if type_part.is_empty() {
         if path.starts_with('/') {
             ctx.tree.root()
@@ -661,14 +671,22 @@ pub(super) fn resolve_proc_path(compiler: &Compiler, path: &str) -> Option<Strin
                 } else {
                     t.get().path.as_str()
                 };
-                return Some(format!("{}/{}/{}", prefix, kind, name));
+                let found = format!("{}/{}/{}", prefix, kind, name);
+                if t != ty {
+                    warn_elsewhere(&found);
+                }
+                return Some(found);
             }
         }
         current = t.parent_type();
     }
     // Global procs are reachable from any type
     if ctx.tree.root().get().procs.contains_key(name) {
-        return Some(format!("/{}/{}", kind, name));
+        let found = format!("/{}/{}", kind, name);
+        if ty != ctx.tree.root() {
+            warn_elsewhere(&found);
+        }
+        return Some(found);
     }
     None
 }
