@@ -128,11 +128,11 @@ fn names_are_the_body_s_then_the_frame_s_then_src_s_then_globals() {
     assert_has(&code, &["GetVar cache = arg(1); cache[\"hp\"]"]);
     assert_has(&code, &["GetVar arg(2)"]);
     assert_has(&code, &["GetVar arg(3)", "PushVal \"ticks\"", "ListGet"]);
-    // a bare call is src's proc when it has one
+    // Resolve bare calls on src by name, since its runtime type may supply a verb.
     let (code, _) = body("var/x = bump(1)\nx").unwrap();
+    assert_has(&code, &["GetVar arg(1)", "PushVal \"bump\""]);
     assert!(
-        code.iter()
-            .any(|l| l.contains("arg(1)") && l.starts_with("Call")),
+        code.iter().any(|l| l.starts_with("CallName")),
         "{}",
         code.join("\n")
     );
@@ -185,4 +185,18 @@ fn the_debug_info_names_lines_in_the_code() {
     assert_eq!(code[0], "DbgFile \"<dmasm expression>\"");
     assert_has(&code, &["DbgLine 1"]);
     assert_has(&code, &["DbgLine 3"]);
+}
+
+#[test]
+fn a_call_the_builtin_types_dont_have_goes_by_name() {
+    // Call by name to find a world verb absent from the builtin-only parse.
+    let (code, _) = body("var/mob/M = new\nM.plain_verb()\nM:examinate(M)").expect("compiles");
+    let joined = code.join("\n");
+    assert!(joined.contains("CallName 0"), "{}", joined);
+    assert!(joined.contains("CallName 1"), "{}", joined);
+    assert!(!joined.contains("dynamic_proc"), "{}", joined);
+    // Known builtin calls keep their existing compilation.
+    let (code, _) = body("var/mob/M = new\nM.Move(null)").expect("compiles");
+    let joined = code.join("\n");
+    assert!(!joined.contains("CallName"), "{}", joined);
 }

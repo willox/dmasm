@@ -37,6 +37,27 @@ fn callee_var<'a>(
     super::procs::call_var(ty, name)
 }
 
+/// Whether the known types declare proc or verb `name` for `ty`.
+/// With no receiver type, search all known types.
+fn proc_known(
+    compiler: &Compiler,
+    ty: Option<dreammaker::objtree::TypeRef>,
+    access: PropertyAccessKind,
+    name: &str,
+) -> bool {
+    match ty {
+        Some(t) if access == PropertyAccessKind::Colon => {
+            super::procs::colon_proc_type(t, name).is_some()
+        }
+        Some(t) => t.get_proc(name).is_some(),
+        None => compiler
+            .proc
+            .as_ref()
+            .and_then(|ctx| super::procs::first_declaring_type(ctx.tree, name))
+            .is_some(),
+    }
+}
+
 /// `ty` is the static type of the value being followed, when known.
 pub(super) fn emit_typed<'a>(
     compiler: &mut Compiler<'a>,
@@ -238,10 +259,12 @@ pub(super) fn emit_typed<'a>(
                         }
                     }
 
-                    // Debugger expressions lack static types. Dynamic call-by-name
-                    // lookup resolves either a proc or a verb.
-                    PropertyAccessKind::Dot | PropertyAccessKind::Colon
-                        if compiler.proc.is_none() =>
+                    // Debugger expressions lack types, and bodies know only builtins.
+                    // Call unknown names dynamically to resolve both procs and verbs.
+                    access @ (PropertyAccessKind::Dot | PropertyAccessKind::Colon)
+                        if compiler.proc.is_none()
+                            || (compiler.expr_scope.is_some()
+                                && !proc_known(compiler, receiver_ty, access, &ident)) =>
                     {
                         kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
                         compiler.emit_move_to_stack(kind)?;

@@ -1726,3 +1726,13 @@ fn initial_of_a_static_field() {
         ],
     );
 }
+
+#[test]
+fn a_proc_of_the_world_s_never_calls_by_name() {
+    // World procs retain typed compilation; only debugger code falls back to call-by-name.
+    let src = "/mob/proc/known()\n/proc/f(mob/M, x)\n\tM.known()\n\tM.unknown()\n\tx:unknown()\n";
+    let code = compile(src, "", "f");
+    assert!(!code.contains("CallName"), "{code}");
+    assert!(code.contains("dynamic_proc(\"known\")"), "{code}");
+    assert!(code.contains("dynamic_proc(\"unknown\")"), "{code}");
+}
