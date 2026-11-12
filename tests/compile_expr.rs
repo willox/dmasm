@@ -1,6 +1,6 @@
 //! Debugger expression compilation without project type information.
 
-use dmasm::compiler::compile_expr;
+use dmasm::compiler::{compile_expr, compile_expr_for};
 use dmasm::{Instruction, Node};
 
 fn instructions(code: &str, params: &[&str]) -> Vec<Instruction> {
@@ -433,4 +433,26 @@ fn global_vars_is_the_globals_list() {
         Err(CompileError::ExpectedLValue)
     ));
     assert!(scoped("vars", &[]).is_err());
+}
+
+#[test]
+fn a_constant_nan_test_is_its_result_on_builds_that_fold_it_cleanly() {
+    // From 516.1672, constant isnan()/isinf() returns its result without reading the test flag.
+    for (code, result) in [
+        ("isnan(1.#INF - 1.#INF)", 1),
+        ("isnan(1)", 0),
+        ("isinf(-1.#INF)", 1),
+    ] {
+        let code = instructions(code, &[]);
+        assert_eq!(code[1], Instruction::PushInt(result), "{:?}", code);
+        assert!(!code.contains(&Instruction::GetFlag), "{:?}", code);
+    }
+    // Preserve the previous-test-flag quirk on affected builds.
+    let old = compile_expr_for("isnan(1)", &[], ByondVersion::new(516, 1659)).unwrap();
+    assert!(
+        old.iter()
+            .any(|n| matches!(n, Node::Instruction(Instruction::GetFlag, _))),
+        "{:?}",
+        old
+    );
 }

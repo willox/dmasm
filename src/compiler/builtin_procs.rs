@@ -746,11 +746,14 @@ fn emit_overloaded(
                 let known = super::fold::number(compiler, &args[0])
                     .and_then(|x| super::versions::nan_test(name, x));
                 if let Some(result) = known {
-                    compiler.warn(&format!(
-                        "{name}() of a constant returns the previous test flag on this build, matching DreamMaker"
-                    ));
                     compiler.emit_ins(Instruction::PushInt(result as i32));
-                    compiler.emit_ins(Instruction::GetFlag);
+                    // Only affected builds read the previous test flag after folding.
+                    if !super::versions::clean_nan_fold(compiler.byond) {
+                        compiler.warn(&format!(
+                            "{name}() of a constant returns the previous test flag on this build, matching DreamMaker"
+                        ));
+                        compiler.emit_ins(Instruction::GetFlag);
+                    }
                     return Ok(Some(EvalKind::Stack));
                 }
             }
