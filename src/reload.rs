@@ -476,6 +476,8 @@ pub struct Snapshot {
     default_lines: std::sync::Mutex<HashMap<ProcKey, Vec<(Vec<u8>, u32)>>>,
     /// Initializer locations folded by dmasm after SpacemanDMM evaluation failed.
     folded: std::collections::BTreeSet<dreammaker::Location>,
+    /// Files reparsed successfully by `keep`; their original parse errors no longer apply.
+    mended: HashSet<FileId>,
 }
 
 /// Incremental changes from reparsing one file (see `Snapshot::reload_file`).
@@ -743,6 +745,8 @@ impl Snapshot {
         }
         self.patched.extend(reload.patched);
         self.scope_names.insert(reload.file, reload.scope_names);
+        // This successful reparse preserved the definitions, so the old error hid no code.
+        self.mended.insert(reload.file);
     }
 
     /// Run `f` against the original parse, excluding incremental replacements.
@@ -756,6 +760,7 @@ impl Snapshot {
     /// Discard incremental file replacements.
     pub fn clear_patches(&mut self) {
         self.patched.clear();
+        self.mended.clear();
     }
 
     /// What `file` defines: vars, proc declarations and definitions
@@ -824,6 +829,7 @@ impl Snapshot {
             procs_by_file: std::sync::OnceLock::new(),
             default_lines: std::sync::Mutex::new(HashMap::new()),
             folded: Default::default(),
+            mended: Default::default(),
         }
     }
 
@@ -1182,13 +1188,18 @@ impl Snapshot {
         }
     }
 
-    /// Return parse errors as a line-independent comparison key and a diagnostic
-    /// with its source line. Moving an existing error does not make it new.
-    fn errors(&self) -> Vec<(String, String)> {
+    /// Return unresolved parse errors, excluding recovered const initializers and
+    /// successfully reparsed files. Each pair contains a line-independent comparison
+    /// key and a diagnostic with the source line, so moving an error does not make it new.
+    pub fn parse_errors(&self) -> Vec<(String, String)> {
         self.ctx
             .errors()
             .iter()
-            .filter(|e| e.severity() == Severity::Error && !self.folded.contains(&e.location()))
+            .filter(|e| {
+                e.severity() == Severity::Error
+                    && !self.folded.contains(&e.location())
+                    && !self.mended.contains(&e.location().file)
+            })
             .map(|e| {
                 let file = self.file_name(e.location().file);
                 (
@@ -1351,10 +1362,10 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     // New parse errors can omit declarations and falsely appear as removals.
     // Reject them before comparing definitions.
     let mut old_errors: HashMap<String, usize> = HashMap::new();
-    for (e, _) in old.errors() {
+    for (e, _) in old.parse_errors() {
         *old_errors.entry(e).or_default() += 1;
     }
-    for (e, shown) in new.errors() {
+    for (e, shown) in new.parse_errors() {
         match old_errors.get_mut(&e) {
             Some(n) if *n > 0 => *n -= 1,
             _ => changes.refused.push(format!("parse error: {shown}")),
