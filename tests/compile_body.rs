@@ -200,3 +200,14 @@ fn a_call_the_builtin_types_dont_have_goes_by_name() {
     let joined = code.join("\n");
     assert!(!joined.contains("CallName"), "{}", joined);
 }
+
+#[test]
+fn an_implicit_new_of_a_world_type_makes_the_declared_type() {
+    // Assembly resolves world types absent from the builtin-only parse.
+    let (code, _) = body("var/datum/apiModel/Error/m = new\nm").expect("compiles");
+    assert!(
+        code.iter().any(|l| l == "PushVal /datum/apiModel/Error"),
+        "{}",
+        code.join("\n")
+    );
+}

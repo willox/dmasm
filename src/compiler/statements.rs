@@ -1206,12 +1206,17 @@ fn implicit_type_for(compiler: &Compiler, ty: &str) -> Option<String> {
     if is_list_path(ty) {
         return Some("/list".to_owned());
     }
-    compiler
+    let found = compiler
         .proc
         .as_ref()?
         .tree
         .find(ty)
-        .map(|t| t.get().path.clone())
+        .map(|t| t.get().path.clone());
+    // Resolve debugger world types during assembly, beyond the builtin-only parse.
+    match found {
+        None if compiler.expr_scope.is_some() => Some(ty.to_owned()),
+        found => found,
+    }
 }
 
 /// Whether a var's declared type makes it a list: `list` is one of its parts.
