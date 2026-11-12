@@ -1697,6 +1697,40 @@ fn what_dreammaker_refuses_to_build_is_refused() {
         let refused = changes("const-other", &had_const, &after).refused;
         assert!(refused.is_empty(), "{:?}", refused);
     }
+    // Constructors are invalid const values, but valid for non-const vars.
+    for value in [
+        "matrix()",
+        "icon('x.dmi')",
+        "sound('x.ogg')",
+        "file(\"x\")",
+        "newlist(/datum)",
+        "vector(1, 2)",
+        "generator(\"num\", 0, 1)",
+        "filter(type = \"blur\")",
+    ] {
+        let new_const = before.replace(
+            "/datum/a\n",
+            &format!("/datum/a\n\tvar/const/k = {value}\n"),
+        );
+        let refused = changes("const-call", before, &new_const).refused;
+        assert!(
+            refused
+                .iter()
+                .any(|r| r.contains("constant initializer required")),
+            "{value}: {:?}",
+            refused
+        );
+        let plain = before.replace("/datum/a\n", &format!("/datum/a\n\tvar/k = {value}\n"));
+        let changes_ok = changes("plain-call", before, &plain);
+        assert!(
+            !changes_ok
+                .refused
+                .iter()
+                .any(|r| r.contains("constant initializer")),
+            "{value}: {:?}",
+            changes_ok.refused
+        );
+    }
     // Numbers, text and paths are valid constants.
     let fine = before.replace(
         "/datum/a\n",

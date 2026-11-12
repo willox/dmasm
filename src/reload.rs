@@ -2698,8 +2698,8 @@ fn declared_elsewhere(n: TypeRef, name: &str) -> Option<String> {
         .map(|t| t.get().path.clone())
 }
 
-/// Whether a const initializer lacks a valid constant value.
-/// Lists, `new` and runtime expressions are invalid.
+/// Whether a const initializer lacks a valid constant value. Lists, `new`,
+/// constructors such as `matrix()` and `icon()`, and runtime expressions are invalid.
 fn needs_constant(var: &dreammaker::objtree::TypeVar) -> bool {
     use dreammaker::constants::Constant;
     let is_const = var
@@ -2716,7 +2716,7 @@ fn needs_constant(var: &dreammaker::objtree::TypeVar) -> bool {
         .or_else(|| expression.simple_evaluate(var.value.location).ok());
     matches!(
         constant,
-        None | Some(Constant::List(_)) | Some(Constant::New { .. })
+        None | Some(Constant::List(_)) | Some(Constant::New { .. }) | Some(Constant::Call(..))
     )
 }
 
