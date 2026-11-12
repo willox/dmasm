@@ -282,3 +282,29 @@ fn a_builtin_that_is_only_a_statement_is_a_body() {
     assert_has(&code, &["GetVar arg(2)", "Sleep"]);
     assert_has(&code, &RETURN);
 }
+
+#[test]
+fn istype_of_a_var_with_a_world_type_checks_that_type() {
+    // Assembly resolves the declared world type.
+    let (code, _) =
+        body("var/datum/round_event/vent_clog/E = by\nreturn istype(E)").expect("compiles");
+    assert!(
+        code.iter()
+            .any(|l| l == "PushVal /datum/round_event/vent_clog"),
+        "{}",
+        code.join("\n")
+    );
+    let (code, _) = body("var/list/L = by\nreturn istype(L)").expect("compiles");
+    assert!(
+        code.iter().any(|l| l == "PushVal /list"),
+        "{}",
+        code.join("\n")
+    );
+    // One-argument istype still requires a declared type.
+    let error = body("var/x = by\nreturn istype(x)").unwrap_err();
+    assert!(
+        error.to_string().contains("istype with an untyped value"),
+        "{}",
+        error
+    );
+}

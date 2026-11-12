@@ -1016,12 +1016,25 @@ fn emit_overloaded(
             ))));
         }
         "istype" if n == 1 => {
-            let path =
-                compiler
-                    .static_type_name(&args[0])
-                    .ok_or(CompileError::UnsupportedBuiltin {
-                        proc: "istype with an untyped value".to_owned(),
-                    })?;
+            // Resolve declared world types during assembly, beyond the builtin-only parse.
+            let declared = || {
+                compiler.expr_scope?;
+                let path = super::procs::declared_type_path(compiler, &args[0])?;
+                if path.is_empty() {
+                    return None;
+                }
+                Some(if path.split('/').any(|part| part == "list") {
+                    "/list".to_owned()
+                } else {
+                    path
+                })
+            };
+            let path = compiler
+                .static_type_name(&args[0])
+                .or_else(declared)
+                .ok_or(CompileError::UnsupportedBuiltin {
+                    proc: "istype with an untyped value".to_owned(),
+                })?;
             push_args(compiler, args)?;
             compiler.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
             compiler.emit_ins(Instruction::IsType);
