@@ -211,3 +211,34 @@ fn an_implicit_new_of_a_world_type_makes_the_declared_type() {
         code.join("\n")
     );
 }
+
+#[test]
+fn a_body_may_be_indented_with_spaces() {
+    let tabs = body("var/n = 0\nfor(var/i in 1 to 3)\n\tn++\nn").unwrap();
+    for code in [
+        "var/n = 0\nfor(var/i in 1 to 3)\n    n++\nn",
+        "var/n = 0\nfor(var/i in 1 to 3)\n  n++\nn",
+        // Also accept a body pasted with common leading indentation.
+        "    var/n = 0\n    for(var/i in 1 to 3)\n        n++\n    n",
+    ] {
+        assert!(is_body(code), "{:?} should be a body", code);
+        assert_eq!(body(code).unwrap(), tabs, "{:?}", code);
+    }
+    // Nested blocks indented with spaces.
+    let (code, _) = body("var/n = 0\nfor(var/i in 1 to 3)\n    if(i > 1)\n        n++\nn").unwrap();
+    assert_has(&code, &["Inc local(0)"]);
+    // Error columns must refer to the original input.
+    for (code, at) in [
+        ("var/x = 1\nif(x)\n    x x", "3:7:"),
+        ("var/x = 1\nif(x)\n\tx x", "3:4:"),
+        ("  var/x = 1\n  if(x)\n      x x", "3:9:"),
+    ] {
+        let error = body(code).unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!("parser error: {} error: got `x`", at)),
+            "{:?}: {}",
+            code,
+            error
+        );
+    }
+}

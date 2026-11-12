@@ -393,7 +393,7 @@ pub fn compile_body_in(
     )));
     statements::emit_proc_body(&mut compiler, &source, value.code.as_ref().unwrap()).map_err(
         |e| match e {
-            // (the proc's header is the line before the body's first)
+            // Adjust warning lines for the synthetic proc header.
             CompileError::AtLine(line, e) => CompileError::AtLine(line.saturating_sub(1), e),
             e => e,
         },
@@ -442,7 +442,7 @@ pub fn compile_body_in(
 }
 
 /// Parse debugger input as global proc `BODY_PROC`. Remove common
-/// indentation, then indent the body one tab beneath a synthetic header.
+/// indentation, then indent the body one level beneath a synthetic header.
 fn parse_body(
     code: &str,
     byond: ByondVersion,
@@ -458,10 +458,21 @@ fn parse_body(
             &a[..same]
         })
         .unwrap_or("");
+    let lines: Vec<&str> = lines
+        .iter()
+        .map(|line| line.strip_prefix(common).unwrap_or(line.trim_start()))
+        .collect();
+    // Use the body's indentation unit to avoid mixing tabs with user-supplied spaces.
+    let unit = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| &line[..indent(line)])
+        .find(|prefix| !prefix.is_empty())
+        .unwrap_or("\t");
     let mut text = format!("/proc/{}()\n", BODY_PROC);
     for line in &lines {
-        text.push('\t');
-        text.push_str(line.strip_prefix(common).unwrap_or(line.trim_start()));
+        text.push_str(unit);
+        text.push_str(line);
         text.push('\n');
     }
 
@@ -478,13 +489,14 @@ fn parse_body(
         .iter()
         .find(|e| e.severity() >= Severity::Error)
     {
-        // Translate locations back to `code`, accounting for the header and tab.
+        // Map locations back to the input by removing the header and added indentation,
+        // then restoring the common indentation.
         let mut at = err.location();
         at.line = at
             .line
             .saturating_sub(1)
             .clamp(1, lines.len().max(1) as u32);
-        at.column = at.column.saturating_sub(1).max(1);
+        at.column = (at.column.saturating_sub(unit.len() as u16) + common.len() as u16).max(1);
         return Err(CompileError::ParseError(dreammaker::DMError::new(
             at,
             err.description(),
