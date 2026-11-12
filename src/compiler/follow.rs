@@ -518,7 +518,15 @@ fn commit_field_buffer(
             let name = field_chain.remove(0);
             // global.x. A debugger's expression reads it by name (see
             // `ExprScope::globals`).
-            if compiler.expr_scope.is_some() {
+            if let Some(scope) = compiler.expr_scope {
+                // The scope already supplies BYOND's `global.vars` list. The list itself
+                // is read-only, but its entries can be assigned.
+                if name == "vars" && (scope.global)("vars").is_none() {
+                    if let Some(index) = compiler.params.iter().rposition(|x| *x == scope.globals) {
+                        compiler.emit_ins(Instruction::GetVar(Variable::Arg(index as u32)));
+                        return commit_field_buffer(compiler, EvalKind::Stack, field_chain);
+                    }
+                }
                 let kind = compiler.emit_global_by_name(&name)?;
                 return commit_field_buffer(compiler, kind, field_chain);
             }

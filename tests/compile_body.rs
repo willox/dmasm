@@ -242,3 +242,9 @@ fn a_body_may_be_indented_with_spaces() {
         );
     }
 }
+
+#[test]
+fn global_vars_is_the_globals_list() {
+    let (code, _) = body("var/n = length(global.vars)\nn").unwrap();
+    assert_has(&code, &["GetVar arg(3)", "Length", "SetVar local(0)"]);
+}

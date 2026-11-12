@@ -400,3 +400,37 @@ fn integers_too_big_for_push_int_are_pushed_whole() {
         code
     );
 }
+
+#[test]
+fn global_vars_is_the_globals_list() {
+    assert_eq!(
+        scoped("length(global.vars)", &[]).unwrap(),
+        written_out("length(globals)", &[])
+    );
+    assert_eq!(
+        scoped("global.vars[\"ticks\"]", &[]).unwrap(),
+        written_out("globals[\"ticks\"]", &[])
+    );
+    assert_eq!(
+        scoped("global.vars[\"ticks\"] = 2", &[]).unwrap(),
+        written_out("globals[\"ticks\"] = 2", &[])
+    );
+    let code = scoped("global.vars.len", &[]).unwrap();
+    assert!(
+        matches!(
+            &code[1..3],
+            [
+                Instruction::GetVar(dmasm::Variable::Arg(0)),
+                Instruction::SetVar(dmasm::Variable::Cache)
+            ]
+        ),
+        "{:?}",
+        code
+    );
+    // The list itself is read-only; bare `vars` keeps normal src/global lookup.
+    assert!(matches!(
+        scoped("global.vars = 1", &[]),
+        Err(CompileError::ExpectedLValue)
+    ));
+    assert!(scoped("vars", &[]).is_err());
+}
