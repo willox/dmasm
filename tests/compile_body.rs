@@ -328,6 +328,24 @@ fn a_bare_label_in_a_body_can_be_jumped_to() {
 }
 
 #[test]
+fn astype_of_a_var_with_a_world_type_casts_to_that_type() {
+    // Resolve /datum/foo during assembly.
+    let (text, _) = body("var/datum/foo/x = null\nreturn astype(x)").expect("compiles");
+    let at = text.iter().position(|l| l == "AsType").expect("AsType");
+    assert_eq!(text[at - 1], "PushVal /datum/foo", "{:?}", text);
+    let (text, _) = body("var/list/datum/foo/L = null\nreturn astype(L)").expect("compiles");
+    let at = text.iter().position(|l| l == "AsType").expect("AsType");
+    assert_eq!(text[at - 1], "PushVal /list", "{:?}", text);
+    // One-argument astype requires a declared type.
+    let error = body("var/x = null\nreturn astype(x)").unwrap_err();
+    assert!(
+        format!("{:?}", error).contains("astype with an untyped value"),
+        "{:?}",
+        error
+    );
+}
+
+#[test]
 fn a_body_can_end_with_a_bare_label() {
     // A trailing goto label must not become the result.
     let (code, _) = body("var/y = 1\nif (y) goto done\ny = 2\ndone").expect("compiles");

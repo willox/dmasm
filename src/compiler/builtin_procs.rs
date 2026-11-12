@@ -842,6 +842,17 @@ fn emit_overloaded(
             compiler.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
             compiler.emit_ins(Instruction::AsType);
         }
+        // Resolve the declared world type during assembly; the parse has only builtins.
+        "astype" if n == 1 && compiler.expr_scope.is_some() => {
+            let path = declared_world_type(compiler, &args[0]).ok_or(
+                CompileError::UnsupportedBuiltin {
+                    proc: "astype with an untyped value".to_owned(),
+                },
+            )?;
+            push_args(compiler, args)?;
+            compiler.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
+            compiler.emit_ins(Instruction::AsType);
+        }
         "shell" if n == 0 => compiler.emit_ins(Instruction::ShellAllowed),
         // issaved(a.b) asks about a var, not its value
         "issaved" if n == 1 => {
@@ -1020,21 +1031,9 @@ fn emit_overloaded(
         }
         "istype" if n == 1 => {
             // Resolve declared world types during assembly, beyond the builtin-only parse.
-            let declared = || {
-                compiler.expr_scope?;
-                let path = super::procs::declared_type_path(compiler, &args[0])?;
-                if path.is_empty() {
-                    return None;
-                }
-                Some(if path.split('/').any(|part| part == "list") {
-                    "/list".to_owned()
-                } else {
-                    path
-                })
-            };
             let path = compiler
                 .static_type_name(&args[0])
-                .or_else(declared)
+                .or_else(|| declared_world_type(compiler, &args[0]))
                 .ok_or(CompileError::UnsupportedBuiltin {
                     proc: "istype with an untyped value".to_owned(),
                 })?;
@@ -1045,6 +1044,18 @@ fn emit_overloaded(
         _ => return Ok(None),
     }
     Ok(Some(EvalKind::Stack))
+}
+
+/// Resolve the declared type for one-argument `istype()` and `astype()` in debugger code.
+/// Use `/list` for list vars; assembly resolves other paths against the world.
+fn declared_world_type(compiler: &Compiler, arg: &Expression) -> Option<String> {
+    compiler.expr_scope?;
+    let path = super::procs::declared_type_path(compiler, arg).filter(|path| !path.is_empty())?;
+    Some(if path.split('/').any(|part| part == "list") {
+        "/list".to_owned()
+    } else {
+        path
+    })
 }
 
 pub(super) fn last_identifier(expr: &Expression) -> Option<String> {
