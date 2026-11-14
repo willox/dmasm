@@ -1561,13 +1561,15 @@ fn const_users(old: &Snapshot, new: &Snapshot, realigned: &Realigned, changes: &
         .consts
         .iter()
         .chain(&changes.retyped)
-        .chain(&changes.defaults_changed)
         .map(|c| format!("{c:?}"))
         .collect();
-    // (a moved default only shows in `/type::var`'s debug info)
+    // Only `type::var` embeds a default's value or source location in code.
+    // Looking for any use of `var` would recompile nearly everything for
+    // common names such as `name` or `icon`.
     let moved: Vec<String> = changes
-        .defaults_moved
+        .defaults_changed
         .iter()
+        .chain(&changes.defaults_moved)
         .map(|c| format!("StaticField({c:?})"))
         .collect();
     let reloaded: HashSet<ProcKey> = changes.reloads.iter().map(|r| r.proc.clone()).collect();
