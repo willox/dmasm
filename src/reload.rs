@@ -304,6 +304,14 @@ pub enum ConstValue {
     Resource(String),
 }
 
+/// Source value of `client/script`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientScript {
+    Text(String),
+    /// A file, as the code names it (`'style.css'`)
+    File(String),
+}
+
 /// A var whose default changed.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -989,6 +997,23 @@ impl Snapshot {
     /// Last `.dmf` included by the `.dme`, relative to the `.dme` directory.
     pub fn skin(&self) -> Option<&Path> {
         self.skin.as_deref()
+    }
+
+    /// Login script from `/client/script`. Return `None` for unset or null,
+    /// or an error unless it is constant text or a resource file.
+    pub fn client_script(&self) -> Result<Option<ClientScript>, String> {
+        let Some(value) = self
+            .find_type("/client")
+            .and_then(|client| default_value(client, "script"))
+        else {
+            return Ok(None);
+        };
+        match value {
+            Some(ConstValue::String(text)) => Ok(Some(ClientScript::Text(text))),
+            Some(ConstValue::Resource(file)) => Ok(Some(ClientScript::File(file))),
+            Some(ConstValue::Null) => Ok(None),
+            _ => Err("/client: script must be constant text or a resource file".to_owned()),
+        }
     }
 
     /// Every proc with code.
@@ -3249,6 +3274,11 @@ fn var_default(
                 "{shown}: const {name}: value compilation failed: {e}"
             )),
         }
+        return;
+    }
+
+    // The launcher reloads the whole client script (see `Snapshot::client_script`).
+    if builtin && name == "script" && n.get().path == "/client" {
         return;
     }
 

@@ -4,7 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use dmasm::reload::{
-    diff, Changes, ConstValue, InList, NewVar, ParseOptions, ProcKey, ProcSettings, Snapshot,
+    diff, Changes, ClientScript, ConstValue, InList, NewVar, ParseOptions, ProcKey, ProcSettings,
+    Snapshot,
 };
 use dmasm::{Instruction, Node};
 
@@ -2277,4 +2278,48 @@ fn a_resource_file_names_the_code_and_defaults_that_use_it() {
     assert!(snapshot
         .resource_users(&["missing.dmi".to_owned()])
         .is_empty());
+}
+
+#[test]
+fn the_client_script_is_left_to_the_launcher() {
+    for (before, after) in [
+        (
+            "/client/script = \"<style>a {}</style>\"\n",
+            "/client/script = \"<style>b {}</style>\"\n",
+        ),
+        (
+            "/client/script = \"<style>a {}</style>\"\n",
+            "/client/script = 'a.css'\n",
+        ),
+        ("/client/script = 'a.css'\n", "/client\n"),
+    ] {
+        let changes = changes("client-script", before, after);
+        assert!(
+            changes.is_empty() && changes.warnings.is_empty(),
+            "{:?} -> {:?}: {:?}",
+            before,
+            after,
+            changes
+        );
+    }
+
+    let world = World::new(
+        "client-script-value",
+        "/client/script = {\"<style>\n.a {}\n</style>\"}\n",
+    );
+    assert_eq!(
+        world.parse().client_script(),
+        Ok(Some(ClientScript::Text(
+            "<style>\n.a {}\n</style>".to_owned()
+        )))
+    );
+    world.write("/client/script = 'style.css'\n");
+    assert_eq!(
+        world.parse().client_script(),
+        Ok(Some(ClientScript::File("style.css".to_owned())))
+    );
+    world.write("/client/script = null\n");
+    assert_eq!(world.parse().client_script(), Ok(None));
+    world.write("var/x = 1\n/client/script = \"<style>[x] {}</style>\"\n");
+    assert!(world.parse().client_script().is_err());
 }
