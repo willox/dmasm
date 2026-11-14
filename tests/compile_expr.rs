@@ -590,3 +590,26 @@ fn pick_draws_as_a_procs_pick_does() {
         code
     );
 }
+
+#[test]
+fn a_unary_operator_applies_to_a_safe_chain_that_stops() {
+    // A null safe chain must still apply its trailing unary operator.
+    for (code, op) in [
+        ("!a?.f()", Instruction::Not),
+        ("-a?.f()", Instruction::UnaryNeg),
+        ("!a?.b", Instruction::Not),
+    ] {
+        let nodes = compile_expr(code, &["a"]).expect("expression compilation failed");
+        let target = nodes
+            .iter()
+            .find_map(|node| match node {
+                Node::Instruction(Instruction::SetCacheJmpIfNull(label), _) => Some(label.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{}: no null check in {:?}", code, nodes));
+        let at = |want: &dyn Fn(&Node) -> bool| nodes.iter().position(|node| want(node)).unwrap();
+        let landing = at(&|node| matches!(node, Node::Label(label) if *label == target));
+        let applied = at(&|node| matches!(node, Node::Instruction(ins, _) if *ins == op));
+        assert!(landing < applied, "{}: {:?}", code, nodes);
+    }
+}
