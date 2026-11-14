@@ -272,7 +272,8 @@ fn math1(name: &str, x: f32, byond: crate::ByondVersion) -> Option<Option<f32>> 
         "trunc" => Some(d.trunc()),
         // (of an infinity it's 0)
         "fract" => Some(if d.is_infinite() { 0.0 } else { d.fract() }),
-        "abs" => Some(d.abs()),
+        // Preserve a NaN's sign.
+        "abs" => Some(if d < 0.0 { -d } else { d }),
         "sign" => Some(if d > 0.0 {
             1.0
         } else if d < 0.0 {
@@ -493,7 +494,15 @@ fn base_value(c: &Compiler, term: &Term) -> Option<Constant> {
             };
             // (bounds the wrong way round are swapped)
             let (x, a, b) = (n(&args[0])?, n(&args[1])?, n(&args[2])?);
-            Constant::Number(x.max(a.min(b)).min(a.max(b)))
+            let (low, high) = (a.min(b), a.max(b));
+            // NaN compares neither below nor above the bounds and remains unchanged.
+            Constant::Number(if x < low {
+                low
+            } else if x > high {
+                high
+            } else {
+                x
+            })
         }
         Term::Ident(name) => from_objtree(&super::procs::const_value(c, name.as_str())?)?,
         // (`::name` of a const, as the name alone)

@@ -255,6 +255,24 @@ fn trig_of_an_infinity_or_a_nan_is_dreammakers_nan() {
     assert!(negative(B516_1688, "arccos(1.#INF - 1.#INF)"));
 }
 
+/// abs() and clamp() preserve a NaN's sign when folding.
+#[test]
+fn abs_and_clamp_keep_a_nan() {
+    for byond in [B515_1637, B516_1688] {
+        for expr in ["abs(1.#INF - 1.#INF)", "clamp(1.#INF - 1.#INF, 0, 1)"] {
+            let n = pushed_number(byond, expr);
+            assert!(
+                n.is_nan() && n.is_sign_negative(),
+                "{}: unexpected folded result {}",
+                expr,
+                n
+            );
+        }
+        assert_eq!(pushed_number(byond, "clamp(5, 3, 1)"), 3.0);
+        assert_eq!(pushed_number(byond, "abs(-2.5)"), 2.5);
+    }
+}
+
 /// `\ref`, `\icon` and `\roman` belong to the next embedded value, wherever
 /// in the text they're written.
 #[test]
