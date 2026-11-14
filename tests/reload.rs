@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use dmasm::reload::{
     diff, Changes, ClientScript, ConstValue, InList, NewVar, ParseOptions, ProcKey, ProcSettings,
-    Snapshot,
+    Refusal, Snapshot,
 };
 use dmasm::{Instruction, Node};
 
@@ -409,7 +409,12 @@ fn refusal(name: &str, before: &str, after: &str) -> String {
         "nothing refused: {:?}",
         changes
     );
-    changes.refused.join("\n")
+    shown(&changes.refused).join("\n")
+}
+
+/// Display refusals as text.
+fn shown(refused: &[Refusal]) -> Vec<String> {
+    refused.iter().map(Refusal::to_string).collect()
 }
 
 #[test]
@@ -419,7 +424,7 @@ fn refuses_what_a_reload_cant_do() {
         (
             "new-type-builtin",
             format!("{base}/mob/other\n\tckey = \"someone\"\n"),
-            "cannot set built-in variable ckey",
+            "/mob/other: ckey: unsupported built-in default on a new type",
         ),
         (
             "setting",
@@ -1659,7 +1664,7 @@ fn what_dreammaker_refuses_to_build_is_refused() {
             changes
                 .refused
                 .iter()
-                .any(|r| r.contains("v: duplicate definition")),
+                .any(|r| r.to_string().contains("v: duplicate definition")),
             "{:?}",
             changes.refused
         );
@@ -1673,9 +1678,9 @@ fn what_dreammaker_refuses_to_build_is_refused() {
     )
     .refused;
     assert!(
-        refused
-            .iter()
-            .any(|r| r.contains("foo: duplicate definition (/obj/item declares it too)")),
+        refused.iter().any(|r| r
+            .to_string()
+            .contains("foo: duplicate definition (/obj/item declares it too)")),
         "{:?}",
         refused
     );
@@ -1692,7 +1697,7 @@ fn what_dreammaker_refuses_to_build_is_refused() {
     assert!(
         refused
             .iter()
-            .any(|r| r.contains("constant initializer required")),
+            .any(|r| r.to_string().contains("constant initializer required")),
         "{:?}",
         refused
     );
@@ -1701,7 +1706,7 @@ fn what_dreammaker_refuses_to_build_is_refused() {
     assert!(
         refused
             .iter()
-            .any(|r| r.contains("constant initializer required")),
+            .any(|r| r.to_string().contains("constant initializer required")),
         "{:?}",
         refused
     );
@@ -1716,8 +1721,9 @@ fn what_dreammaker_refuses_to_build_is_refused() {
         assert!(
             refused
                 .iter()
-                .any(|r| r.starts_with("code/code.dm:")
-                    && r.contains("constant initializer required")),
+                .any(|r| r.file.as_deref() == Some("code/code.dm")
+                    && r.line.is_some()
+                    && r.to_string().contains("constant initializer required")),
             "{name}: {:?}",
             refused
         );
@@ -1751,7 +1757,7 @@ fn what_dreammaker_refuses_to_build_is_refused() {
         assert!(
             refused
                 .iter()
-                .any(|r| r.contains("constant initializer required")),
+                .any(|r| r.to_string().contains("constant initializer required")),
             "{value}: {:?}",
             refused
         );
@@ -1761,7 +1767,7 @@ fn what_dreammaker_refuses_to_build_is_refused() {
             !changes_ok
                 .refused
                 .iter()
-                .any(|r| r.contains("constant initializer")),
+                .any(|r| r.to_string().contains("constant initializer")),
             "{value}: {:?}",
             changes_ok.refused
         );
@@ -1875,21 +1881,63 @@ fn consts_dreammaker_folds_are_taken_and_those_it_refuses_warned_about() {
     );
 }
 
+/// Use current source locations; alternate formatting omits them.
+#[test]
+fn refusals_are_placed_in_the_new_source() {
+    let before =
+        "/datum/a\n/datum/a/proc/f()\n\treturn 1\n/datum/b\n/obj/o\n\tparent_type = /obj\n";
+    let placed = |name: &str, after: &str| -> Vec<(String, Option<u32>, String)> {
+        changes(name, before, after)
+            .refused
+            .iter()
+            .map(|r| (r.file.clone().unwrap_or_default(), r.line, format!("{r:#}")))
+            .collect()
+    };
+    // Use the compiler error's line, not the proc header.
+    assert_eq!(
+        placed(
+            "placed-compile",
+            &before.replace("\treturn 1", "\tvar/x = 1\n\tswitch(x)\n\t\tif(x)\n\t\t\treturn 1"),
+        ),
+        [(
+            "code/code.dm".to_owned(),
+            Some(4),
+            "/datum/a/f: doesn't compile: unsupported statement: switch case that isn't a simple constant".to_owned()
+        )]
+    );
+    // Use the parent_type assignment's location.
+    assert_eq!(
+        placed("placed-reparent", &before.replace("= /obj", "= /datum/b")),
+        [(
+            "code/code.dm".to_owned(),
+            Some(6),
+            "/obj/o: parent type changed: its instances would be a /datum instead of a /obj"
+                .to_owned()
+        )]
+    );
+}
+
 #[test]
 fn a_var_declared_twice_on_one_type_is_refused_where_it_is() {
     let before = "var/x = 1\n/datum/a\n/datum/t\n";
     let after = before.replace("/datum/t\n", "/datum/t\n\tvar/w = 1\n\tvar/w = 2\n");
     let refused = changes("dup-same", before, &after).refused;
     assert_eq!(
-        refused,
-        ["parse error: code/code.dm:5: duplicate definition of var/w"]
+        shown(&refused),
+        ["code/code.dm:5: parse error: duplicate definition of var/w"]
     );
     // Locate a valueless declaration at the end of its source file, rather than in the .dme.
     let after = before.replace("/datum/t\n", "/datum/t\n\tvar/vars\n");
     let refused = changes("dup-builtin", before, &after).refused;
     assert_eq!(
         refused,
-        ["code/code.dm:4: vars: duplicate definition (/datum declares it too)"]
+        [Refusal {
+            path: "/datum/t".to_owned(),
+            name: Some("vars".to_owned()),
+            why: "duplicate definition (/datum declares it too)".to_owned(),
+            file: Some("code/code.dm".to_owned()),
+            line: Some(4),
+        }]
     );
 }
 
@@ -1991,8 +2039,8 @@ fn a_built_in_a_built_in_type_stops_setting_needs_a_rebuild() {
         "/mob\n/mob/m\n",
     );
     assert_eq!(
-        own.refused,
-        ["/mob: layer: cannot restore this built-in type's original default; rebuild required"]
+        shown(&own.refused),
+        ["code/code.dm:1: /mob: layer: cannot restore this built-in type's original default"]
     );
     assert!(
         own.builtin_inherited.is_empty(),
@@ -2414,7 +2462,7 @@ fn a_declaration_moved_up_to_a_parent_is_taken() {
         "/mob/a\n/mob/a/b/proc/v()\n\treturn 1\n",
         "/mob/a/verb/v()\n\treturn 0\n/mob/a/b/v()\n\treturn 1\n",
     );
-    assert!(refused.contains("proc declaration kind"), "{}", refused);
+    assert!(refused.contains("declaration kind or flags"), "{}", refused);
 }
 
 #[test]

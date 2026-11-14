@@ -74,9 +74,14 @@ pub(super) fn var_moved(
     );
     let (old_storage, new_storage) = (storage(old_flags), storage(flags));
     if new_storage.0 || new_storage.1 {
-        changes.refused.push(format!(
-            "{path}: var {name} moved to {ancestor} as a static or const var; its runtime slot conflicts with {path}'s; rebuild required"
-        ));
+        let why = format!(
+            "moved to {ancestor} as a static or const var; global slot conflicts with {path}'s"
+        );
+        changes.refused.push(
+            Refusal::new(path, why)
+                .named(name)
+                .at(new, declaration.get().location),
+        );
         return;
     }
     // Apply the ancestor's declaration flags, including static and tmp.
@@ -143,7 +148,7 @@ pub(super) fn moved_users(
                 proc: old_key,
                 ..reload
             }),
-            Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+            Err(e) => changes.refused.push(new.uncompiled(key, &e)),
         }
     }
     changes

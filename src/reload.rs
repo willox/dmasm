@@ -407,6 +407,76 @@ pub struct InitProc {
     pub code: Option<ProcReload>,
 }
 
+/// Unsupported reload change. Any refusal rejects the whole change set.
+///
+/// Display as `file:line: path: name: why`, omitting unknown or empty fields.
+/// Alternate formatting (`{:#}`) omits the location for callers displaying it
+/// separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Refusal {
+    /// Affected type (`/area`, `(global)`) or proc (formatted as [`ProcKey`]).
+    /// Empty for parse errors.
+    pub path: String,
+    /// Affected var, if any.
+    pub name: Option<String>,
+    /// Reason for refusal. The caller supplies rebuild instructions.
+    pub why: String,
+    /// File in the new snapshot, relative to the `.dme` directory
+    /// (see [`Snapshot::proc_file`]). For removals, use the surviving type
+    /// or declaration that identifies the change.
+    pub file: Option<String>,
+    /// One-based line number in `file`.
+    pub line: Option<u32>,
+}
+
+impl Refusal {
+    /// Create a refusal for `path` without a var or location.
+    pub fn new(path: impl Into<String>, why: impl Into<String>) -> Self {
+        Refusal {
+            path: path.into(),
+            name: None,
+            why: why.into(),
+            file: None,
+            line: None,
+        }
+    }
+
+    /// Associate the refusal with var `name`.
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Attach a source location from `snapshot`, excluding built-in or synthetic files.
+    fn at(mut self, snapshot: &Snapshot, location: dreammaker::Location) -> Self {
+        if let Some((file, line)) = snapshot.source_line(location) {
+            self.file = Some(file);
+            self.line = Some(line);
+        }
+        self
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !f.alternate() {
+            match (&self.file, self.line) {
+                (Some(file), Some(line)) => write!(f, "{file}:{line}: ")?,
+                (Some(file), None) => write!(f, "{file}: ")?,
+                _ => {}
+            }
+        }
+        if !self.path.is_empty() {
+            write!(f, "{}: ", self.path)?;
+        }
+        if let Some(name) = &self.name {
+            write!(f, "{name}: ")?;
+        }
+        f.write_str(&self.why)
+    }
+}
+
 /// What changed between two snapshots.
 #[derive(Debug, Default)]
 pub struct Changes {
@@ -446,8 +516,8 @@ pub struct Changes {
     pub line_moves: Vec<LineMove>,
     /// Runtime state retained by reload and compiler compatibility warnings.
     pub warnings: Vec<String>,
-    /// Rejection reasons. Any entry requires rejecting the entire change set.
-    pub refused: Vec<String>,
+    /// Unsupported changes. Any entry rejects the whole change set.
+    pub refused: Vec<Refusal>,
     /// Changed world and client settings, as (type, var). Warn that they take
     /// effect after restart (see `settings_as_built`).
     pub restart_settings: Vec<(String, String)>,
@@ -776,7 +846,7 @@ impl Snapshot {
                 });
                 match reload {
                     Ok(reload) => changes.reloads.push(reload),
-                    Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+                    Err(e) => changes.refused.push(self.uncompiled(key, &e)),
                 }
             } else if let Some(Ok(old_code)) = before.remove(key) {
                 // Every line, as `diff` gives them, when any moved
@@ -1306,6 +1376,36 @@ impl Snapshot {
     /// successfully reparsed files. Each pair contains a line-independent comparison
     /// key and a diagnostic with the source line, so moving an error does not make it new.
     pub fn parse_errors(&self) -> Vec<(String, String)> {
+        self.unresolved_errors()
+            .into_iter()
+            .map(|(location, description)| {
+                let file = self.file_name(location.file);
+                (
+                    format!("{file}: {description}"),
+                    format!("{file}:{}: {description}", location.line),
+                )
+            })
+            .collect()
+    }
+
+    /// Unresolved parse errors as refusals, paired with `parse_errors` comparison keys.
+    fn parse_refusals(&self) -> Vec<(String, Refusal)> {
+        self.unresolved_errors()
+            .into_iter()
+            .map(|(location, description)| {
+                let file = self.file_name(location.file);
+                let why = format!("parse error: {description}");
+                (
+                    format!("{file}: {description}"),
+                    Refusal::new("", why).at(self, location),
+                )
+            })
+            .collect()
+    }
+
+    /// Parse error locations and descriptions, excluding recovered const
+    /// initializers and superseded parses.
+    fn unresolved_errors(&self) -> Vec<(dreammaker::Location, String)> {
         self.ctx
             .errors()
             .iter()
@@ -1314,14 +1414,77 @@ impl Snapshot {
                     && !self.folded.contains(&e.location())
                     && !self.mended.contains(&e.location().file)
             })
-            .map(|e| {
-                let file = self.file_name(e.location().file);
-                (
-                    format!("{file}: {}", e.description()),
-                    format!("{file}:{}: {}", e.location().line, e.description()),
-                )
-            })
+            .map(|e| (e.location(), e.description().to_owned()))
             .collect()
+    }
+
+    /// File relative to the `.dme` directory and one-based line. Return none
+    /// for built-ins or defines prepended to the `.dme`.
+    fn source_line(&self, location: dreammaker::Location) -> Option<(String, u32)> {
+        if location.file == FileId::BUILTINS
+            || location.file == FileId::UNKNOWN
+            || location.line == 0
+        {
+            return None;
+        }
+        let file = self.file_name(location.file);
+        (file != PRELUDE).then_some((file, location.line))
+    }
+
+    /// Most direct source declaration of `t`. For built-in types, use the
+    /// first source var or proc declaration.
+    fn type_location(&self, t: TypeRef) -> dreammaker::Location {
+        let ty = t.get();
+        let in_source = |l: &dreammaker::Location| self.source_line(*l).is_some();
+        std::iter::once(ty.location)
+            .chain(ty.vars.values().map(|v| v.value.location))
+            .chain(
+                ty.procs
+                    .values()
+                    .flat_map(|p| p.value.iter().map(|v| v.location)),
+            )
+            .find(in_source)
+            .unwrap_or(ty.location)
+    }
+
+    /// Location where `t` sets or declares `name`, falling back to the type.
+    fn var_location(&self, t: TypeRef, name: &str) -> dreammaker::Location {
+        match t.get().vars.get(name) {
+            Some(var) if self.source_line(var.value.location).is_some() => var.value.location,
+            Some(var) => var
+                .declaration
+                .as_ref()
+                .map(|d| d.location)
+                .filter(|l| self.source_line(*l).is_some())
+                .unwrap_or_else(|| self.type_location(t)),
+            None => self.type_location(t),
+        }
+    }
+
+    /// Create a refusal at proc `key`'s definition.
+    fn proc_refusal(&self, key: &ProcKey, why: impl Into<String>) -> Refusal {
+        let refusal = Refusal::new(key.to_string(), why);
+        match self.find(key) {
+            Some((_, value)) => refusal.at(self, value.location),
+            None => refusal,
+        }
+    }
+
+    /// Create a compilation refusal, using the error's line when available.
+    fn uncompiled(&self, key: &ProcKey, e: &str) -> Refusal {
+        let line = e
+            .strip_prefix("line ")
+            .and_then(|rest| rest.split_once(": "))
+            .and_then(|(line, what)| Some((line.parse::<u32>().ok()?, what)));
+        let refusal = self.proc_refusal(key, format!("doesn't compile: {e}"));
+        match line {
+            Some((line, what)) if refusal.file.is_some() => Refusal {
+                why: format!("doesn't compile: {what}"),
+                line: Some(line),
+                ..refusal
+            },
+            _ => refusal,
+        }
     }
 
     fn find(&self, key: &ProcKey) -> Option<(TypeRef<'_>, &ProcValue)> {
@@ -1488,10 +1651,10 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     for (e, _) in old.parse_errors() {
         *old_errors.entry(e).or_default() += 1;
     }
-    for (e, shown) in new.parse_errors() {
+    for (e, refusal) in new.parse_refusals() {
         match old_errors.get_mut(&e) {
             Some(n) if *n > 0 => *n -= 1,
-            _ => changes.refused.push(format!("parse error: {shown}")),
+            _ => changes.refused.push(refusal),
         }
     }
     if !changes.refused.is_empty() {
@@ -1528,7 +1691,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
                 verb,
                 code,
             }),
-            Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+            Err(e) => changes.refused.push(new.uncompiled(&key, &e)),
         }
     }
 
@@ -1572,7 +1735,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
             (true, _) => None,
             (false, Ok(settings)) => Some(settings),
             (false, Err(e)) => {
-                changes.refused.push(format!("{key}: {e}"));
+                changes.refused.push(new.proc_refusal(key, e));
                 continue;
             }
         };
@@ -1600,7 +1763,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
                     proc: old_key,
                     ..reload
                 }),
-                Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+                Err(e) => changes.refused.push(new.uncompiled(key, &e)),
             }
             continue;
         }
@@ -1628,7 +1791,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
                         proc: old_key,
                         ..reload
                     }),
-                    Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+                    Err(e) => changes.refused.push(new.uncompiled(key, &e)),
                 },
             }
         }
@@ -1754,7 +1917,7 @@ fn const_users(old: &Snapshot, new: &Snapshot, realigned: &Realigned, changes: &
                 proc: old_key,
                 ..reload
             }),
-            Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+            Err(e) => changes.refused.push(new.uncompiled(key, &e)),
         }
     }
 }
@@ -2345,10 +2508,13 @@ fn compare_inits(old: &Snapshot, new: &Snapshot, changes: &mut Changes) {
             match new.compile_init(n, &new_inits) {
                 Ok(code) => Some(code),
                 Err(e) => {
-                    changes.refused.push(format!(
-                        "{}: initializer compilation failed: {e}",
-                        n.get().path
-                    ));
+                    changes.refused.push(
+                        Refusal::new(
+                            n.get().path.clone(),
+                            format!("initializer compilation failed: {e}"),
+                        )
+                        .at(new, new.type_location(n)),
+                    );
                     continue;
                 }
             }
@@ -2544,12 +2710,12 @@ const BUILTIN_VARS: &[&str] = &[
 
 /// Reports a type the running world doesn't have, with the fields of its
 /// record that aren't its parent's, as DreamMaker works them out.
-fn new_type(n: TypeRef, changes: &mut Changes) {
+fn new_type(new: &Snapshot, n: TypeRef, changes: &mut Changes) {
     let path = n.get().path.clone();
     let Some(parent) = n.parent_type() else {
         changes
             .refused
-            .push(format!("{path}: new type with no parent"));
+            .push(Refusal::new(path, "new type with no parent").at(new, new.type_location(n)));
         return;
     };
     let mut fields = vec![];
@@ -2570,9 +2736,11 @@ fn new_type(n: TypeRef, changes: &mut Changes) {
             continue;
         };
         if !BUILTIN_VARS.contains(&name) {
-            changes.refused.push(format!(
-                "{path}: hot reload cannot set built-in variable {name}"
-            ));
+            changes.refused.push(
+                Refusal::new(path.clone(), "unsupported built-in default on a new type")
+                    .named(name)
+                    .at(new, var.value.location),
+            );
             refused = true;
             continue;
         }
@@ -2630,7 +2798,7 @@ fn compare_types(
     let new_types = by_path(new);
     for path in new_types.keys().filter(|p| !old_types.contains_key(*p)) {
         if let Some(n) = new.find_type(path) {
-            new_type(n, changes);
+            new_type(new, n, changes);
         }
     }
     for path in old_types.keys().filter(|p| !new_types.contains_key(*p)) {
@@ -2655,7 +2823,7 @@ fn compare_types(
 
         let parent = |t: TypeRef| t.parent_type().map(|p| p.get().path.clone());
         if let Some(o) = o.filter(|o| parent(*o) != parent(n)) {
-            reparent::reparent(old, o, n, changes);
+            reparent::reparent(old, new, o, n, changes);
         }
 
         let ov = o.map_or(&no_vars, |o| &o.get().vars);
@@ -2706,9 +2874,11 @@ fn compare_types(
                         |v: &dreammaker::objtree::TypeVar| kind(v).is_some_and(|k| k.0 || k.1);
                     let redeclared = kind(old_var) != kind(var) && !n.is_root();
                     if needs_constant(var) {
-                        changes.refused.push(format!(
-                            "{shown}: var {name} is const but has a non-constant value (DreamMaker: constant initializer required)"
-                        ));
+                        changes.refused.push(
+                            Refusal::new(shown, "constant initializer required for const var")
+                                .named(name.as_str())
+                                .at(new, var.value.location),
+                        );
                         continue;
                     }
                     if let Some(why) = dm_refused_const(var) {
@@ -2822,9 +2992,16 @@ fn compare_types(
                 if moved::proc_moved_up(n, name.as_str(), op.get(name), proc) {
                     changes.moved_procs.push(path.clone());
                 } else {
-                    changes.refused.push(format!(
-                        "{path}: proc declaration kind or flags changed; rebuild required"
-                    ));
+                    let at = proc
+                        .declaration
+                        .as_ref()
+                        .map(|d| d.location)
+                        .filter(|l| new.source_line(*l).is_some())
+                        .unwrap_or_else(|| new.type_location(n));
+                    changes.refused.push(
+                        Refusal::new(path.clone(), "proc declaration kind or flags changed")
+                            .at(new, at),
+                    );
                 }
             }
         }
@@ -2860,21 +3037,28 @@ fn new_var(
         .map(|d| d.var_type.flags)
         .unwrap_or_default();
     // Validate declarations DreamMaker would reject.
-    let place = var
+    let at = var
         .declaration
         .as_ref()
         .map_or(var.value.location, |d| d.location);
-    let place = format!("{}:{}", snapshot.file_name(place.file), place.line);
+    let place = format!("{}:{}", snapshot.file_name(at.file), at.line);
     if let Some(other) = declared_elsewhere(n, name) {
-        changes.refused.push(format!(
-            "{place}: {name}: duplicate definition ({other} declares it too)"
-        ));
+        changes.refused.push(
+            Refusal::new(
+                &shown,
+                format!("duplicate definition ({other} declares it too)"),
+            )
+            .named(name)
+            .at(snapshot, at),
+        );
         return false;
     }
     if needs_constant(var) {
-        changes
-            .refused
-            .push(format!("{place}: {name}: constant initializer required"));
+        changes.refused.push(
+            Refusal::new(&shown, "constant initializer required")
+                .named(name)
+                .at(snapshot, at),
+        );
         return false;
     }
     if let Some(why) = dm_refused_const(var) {
@@ -2888,9 +3072,11 @@ fn new_var(
         match static_initial(snapshot, n, var) {
             Ok(value) => value,
             Err(e) => {
-                changes.refused.push(format!(
-                    "{shown}: new var {name}: initializer compilation failed: {e}"
-                ));
+                changes.refused.push(
+                    Refusal::new(&shown, format!("initializer compilation failed: {e}"))
+                        .named(name)
+                        .at(snapshot, at),
+                );
                 return false;
             }
         }
@@ -2989,12 +3175,16 @@ fn refused_const_value(new: &Snapshot, n: TypeRef, name: &str, changes: &mut Cha
     let Some(var) = n.get().vars.get(name).filter(|var| needs_constant(var)) else {
         return false;
     };
-    let at = var.value.location;
-    changes.refused.push(format!(
-        "{}:{}: {name}: constant initializer required",
-        new.file_name(at.file),
-        at.line
-    ));
+    let shown = if n.is_root() {
+        "(global)"
+    } else {
+        &n.get().path
+    };
+    changes.refused.push(
+        Refusal::new(shown, "constant initializer required")
+            .named(name)
+            .at(new, var.value.location),
+    );
     true
 }
 
@@ -3121,9 +3311,11 @@ fn redeclare(
                     redeclared.init = init;
                 }
                 Err(e) => {
-                    changes.refused.push(format!(
-                        "{path}: var {name}: initializer compilation failed: {e}"
-                    ));
+                    changes.refused.push(
+                        Refusal::new(path, format!("initializer compilation failed: {e}"))
+                            .named(name)
+                            .at(new, new.var_location(n, name)),
+                    );
                     return;
                 }
             }
@@ -3214,9 +3406,11 @@ fn var_default(
     let shown = if path.is_empty() { "(global)" } else { path };
     let Some(n) = new.find_type(path) else { return };
     let Some(declaration) = n.get_var_declaration(name) else {
-        changes.refused.push(format!(
-            "{shown}: var {name} has a value but no declaration"
-        ));
+        changes.refused.push(
+            Refusal::new(shown, "has a value but no declaration")
+                .named(name)
+                .at(new, new.var_location(n, name)),
+        );
         return;
     };
     let flags = declaration.get().var_type.flags;
@@ -3247,9 +3441,11 @@ fn var_default(
                     value: Some(value),
                     init,
                 }),
-                Err(e) => changes.refused.push(format!(
-                    "{shown}: const {name}: value compilation failed: {e}"
-                )),
+                Err(e) => changes.refused.push(
+                    Refusal::new(shown, format!("const value compilation failed: {e}"))
+                        .named(name)
+                        .at(new, new.var_location(n, name)),
+                ),
             }
         }
         return;
@@ -3305,9 +3501,11 @@ fn var_default(
                 value: Some(value),
                 init,
             }),
-            Err(e) => changes.refused.push(format!(
-                "{shown}: const {name}: value compilation failed: {e}"
-            )),
+            Err(e) => changes.refused.push(
+                Refusal::new(shown, format!("const value compilation failed: {e}"))
+                    .named(name)
+                    .at(new, new.var_location(n, name)),
+            ),
         }
         return;
     }
@@ -3346,9 +3544,14 @@ fn var_default(
         // A built-in type's original default is unavailable after an override.
         // Its parent's value can differ (mob layer 4, movable layer 3).
         if !in_var_table && reparent::builtin_base(n).as_deref() == Some(n.get().path.as_str()) {
-            changes.refused.push(format!(
-                "{shown}: {name}: cannot restore this built-in type's original default; rebuild required"
-            ));
+            changes.refused.push(
+                Refusal::new(
+                    shown,
+                    "cannot restore this built-in type's original default",
+                )
+                .named(name)
+                .at(new, new.var_location(n, name)),
+            );
             return;
         }
         // Existing instances read the var table, as with ordinary vars.
@@ -3400,9 +3603,11 @@ fn var_default(
     }
     if builtin {
         if !BUILTIN_VARS.contains(&name) {
-            changes.refused.push(format!(
-                "{shown}: {name}: changing this built-in default requires a rebuild"
-            ));
+            changes.refused.push(
+                Refusal::new(shown, "unsupported built-in default change")
+                    .named(name)
+                    .at(new, new.var_location(n, name)),
+            );
             return;
         }
         changes.warnings.push(format!(
