@@ -1754,3 +1754,33 @@ fn a_proc_of_the_world_s_never_calls_by_name() {
     assert!(code.contains("dynamic_proc(\"known\")"), "{code}");
     assert!(code.contains("dynamic_proc(\"unknown\")"), "{code}");
 }
+
+/// The DbgLines of `f` compiled from `src`.
+fn dbg_lines(src: &str) -> Vec<String> {
+    compile_with_lines(src)
+        .into_iter()
+        .filter(|l| l.starts_with("DbgLine"))
+        .collect()
+}
+
+#[test]
+fn the_first_line_is_the_first_with_anything_on_it() {
+    // First-line rules checked against DreamMaker 515.1637 and 516.1688.
+    let empty_macro = "#define EMPTY\n/proc/f()\n\tEMPTY\n\tvar/x\n\treturn x\n";
+    assert_eq!(
+        dbg_lines(empty_macro),
+        ["DbgLine 3", "DbgLine 4", "DbgLine 5"]
+    );
+    let semicolon = "/proc/f()\n\t;\n\treturn 1\n";
+    assert_eq!(dbg_lines(semicolon), ["DbgLine 2", "DbgLine 3"]);
+    let doc_comment = "/proc/f()\n\t/// doc\n\treturn 1\n";
+    assert_eq!(dbg_lines(doc_comment), ["DbgLine 3"]);
+    // A multiline macro call starts at its name.
+    let call_macro = "#define CALL(a, b) world.log << list(a, b)\n/proc/f()\n\tCALL(1,\n\t\t2)\n";
+    assert_eq!(dbg_lines(call_macro), ["DbgLine 3", "DbgLine 4"]);
+    // An empty body uses the next nonempty line.
+    let empty = "/proc/f()\n\t// nothing\n\n/proc/g()\n";
+    assert_eq!(dbg_lines(empty), ["DbgLine 4"]);
+    let before_a_type = "/proc/f()\n\n/datum\n\tvar/v\n";
+    assert_eq!(dbg_lines(before_a_type), ["DbgLine 3"]);
+}

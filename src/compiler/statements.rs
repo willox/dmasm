@@ -14,10 +14,14 @@ pub(super) fn emit_proc_body(
     source: &ProcSource,
     code: &Block,
 ) -> Result<(), CompileError> {
-    // The line DreamMaker gives code that precedes the first statement
-    let first_line = code
-        .first()
-        .map(|stmt| stmt.location.line)
+    // DreamMaker's first debug line is the first nonempty line after the
+    // header, including an empty macro expansion or `;`. An empty body can
+    // use the next proc's header.
+    let first_statement = code.first().map(|stmt| stmt.location.line);
+    let first_line = source
+        .value
+        .first_line
+        .or(first_statement)
         .unwrap_or(source.value.location.line + 1);
 
     compiler.emit_ins(Instruction::DbgLine(first_line));
@@ -77,7 +81,11 @@ pub(super) fn emit_proc_body(
     }
 
     let has_defaults = source.value.parameters.iter().any(|p| p.default.is_some());
-    emit_block_inner(compiler, code, !has_defaults)
+    emit_block_inner(
+        compiler,
+        code,
+        !has_defaults && first_statement == Some(first_line),
+    )
 }
 
 fn emit_block(compiler: &mut Compiler, block: &Block) -> Result<(), CompileError> {
