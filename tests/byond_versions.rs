@@ -172,6 +172,20 @@ fn tan_folds_as_each_build_does() {
     assert_eq!(ret(B516_1688, "tan(1e10)"), "PushVal -5.671282");
 }
 
+/// Deferred constant colours retain folded alpha 0 for null or text alpha
+/// on 515.1637, rather than runtime rgb()'s omitted alpha.
+#[test]
+fn a_colour_left_to_run_keeps_a_null_alpha_as_0() {
+    let code = ret(B515_1637, "rgb(10, 20, 50, null, COLORSPACE_HSL)");
+    assert!(code.ends_with("PushInt 0\nPushInt 2\nRgbEx"), "{}", code);
+    let code = ret(B515_1637, "rgb(a, 20, 50, null, COLORSPACE_HSL)");
+    assert!(code.ends_with("GetVar null\nPushInt 2\nRgbEx"), "{}", code);
+    assert_eq!(
+        ret(B516_1688, "rgb(10, 20, 50, null, COLORSPACE_HSL)"),
+        "PushVal \"#996f6600\""
+    );
+}
+
 /// `\ref`, `\icon` and `\roman` belong to the next embedded value, wherever
 /// in the text they're written.
 #[test]
