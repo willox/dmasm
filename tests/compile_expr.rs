@@ -485,14 +485,16 @@ fn a_constant_nan_test_is_its_result_on_builds_that_fold_it_cleanly() {
 
 #[test]
 fn a_parser_warning_does_not_refuse_an_expression() {
-    // Integer precision warnings must not reject otherwise valid debugger code.
+    // Integer precision warnings must not reject valid debugger expressions.
+    // Constant -2147483648 folds as it does in a proc.
     for (code, value) in [
         ("4294967295", 4294967295.0f32),
-        ("-2147483648", 2147483648.0),
+        ("-2147483648", -2147483648.0),
     ] {
         let code = instructions(code, &[]);
         assert!(
-            code.contains(&Instruction::PushVal(dmasm::Value::Number(value))),
+            code.contains(&Instruction::PushVal(dmasm::Value::Number(value)))
+                || code.contains(&Instruction::PushInt(value as i32)),
             "{:?}",
             code
         );
@@ -621,4 +623,27 @@ fn an_assignment_in_parentheses_is_a_methods_argument_not_a_name() {
     assert!(code.contains(&Instruction::CallName(2)), "{:?}", code);
     let code = instructions("o.f(x = y)", &["o", "x", "y"]);
     assert!(code.contains(&Instruction::CallNameArgList), "{:?}", code);
+}
+
+#[test]
+fn an_expression_folds_constants_as_a_proc_does() {
+    // Constant folding must match compiled procs: `~-4` folds to 16777215
+    // but evaluates to 3 at runtime.
+    let code = instructions("~-4", &[]);
+    assert!(
+        code.contains(&Instruction::PushInt(16777215))
+            || code.contains(&Instruction::PushVal(dmasm::Value::Number(16777215.0))),
+        "{:?}",
+        code
+    );
+    // A constant `new T` condition selects a branch without constructing T.
+    let code = instructions("new /datum ? 1 : 2", &[]);
+    assert!(
+        !code.iter().any(|ins| matches!(ins, Instruction::New(_))),
+        "{:?}",
+        code
+    );
+    // Variable operands still run at runtime.
+    let code = instructions("~x", &["x"]);
+    assert!(code.contains(&Instruction::Bnot), "{:?}", code);
 }

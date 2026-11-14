@@ -1053,6 +1053,25 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Push a folded constant. Return false if it is not constant or needs runtime construction.
+    fn emit_folded(&mut self, folded: Option<fold::Constant>) -> bool {
+        match folded {
+            Some(fold::Constant::Number(value)) => self.emit_number(value),
+            Some(fold::Constant::Text(text)) => self.emit_ins(Instruction::PushVal(
+                operands::Value::DMString(DMString(text)),
+            )),
+            Some(fold::Constant::Null) => {
+                self.emit_ins(Instruction::PushVal(operands::Value::Null))
+            }
+            Some(fold::Constant::Path(path)) => {
+                self.emit_ins(Instruction::PushVal(operands::Value::Path(path)))
+            }
+            // `constant` requires runtime construction.
+            Some(fold::Constant::New) | None => return false,
+        }
+        true
+    }
+
     fn emit_inner_expr(&mut self, expr: Expression) -> Result<EvalKind, CompileError> {
         // (see `regroup_root`)
         let root = std::mem::take(&mut self.regroup_root);
@@ -1103,34 +1122,20 @@ impl<'a> Compiler<'a> {
             {
                 self.other_file = true;
             }
-            match folded {
-                Some(fold::Constant::Number(value)) => {
-                    self.emit_number(value);
-                    return Ok(EvalKind::Stack);
-                }
-                Some(fold::Constant::Text(text)) => {
-                    self.emit_ins(Instruction::PushVal(operands::Value::DMString(DMString(
-                        text,
-                    ))));
-                    return Ok(EvalKind::Stack);
-                }
-                Some(fold::Constant::Null) => {
-                    self.emit_ins(Instruction::PushVal(operands::Value::Null));
-                    return Ok(EvalKind::Stack);
-                }
-                Some(fold::Constant::Path(path)) => {
-                    self.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
-                    return Ok(EvalKind::Stack);
-                }
-                // `constant` requires runtime construction.
-                Some(fold::Constant::New) | None => {}
+            if self.emit_folded(folded) {
+                return Ok(EvalKind::Stack);
+            }
+        } else if !place {
+            // Match DreamMaker's constant folding in debugger expressions too
+            // (`~-4` folds to 16777215).
+            let folded = fold::constant(self, &expr);
+            if self.emit_folded(folded) {
+                return Ok(EvalKind::Stack);
             }
         }
         match expr {
-            // A constant condition picks its branch at compile time
-            Expression::TernaryOp { cond, if_, else_ }
-                if self.proc.is_some() && fold::value(self, &cond).is_some() =>
-            {
+            // Constant conditions select a branch without running it (`new T ? a : b`).
+            Expression::TernaryOp { cond, if_, else_ } if fold::value(self, &cond).is_some() => {
                 let chosen = if fold::value(self, &cond).unwrap().truthy() {
                     if_
                 } else {
