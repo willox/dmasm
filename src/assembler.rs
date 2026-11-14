@@ -458,6 +458,30 @@ mod tests {
     }
 
     #[test]
+    fn is_in_with_a_step_round_trips() {
+        // x in 1 to 10 step 2: the bounds, the step and x, then IsIn 0x0C
+        let bytecode = [
+            crate::Opcode::PushInt.word(),
+            1,
+            crate::Opcode::PushInt.word(),
+            10,
+            crate::Opcode::PushInt.word(),
+            2,
+            crate::Opcode::IsIn.word(),
+            0x0C,
+            crate::Opcode::End.word(),
+        ];
+        let nodes = assert_round_trips(&bytecode);
+        assert!(matches!(
+            &nodes[3],
+            Node::Instruction(
+                Instruction::IsIn(crate::operands::IsInParams::RangeStep),
+                ()
+            )
+        ));
+    }
+
+    #[test]
     fn iter_load_round_trips() {
         let filter = crate::TypeFilter::MOB | crate::TypeFilter::OBJ;
         let bytecode = [crate::Opcode::IterLoad.word(), 1, filter.bits()];

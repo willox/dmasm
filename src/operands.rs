@@ -304,6 +304,9 @@ impl Operand for DMString {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IsInParams {
     Range,
+    /// `x in a to b step c`. DreamMaker emits this, but DreamDaemon always
+    /// returns false and leaves an extra stack value.
+    RangeStep,
     Value,
     /// `x in block(a, b)`.
     BlockCorners,
@@ -320,6 +323,7 @@ impl Operand for IsInParams {
     ) -> Result<(), AssembleError> {
         match self {
             Self::Range => asm.emit(0x0B),
+            Self::RangeStep => asm.emit(0x0C),
             Self::Value => asm.emit(0x05),
             Self::BlockCorners => asm.emit(0x06),
             Self::BlockCoords => asm.emit(0x13),
@@ -335,6 +339,7 @@ impl Operand for IsInParams {
 
         let res = match param {
             0x0B => Self::Range,
+            0x0C => Self::RangeStep,
             0x05 => Self::Value,
             0x06 => Self::BlockCorners,
             0x13 => Self::BlockCoords,
@@ -352,6 +357,7 @@ impl Operand for IsInParams {
     fn serialize(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Range => write!(f, "Range"),
+            Self::RangeStep => write!(f, "RangeStep"),
             Self::Value => write!(f, "Value"),
             Self::BlockCorners => write!(f, "BlockCorners"),
             Self::BlockCoords => write!(f, "BlockCoords"),
