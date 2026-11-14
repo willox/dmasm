@@ -2410,3 +2410,326 @@ fn a_moved_up_proc_that_names_itself_is_compiled_again() {
         reload.nodes
     );
 }
+
+/// Assignments in a global init proc, in order, with source lines.
+fn global_init_sets(changes: &Changes) -> Vec<String> {
+    let init = changes.global_init.as_ref().expect("no global init proc");
+    let mut line = 0;
+    let mut sets = vec![];
+    for node in &init.code.nodes {
+        match node {
+            Node::Instruction(Instruction::DbgLine(at), ()) => line = *at,
+            Node::Instruction(Instruction::SetVar(dmasm::Variable::Global(var)), ()) => {
+                sets.push(format!(
+                    "{}:{} @{line}",
+                    var.scope.as_deref().unwrap_or("?"),
+                    String::from_utf8_lossy(&var.name.0)
+                ))
+            }
+            _ => {}
+        }
+    }
+    sets
+}
+
+/// Omitting initializers must preserve the count of var-table assignments.
+#[test]
+fn global_init_without_some_vars() {
+    let before = "var/a = 5\nvar/b = a * 2\n/proc/f()\n\tvar/static/y = rand(1, 2)\n\treturn y\nvar/c = b + 1\n";
+    let changes = changes_of(
+        "global_init_without",
+        before,
+        &before.replace("var/a = 5", "var/a = 7"),
+    );
+    let mut changes = changes;
+    let init = changes.global_init.take().unwrap();
+    assert_eq!(init.table, 1);
+    changes.global_init = Some(init.without(|var| var.name.0 == b"y" || var.name.0 == b"a"));
+    assert_eq!(global_init_sets(&changes), [":b @2", ":c @6"]);
+    assert_eq!(changes.global_init.as_ref().unwrap().table, 0);
+}
+
+/// Count same-named proc statics to resolve runtime slots from their code.
+#[test]
+fn global_init_counts_a_procs_statics_of_a_name() {
+    let before = "/proc/f()\n\tif (prob(50))\n\t\tvar/static/z = rand(1, 2)\n\t\treturn z\n\telse\n\t\tvar/static/z = rand(3, 4)\n\t\treturn z\n\
+                  /proc/g()\n\tvar/static/y = rand(1, 2)\n\tvar/static/w = 1\n\treturn y + w\n";
+    let changes = changes_of(
+        "global_init_counts",
+        before,
+        &before.replace("rand(1, 2)", "rand(5, 6)"),
+    );
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let counts = &changes.global_init.as_ref().unwrap().proc_statics;
+    assert_eq!(
+        format!("{:?}", counts),
+        r#"{"/proc/f": {"z": 2}, "/proc/g": {"y": 1}}"#
+    );
+}
+
+#[test]
+fn changed_initializers_give_a_rebuilds_global_init_proc() {
+    let before = "var/a = 5\nvar/b = a * 2\n/datum/thing\n/datum/s\n\tvar/static/x = list(1)\n\
+                  var/datum/thing/t = new(1)\n/proc/f()\n\tvar/static/y = rand(1, 2)\n\treturn y\n";
+    let changes = changes_of(
+        "global_init_constant",
+        before,
+        &before.replace("var/a = 5", "var/a = 7"),
+    );
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(
+        global_init_sets(&changes),
+        [
+            ":a @1",
+            ":b @2",
+            "/datum/s:x @5",
+            ":t @6",
+            "proc:/proc/f#0:y @8"
+        ]
+    );
+    // (and the running world keeps its value)
+    assert!(changes
+        .warnings
+        .iter()
+        .any(|w| w.ends_with("a: changed global initializer applies only after a restart")));
+
+    let changes = changes_of(
+        "global_init_new",
+        before,
+        &before.replace("new(1)", "new(2)"),
+    );
+    assert_eq!(
+        global_init_sets(&changes),
+        [":b @2", "/datum/s:x @5", ":t @6", "proc:/proc/f#0:y @8"]
+    );
+    let nodes = &changes.global_init.as_ref().unwrap().code.nodes;
+    let made: Vec<_> = nodes
+        .windows(2)
+        .filter(|pair| matches!(pair[1], Node::Instruction(Instruction::New(_), ())))
+        .map(|pair| &pair[0])
+        .collect();
+    assert_eq!(made, [&Node::Instruction(Instruction::PushInt(2), ())]);
+
+    // A new one among the others, a static of a proc, one now constant
+    let changes = changes_of(
+        "global_init_added",
+        before,
+        &before
+            .replace("var/b = a * 2\n", "var/b = a * 2\nvar/c = b + 1\n")
+            .replace("rand(1, 2)", "rand(3, 4)")
+            .replace("list(1)", "3"),
+    );
+    assert_eq!(
+        global_init_sets(&changes),
+        [
+            "/datum/s:x @6",
+            ":b @2",
+            ":c @3",
+            ":t @7",
+            "proc:/proc/f#0:y @9"
+        ]
+    );
+
+    // A computed initializer that was constant is null until it's worked out
+    let changes = changes_of(
+        "global_init_now_computed",
+        before,
+        &before.replace("var/a = 5", "var/a = rand(5)"),
+    );
+    assert_eq!(
+        global_init_sets(&changes),
+        [
+            ":a @1",
+            ":a @1",
+            ":b @2",
+            "/datum/s:x @5",
+            ":t @6",
+            "proc:/proc/f#0:y @8"
+        ]
+    );
+    assert!(matches!(
+        changes.global_init.as_ref().unwrap().code.nodes[2],
+        Node::Instruction(Instruction::GetVar(dmasm::Variable::Null), ())
+    ));
+
+    // Nothing to give when no initializer changed
+    let changes = changes_of(
+        "global_init_unchanged",
+        before,
+        &before.replace("\treturn y\n", "\treturn y + 1\n"),
+    );
+    assert!(changes.global_init.is_none());
+}
+
+/// Failed initializer compilation warns and retains the build's init proc.
+/// Includes within a file retain their declaration order.
+#[test]
+fn global_init_left_out_with_a_warning() {
+    let changes = changes(
+        "global_init_uncompiled",
+        "var/a = 5\nvar/b = a\n",
+        "var/a = 5\nvar/b = locate()\n",
+    );
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(changes.global_init.is_none());
+    assert!(
+        changes.warnings.iter().any(|w| w
+            .starts_with("(global init): (global): b: initializer compilation failed")
+            && w.ends_with("reboot will use the build's global and static initializers")),
+        "{:?}",
+        changes.warnings
+    );
+
+    // A file included partway through another: its declarations come there
+    let world = World::new(
+        "global_init_after_include",
+        "var/a = 5\n#include \"more.dm\"\nvar/b = a + 1\n",
+    );
+    std::fs::write(world.dir.join("code/more.dm"), "var/c = a + 2\n").unwrap();
+    let old = world.parse();
+    world.write("var/a = 6\n#include \"more.dm\"\nvar/b = a + 1\n");
+    let changes = diff(&old, &world.parse(), None);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(global_init_sets(&changes), [":a @1", ":c @1", ":b @3"]);
+}
+
+/// Global initializers follow include order rather than file-name order.
+#[test]
+fn global_init_in_the_order_files_are_included() {
+    let world = World::new("global_init_two_files", "var/a = 5\nvar/b = c + 1\n");
+    std::fs::write(world.dir.join("code/zz.dm"), "var/c = rand(1, 2)\n").unwrap();
+    std::fs::write(world.dir.join("code/aa.dm"), "var/d = b + c\n").unwrap();
+    std::fs::write(
+        world.dir.join("world.dme"),
+        "#include \"code/zz.dm\"\n#include \"code/code.dm\"\n#include \"code/aa.dm\"\n",
+    )
+    .unwrap();
+    let old = world.parse();
+    world.write("var/a = 6\nvar/b = c + 1\n");
+    let changes = diff(&old, &world.parse(), None);
+    assert_eq!(
+        global_init_sets(&changes),
+        [":a @1", ":c @1", ":b @2", ":d @1"]
+    );
+    assert_eq!(changes.global_init.as_ref().unwrap().table, 1);
+}
+
+/// Ordering rules checked against DreamMaker: declaration order, subtype
+/// entry points, grouped proc statics, overrides, leading `/var/name`
+/// globals and deferred references to declarations not yet visited.
+#[test]
+fn global_init_in_dreammakers_order() {
+    let cases = [
+        (
+            "var/a0 = list(0)\n/proc/f()\n\tvar/static/pf = list(1)\nvar/a1 = list(1)\n/proc/g()\n\tvar/static/pg = list(1)\nvar/a2 = list(1)\n",
+            "a0 pf pg a1 a2",
+        ),
+        (
+            "/datum/x\n\tvar/static/s = list(5)\nvar/a0 = list(0)\n/datum/y/proc/g()\n\tvar/static/p1 = list(1)\nvar/a1 = list(1)\n",
+            "s p1 a0 a1",
+        ),
+        (
+            "/datum/y\n/obj/o\n/datum/x\n\tvar/static/s0 = list(0)\n\tvar/static/s1 = new /datum/y\n\tvar/static/s2 = new /obj/o\n\tvar/static/s3 = new /datum\n\tvar/static/s4 = new /datum/x\n\tvar/static/s5 = new /datum/x/k\n\tvar/static/s6 = list(/datum/y)\n/datum/x/k\nvar/a0 = new /datum/x\nvar/a1 = new /datum\n",
+            "s0 s1 s6 a0 a1 s2 s3 s4 s5",
+        ),
+        (
+            "/datum/x\n\tvar/static/s0 = list(0)\n/datum/x/proc/f()\n\tvar/static/p0 = new /datum/x\n\tvar/static/p1 = new /datum\n\tvar/static/p2 = list(9)\n/datum/z\n\tvar/static/z0 = list(1)\nvar/a0 = list(0)\n",
+            "s0 p2 z0 a0 p0 p1",
+        ),
+        (
+            "var/a0 = list(0)\nvar/a1 = f()\n/datum/x\n\tvar/static/s1 = f()\n\tvar/static/s2 = new /datum\n\tvar/static/s3 = list(3)\n/proc/g()\n\tvar/static/p1 = f()\n\tvar/static/p2 = new /datum\nvar/a2 = new /datum\n/proc/f()\n\treturn 1\nvar/a3 = list(3)\n",
+            "a0 s3 p2 a2 a3 a1 s1 s2 p1",
+        ),
+        (
+            r#"/proc/first()
+var/g0 = list(0)
+var/regex/g1 = regex("a")
+var/list/g2 = list(2)
+var/datum/g3 = list(3)
+var/datum/later/g4 = list(4)
+var/icon/g5 = icon('a.dmi')
+var/g6 = list(6)
+var/obj/g7 = list(7)
+var/g8 = 'a.dmi'
+var/sound/g9 = list(9)
+/proc/f()
+	var/static/regex/s1 = regex("a")
+	var/static/s2 = regex("a")
+	var/static/datum/s3 = list(3)
+/datum/later
+var/datum/later/h4 = list(4)
+var/datum/h3 = list(3)
+"#,
+            "s2 g0 g2 g6 h4 h3 s1 s3 g1 g3 g4 g5 g7 g9",
+        ),
+        (
+            "var/a = list(1)\n/proc/f()\n\tvar/static/s = list(0)\n/var/b = list(2)\nvar/c = list(3)\n/datum/x\n\tvar/static/xs = list(9)\n/var/global/d = list(4)\nvar/global/e = list(5)\n/var/f2 = list(6)\n",
+            "b d f2 a s c xs e",
+        ),
+        (
+            "/datum/s/proc/first()\n/datum/s\n\tvar/static/c = list(1)\n/datum/s/proc/fire()\n\tvar/static/h = list(2)\n",
+            "h c",
+        ),
+        (
+            "/datum/s\n\tvar/static/c = list(1)\n/datum/s/New()\n\tvar/static/n = list(3)\n/datum/s\n\tvar/static/d = list(4)\n/datum/s/proc/late()\n\tvar/static/l = list(5)\n/datum/s\n\tvar/static/e = list(6)\n",
+            "c n d l e",
+        ),
+        (
+            "/datum/b\n/obj/o\n/datum/a\n\tvar/static/s1 = list(/obj/o)\n\tvar/static/s2 = list(/datum/b)\n\tvar/static/s3 = list(/datum/c)\n\tvar/static/s4 = new /obj/o\n\tvar/static/s5 = new /datum/b\n\tvar/static/list/obj/s6 = list(1)\n\tvar/static/list/datum/b/s7 = list(2)\n\tvar/static/list/datum/c/s8 = list(3)\n\tvar/static/obj/s9 = list(4)\n/datum/c\n",
+            "s2 s5 s7 s1 s3 s4 s6 s8 s9",
+        ),
+    ];
+    for (n, (source, order)) in cases.iter().enumerate() {
+        let world = World::new(&format!("global_init_order_{n}"), source);
+        let nodes = world.parse().global_init_proc().unwrap().code.nodes;
+        let set: Vec<String> = nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Instruction(Instruction::SetVar(dmasm::Variable::Global(var)), ()) => {
+                    Some(String::from_utf8_lossy(&var.name.0).into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            set.join(" "),
+            *order,
+            "unexpected initializer order for source:\n{source}"
+        );
+    }
+}
+
+/// Preserve the build's order and place additions after their preceding
+/// var in dmasm's order.
+#[test]
+fn global_init_in_the_builds_order() {
+    let before = "var/a = list(1)\nvar/b = list(2)\nvar/c = list(3)\n";
+    let changes = changes(
+        "global_init_built_order",
+        before,
+        "var/a = list(1)\nvar/x = list(9)\nvar/b = list(2)\nvar/c = list(3)\n",
+    );
+    let init = changes.global_init.as_ref().expect("no global init proc");
+    let order = |built: &[&str]| {
+        let nodes = init.in_built_order(|var, _| {
+            built
+                .iter()
+                .position(|name| name.as_bytes() == var.name.0.as_slice())
+        });
+        let mut sets = vec![];
+        for node in &nodes {
+            if let Node::Instruction(Instruction::SetVar(dmasm::Variable::Global(var)), ()) = node {
+                sets.push(String::from_utf8_lossy(&var.name.0).into_owned());
+            }
+        }
+        assert!(matches!(
+            nodes.last(),
+            Some(Node::Instruction(Instruction::End, ()))
+        ));
+        sets.join(" ")
+    };
+    assert_eq!(order(&["a", "b", "c"]), "a x b c");
+    // The build's order can differ from source order.
+    assert_eq!(order(&["c", "b", "a"]), "c b a x");
+    assert_eq!(order(&["b", "a", "c"]), "b a x c");
+}

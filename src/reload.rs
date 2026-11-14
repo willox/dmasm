@@ -28,7 +28,9 @@ mod reparent;
 use crate::{ByondVersion, Instruction, Node};
 pub use reparent::{Reparented, ReparentedType};
 
+mod global_init;
 mod resources;
+pub use global_init::GlobalInit;
 
 /// A proc as auxtools' debug server names it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -449,6 +451,9 @@ pub struct Changes {
     /// Changed world and client settings, as (type, var). Warn that they take
     /// effect after restart (see `settings_as_built`).
     pub restart_settings: Vec<(String, String)>,
+    /// Replacement global init proc for rebooted worlds. Running worlds keep
+    /// their global and static values, with a warning.
+    pub global_init: Option<GlobalInit>,
 }
 
 impl Changes {
@@ -1141,6 +1146,12 @@ impl Snapshot {
         let mut expression = expression.clone();
         if let Expression::Base { term, .. } = &mut expression {
             if let Term::NewImplicit { args } = &term.elem {
+                // (a list of a type is a list)
+                let declared = if declared.trim_start_matches('/').starts_with("list/") {
+                    "list"
+                } else {
+                    declared
+                };
                 let mut parts = declared.split('/').filter(|part| !part.is_empty());
                 let Some(first) = parts.next() else {
                     return Err("implicit new requires a declared variable type".to_owned());
@@ -1626,6 +1637,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     const_users(old, new, &realigned, &mut changes);
     reparent::reparented_users(old, new, &realigned, &mut changes);
     moved::moved_users(old, new, &realigned, &mut changes);
+    global_init::compare(old, new, &mut changes);
     changes.collect_warnings();
     changes
 }

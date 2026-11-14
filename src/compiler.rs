@@ -13,7 +13,7 @@ mod procs;
 mod statements;
 
 pub use procs::{compile_proc, CompiledProc, ProcSource, StaticLocal};
-pub(crate) use procs::{compile_proc_as, new_tree};
+pub(crate) use procs::{compile_proc_as, labels_mut, new_tree, proc_path};
 
 mod args;
 mod binary_ops;
