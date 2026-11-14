@@ -855,6 +855,7 @@ fn new_vars_and_their_overrides() {
         flags,
         value,
         init: None,
+        moved_from: vec![],
     };
     assert_eq!(
         vars,
@@ -2322,4 +2323,90 @@ fn the_client_script_is_left_to_the_launcher() {
     assert_eq!(world.parse().client_script(), Ok(None));
     world.write("var/x = 1\n/client/script = \"<style>[x] {}</style>\"\n");
     assert!(world.parse().client_script().is_err());
+}
+
+#[test]
+fn a_declaration_moved_up_to_a_parent_is_taken() {
+    let before = "/datum/hud\n/datum/hud/human\n\tvar/tmp/list/sue = list()\n/datum/hud/robot\n\tvar/list/sue = list(1)\n/datum/open\n/datum/open/river/proc/upd()\n\treturn 1\n";
+    let after = "/datum/hud\n\tvar/list/sue = null\n/datum/hud/human\n/datum/hud/robot\n\tsue = list(1)\n/datum/open/proc/upd()\n\treturn 0\n/datum/open/river/upd()\n\treturn ..() + 1\n";
+    let changes = changes("moved-up", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    // The parent's declaration is new; the subtypes keep theirs
+    assert_eq!(changes.new_vars.len(), 1, "{:?}", changes.new_vars);
+    assert_eq!(changes.new_vars[0].type_path, "/datum/hud");
+    let mut moved_from = changes.new_vars[0].moved_from.clone();
+    moved_from.sort();
+    assert_eq!(moved_from, ["/datum/hud/human", "/datum/hud/robot"]);
+    // The retained tmp var takes the ancestor's new declaration flags.
+    let redeclared: Vec<&str> = changes
+        .redeclared
+        .iter()
+        .map(|r| r.type_path.as_str())
+        .collect();
+    assert_eq!(redeclared, ["/datum/hud/human"]);
+    assert!(
+        changes
+            .warnings
+            .iter()
+            .all(|w| !w.contains("removed from source")),
+        "{:?}",
+        changes.warnings
+    );
+    // The river's proc overrides the new one
+    assert_eq!(changes.new_procs.len(), 1);
+    assert_eq!(changes.new_procs[0].type_path, "/datum/open");
+    assert!(changes
+        .reloads
+        .iter()
+        .any(|r| r.proc.path == "/datum/open/river/upd"));
+
+    // Static slots cannot be retained separately from the ancestor's.
+    let refused = refusal(
+        "moved-up-static",
+        "/datum/a\n/datum/a/b\n\tvar/static/s = 1\n",
+        "/datum/a\n\tvar/static/s = 1\n/datum/a/b\n",
+    );
+    assert!(refused.contains("as a static or const var"), "{}", refused);
+    // A formerly static var can move when the new declaration is nonstatic.
+    let unstatic = changes_of(
+        "moved-up-unstatic",
+        "/datum/a\n/datum/a/b\n\tvar/static/s = 1\n",
+        "/datum/a\n\tvar/s = 1\n/datum/a/b\n",
+    );
+    assert!(unstatic.refused.is_empty(), "{:?}", unstatic.refused);
+    assert_eq!(unstatic.redeclared.len(), 1, "{:?}", unstatic.redeclared);
+    assert_eq!(
+        (
+            unstatic.redeclared[0].type_path.as_str(),
+            unstatic.redeclared[0].flags
+        ),
+        ("/datum/a/b", 0)
+    );
+    // Moving a proc declaration must not change it into a verb.
+    let refused = refusal(
+        "moved-up-verb",
+        "/mob/a\n/mob/a/b/proc/v()\n\treturn 1\n",
+        "/mob/a/verb/v()\n\treturn 0\n/mob/a/b/v()\n\treturn 1\n",
+    );
+    assert!(refused.contains("proc declaration kind"), "{}", refused);
+}
+
+#[test]
+fn a_moved_up_proc_that_names_itself_is_compiled_again() {
+    // `__PROC__` names an override without `/proc`
+    let before = "/datum/a\n/datum/a/b/proc/f()\n\treturn __PROC__\n";
+    let after = "/datum/a/proc/f()\n\treturn 0\n/datum/a/b/f()\n\treturn __PROC__\n";
+    let changes = changes("moved-up-proc-name", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(changes.moved_procs, ["/datum/a/b/f"]);
+    let reload = changes
+        .reloads
+        .iter()
+        .find(|r| r.proc.path == "/datum/a/b/f")
+        .expect("moved proc was not recompiled");
+    assert!(
+        format!("{:?}", reload.nodes).contains("/datum/a/b/f\""),
+        "{:?}",
+        reload.nodes
+    );
 }

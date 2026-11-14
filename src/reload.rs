@@ -21,6 +21,8 @@ use dreammaker::{Context, FileId, Severity};
 
 use crate::compiler::{compile_proc, CompiledProc, ProcSource};
 
+#[path = "reload_moved.rs"]
+mod moved;
 #[path = "reload_reparent.rs"]
 mod reparent;
 use crate::{ByondVersion, Instruction, Node};
@@ -372,6 +374,10 @@ pub struct NewVar {
     /// Computed initializer for a global or static variable; evaluate once
     /// and use null as the placeholder `value`.
     pub init: Option<Box<ProcReload>>,
+    /// Subtypes whose var declaration moved to this ancestor. They and their
+    /// descendants retain their runtime declaration; any other redeclaration
+    /// is a duplicate.
+    pub moved_from: Vec<String>,
 }
 
 /// Variable declaration changes to static/global, const or tmp flags.
@@ -432,6 +438,9 @@ pub struct Changes {
     pub init_procs: Vec<InitProc>,
     /// Parent changes, parents first, applied after new types and before other changes.
     pub reparented: Vec<Reparented>,
+    /// Procs whose declarations moved to an ancestor (`/type/name`). Definitions
+    /// whose compiled code changes, such as `__PROC__`, are also in `reloads`.
+    pub moved_procs: Vec<String>,
     pub line_moves: Vec<LineMove>,
     /// Runtime state retained by reload and compiler compatibility warnings.
     pub warnings: Vec<String>,
@@ -1616,6 +1625,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
 
     const_users(old, new, &realigned, &mut changes);
     reparent::reparented_users(old, new, &realigned, &mut changes);
+    moved::moved_users(old, new, &realigned, &mut changes);
     changes.collect_warnings();
     changes
 }
@@ -2650,8 +2660,14 @@ fn compare_types(
                 continue;
             }
             match ov.get(name) {
+                Some(old_var) if moved::var_moved_up(n, name.as_str(), old_var, Some(var)) => {
+                    moved::var_moved(old, new, n, name.as_str(), old_var, Some(var), changes);
+                }
                 None if var.declaration.is_some() => {
                     if new_var(new, n, name.as_str(), var, o.is_none(), changes) {
+                        if let Some(added) = changes.new_vars.last_mut() {
+                            added.moved_from = moved::moved_from(old, n, name.as_str());
+                        }
                         var_default(old, new, path, name.as_str(), true, changes);
                     }
                 }
@@ -2715,7 +2731,9 @@ fn compare_types(
             }
         }
         for (name, var) in ov.iter().filter(|(name, _)| !nv.contains_key(*name)) {
-            if var.declaration.is_some() {
+            if moved::var_moved_up(n, name.as_str(), var, None) {
+                moved::var_moved(old, new, n, name.as_str(), var, None, changes);
+            } else if var.declaration.is_some() {
                 changes.warnings.push(format!(
                     "{shown}: var {name} was removed from source but retained in the running world"
                 ));
@@ -2789,9 +2807,13 @@ fn compare_types(
                     .map(|d| (d.kind, d.flags))
             };
             if declaration(op.get(name)) != declaration(Some(proc)) {
-                changes.refused.push(format!(
-                    "{path}: proc declaration kind or flags changed; rebuild required"
-                ));
+                if moved::proc_moved_up(n, name.as_str(), op.get(name), proc) {
+                    changes.moved_procs.push(path.clone());
+                } else {
+                    changes.refused.push(format!(
+                        "{path}: proc declaration kind or flags changed; rebuild required"
+                    ));
+                }
             }
         }
         for name in op.keys().filter(|name| !np.contains_key(*name)) {
@@ -2886,6 +2908,7 @@ fn new_var(
         flags: byond_flags(flags, n.is_root()),
         value,
         init,
+        moved_from: vec![],
     });
     true
 }
