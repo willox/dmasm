@@ -7,8 +7,8 @@ use dreammaker::objtree::TypeRef;
 use dreammaker::FileId;
 
 use super::{
-    default_value, inits, is_builtin, Changes, ConstValue, InitProc, ProcKey, ProcReload, Snapshot,
-    VarDefault, BUILTIN_VARS,
+    default_value, inits, is_builtin, Changes, ConstValue, InitProc, ProcKey, ProcReload, Refusal,
+    Snapshot, VarDefault, BUILTIN_VARS,
 };
 
 /// Code and defaults referencing a resource file.
@@ -135,7 +135,7 @@ impl Snapshot {
                     proc: key.clone(),
                     ..reload
                 }),
-                Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+                Err(e) => changes.refused.push(self.uncompiled(key, &e)),
             }
         }
 
@@ -164,10 +164,13 @@ impl Snapshot {
                     type_path: ty.get().path.clone(),
                     code: Some(code),
                 }),
-                Err(e) => changes.refused.push(format!(
-                    "{}: initializer compilation failed: {e}",
-                    ty.get().path
-                )),
+                Err(e) => changes.refused.push(
+                    Refusal::new(
+                        ty.get().path.clone(),
+                        format!("initializer compilation failed: {e}"),
+                    )
+                    .at(self, self.type_location(ty)),
+                ),
             }
         }
         changes.collect_warnings();

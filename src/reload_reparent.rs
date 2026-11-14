@@ -103,16 +103,31 @@ fn record_name(t: TypeRef) -> (ConstValue, ConstValue) {
 
 /// Validate a parent change and collect the subtree's own declarations.
 /// Refuse invalid inheritance or changes unsupported by the running world.
-pub(super) fn reparent(old: &Snapshot, o: TypeRef, n: TypeRef, changes: &mut Changes) {
+pub(super) fn reparent(
+    old: &Snapshot,
+    new: &Snapshot,
+    o: TypeRef,
+    n: TypeRef,
+    changes: &mut Changes,
+) {
     let path = n.get().path.clone();
+    // Use the explicit parent_type assignment when present, otherwise the type path.
+    let at = n
+        .get()
+        .vars
+        .get("parent_type")
+        .map(|v| v.value.location)
+        .filter(|l| new.source_line(*l).is_some())
+        .unwrap_or_else(|| new.type_location(n));
     let Some(parent) = n.parent_type().filter(|p| !p.is_root()) else {
-        changes.refused.push(format!(
-            "{path}: parent type changed to the root; rebuild required"
-        ));
+        changes
+            .refused
+            .push(Refusal::new(path, "cannot change a parent type to the root").at(new, at));
         return;
     };
     let parent_path = parent.get().path.clone();
-    let refusal = |why: String| format!("{path}: parent type changed: {why}; rebuild required");
+    let refusal =
+        |why: String| Refusal::new(path.clone(), format!("parent type changed: {why}")).at(new, at);
     let new_parent = changes.new_types.iter().any(|t| t.path == parent_path);
     let mut refuse = |why: String| changes.refused.push(refusal(why));
     // Built-in parents cannot change (`/client` can declare `/datum`).
@@ -266,7 +281,7 @@ pub(super) fn reparented_users(
                 proc: old_key,
                 ..reload
             }),
-            Err(e) => changes.refused.push(format!("{key}: doesn't compile: {e}")),
+            Err(e) => changes.refused.push(new.uncompiled(key, &e)),
         }
     }
     changes
