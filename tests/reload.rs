@@ -1883,3 +1883,36 @@ fn an_error_mended_by_reading_its_file_again_is_gone() {
     let changes = diff(&old, &world.parse(), None);
     assert!(changes.refused.is_empty(), "{:?}", changes.refused);
 }
+
+#[test]
+fn a_new_type_doesnt_keep_the_init_proc_its_parent_loses() {
+    // The runtime ancestor still has an init proc for `l`. A new subtype
+    // must not inherit it after `l` becomes static, or each instance would
+    // reset the static to list(1).
+    let before = "/datum/a\n\tvar/list/l = list(1)\n/datum/a/b\n";
+    let after = "/datum/a\n\tvar/static/list/l = list(1)\n/datum/a/b\n/datum/a/b/c\n";
+    let reloaded = changes("new-type-init", before, after);
+    assert!(reloaded.refused.is_empty(), "{:?}", reloaded.refused);
+    let mut inits: Vec<(String, bool)> = reloaded
+        .init_procs
+        .iter()
+        .map(|i| (i.type_path.clone(), i.code.is_some()))
+        .collect();
+    inits.sort();
+    assert_eq!(
+        inits,
+        [
+            ("/datum/a".to_owned(), false),
+            ("/datum/a/b".to_owned(), false),
+            ("/datum/a/b/c".to_owned(), false),
+        ]
+    );
+
+    // No init proc is needed when none of the ancestors had one.
+    let fresh = changes(
+        "new-type-no-init",
+        "/datum/a\n\tvar/x = 1\n",
+        "/datum/a\n\tvar/x = 1\n/datum/a/b\n",
+    );
+    assert!(fresh.init_procs.is_empty(), "{:?}", fresh.init_procs);
+}

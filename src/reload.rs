@@ -2194,10 +2194,20 @@ fn compare_inits(old: &Snapshot, new: &Snapshot, changes: &mut Changes) {
         match old.find_type(&n.get().path) {
             Some(o) if inits(o, &mut old_memo) == new_inits.as_slice() => continue,
             Some(_) => {}
-            // A new type starts with its parent's init proc
+            // A new type initially copies its nearest existing ancestor's runtime
+            // init proc. That proc may still initialize defaults removed in this
+            // reload, so the new type must be checked too.
             None => {
-                let parent = n.parent_type().map(|p| inits(p, &mut new_memo).to_vec());
-                if new_inits.is_empty() && parent.is_none_or(|p| p.is_empty()) {
+                let mut at = n.parent_type();
+                let mut copied = None;
+                while let Some(t) = at {
+                    if let Some(o) = old.find_type(&t.get().path) {
+                        copied = Some(inits(o, &mut old_memo).to_vec());
+                        break;
+                    }
+                    at = t.parent_type();
+                }
+                if new_inits.is_empty() && copied.is_none_or(|c| c.is_empty()) {
                     continue;
                 }
             }
