@@ -1,5 +1,5 @@
 //! Print proc bytecode: `probe_compile FILE TYPE PROC`.
-//! Set `BYOND=515.1647` to select a target build.
+//! Set `BYOND=515.1647` to select a target build, `DEBUG=1` for DbgFile and DbgLine.
 use dmasm::compiler::{compile_proc, ProcSource};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -30,13 +30,17 @@ fn main() {
         .value
         .last()
         .unwrap();
+    let file = ctx
+        .file_path(value.location.file)
+        .to_string_lossy()
+        .replace('\\', "/");
     let source = ProcSource {
         tree: &tree,
         ty,
         name: &a[3],
         value,
-        file: "test.dm",
-        debug_info: false,
+        file: &file,
+        debug_info: std::env::var("DEBUG").is_ok(),
         index: None,
         byond,
         file_names: None,
