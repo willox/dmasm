@@ -126,13 +126,32 @@ pub(super) fn degrees_on_windows(radians: f64) -> f64 {
 /// were not probed.
 pub(super) const LINUX_COLOURS: u32 = 1647;
 
+/// Negative x86 NaN produced by invalid operations.
+pub(super) const DEFAULT_NAN: f64 = f64::from_bits(0xFFF8_0000_0000_0000);
+
 /// Fold sin/cos for the target build. 516 normalizes to [0, 360) and
 /// reduces by quadrants, giving exact axis values (including cos(90) = -0).
 /// 515 converts the original angle directly to radians.
 pub(super) fn sin_cos(byond: ByondVersion, sin: bool, x: f64) -> f64 {
     if !byond.at_least(BYOND_516) {
+        // Use x86's negative NaN for infinity, regardless of the host sin().
+        if x.is_infinite() {
+            return DEFAULT_NAN;
+        }
         let r = x.to_radians();
         return if sin { r.sin() } else { r.cos() };
+    }
+    // 516 removes a negative angle's sign before the operation, then restores
+    // it for sin(). Infinity produces x86's negative NaN; cos() clears the
+    // sign of a NaN input.
+    if !x.is_finite() {
+        let nan = if x.is_nan() { x } else { DEFAULT_NAN };
+        return match (sin, x < 0.0) {
+            (true, true) => -nan,
+            (true, false) => nan,
+            (false, _) if x.is_nan() => nan.abs(),
+            (false, _) => nan,
+        };
     }
     let mut a = x % 360.0;
     if a < 0.0 {

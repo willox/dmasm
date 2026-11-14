@@ -281,12 +281,25 @@ fn math1(name: &str, x: f32, byond: crate::ByondVersion) -> Option<Option<f32>> 
             0.0
         }),
         "sin" | "cos" => Some(super::versions::sin_cos(byond, name == "sin", d)),
-        // (of an infinity or a NaN it's NaN)
+        // Infinity produces the negative x86 NaN. In 516, tan() removes the
+        // angle's sign first, then restores it to the result, so tan(-1.#INF)
+        // is positive NaN. A NaN input remains NaN.
         "tan" => Some(if x.is_finite() {
             super::versions::tan(byond, x) as f64
+        } else if x.is_infinite() {
+            let nan = super::versions::DEFAULT_NAN;
+            if x < 0.0 && byond.at_least(super::versions::BYOND_516) {
+                -nan
+            } else {
+                nan
+            }
         } else {
-            f64::NAN
+            d
         }),
+        // A NaN stays as it is, except that 515 arccos() clears its sign.
+        // Not left to the host's functions: a 32-bit build's give another sign.
+        "arccos" if d.is_nan() && !byond.at_least(super::versions::BYOND_516) => Some(d.abs()),
+        "arcsin" | "arccos" | "arctan" if d.is_nan() => Some(d),
         "arcsin" => (!(d < -1.0 || d > 1.0)).then(|| degrees(d.asin())),
         "arccos" => (!(d < -1.0 || d > 1.0)).then(|| degrees(d.acos())),
         "arctan" => Some(degrees(d.atan())),

@@ -186,6 +186,75 @@ fn a_colour_left_to_run_keeps_a_null_alpha_as_0() {
     );
 }
 
+/// Numeric value pushed by `return EXPR` for this BYOND version.
+#[track_caller]
+fn pushed_number(byond: ByondVersion, expr: &str) -> f32 {
+    let ctx = dreammaker::Context::default();
+    byond.read_as(&ctx);
+    let code = format!("/proc/f(a)\n\treturn {expr}\n");
+    let pp = dreammaker::Preprocessor::from_buffer(&ctx, "test.dm".into(), code);
+    let mut parser = dreammaker::Parser::new(&ctx, pp);
+    parser.enable_procs();
+    let tree = parser.parse_object_tree();
+    let value = tree
+        .root()
+        .get()
+        .procs
+        .get("f")
+        .unwrap()
+        .value
+        .last()
+        .unwrap();
+    let source = ProcSource {
+        tree: &tree,
+        ty: tree.root(),
+        name: "f",
+        value,
+        file: "test.dm",
+        debug_info: false,
+        index: None,
+        byond,
+        file_names: None,
+    };
+    let compiled = compile_proc(&source).unwrap();
+    compiled
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            dmasm::Node::Instruction(dmasm::Instruction::PushVal(dmasm::Value::Number(n)), _) => {
+                Some(*n)
+            }
+            dmasm::Node::Instruction(dmasm::Instruction::PushInt(n), _) => Some(*n as f32),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{}: no number pushed", expr))
+}
+
+/// Match DreamMaker's NaN signs, including 516's negative-angle handling
+/// for sin/tan and sign clearing in 516 cos and 515 arccos.
+#[test]
+fn trig_of_an_infinity_or_a_nan_is_dreammakers_nan() {
+    let negative = |byond, expr: &str| {
+        let n = pushed_number(byond, expr);
+        assert!(n.is_nan(), "{}: unexpected folded result {}", expr, n);
+        n.is_sign_negative()
+    };
+    for byond in [B515_1637, B516_1688] {
+        assert!(negative(byond, "tan(1.#INF)"));
+        assert!(negative(byond, "sin(1.#INF)"));
+        assert!(negative(byond, "cos(-1.#INF)"));
+        assert!(negative(byond, "cos(1.#INF)"));
+        assert!(negative(byond, "tan(1.#INF - 1.#INF)"));
+    }
+    assert!(negative(B515_1637, "tan(-1.#INF)"));
+    assert!(!negative(B516_1688, "tan(-1.#INF)"));
+    assert!(negative(B515_1637, "sin(-1.#INF)"));
+    assert!(!negative(B516_1688, "sin(-1.#INF)"));
+    assert!(!negative(B516_1688, "cos(1.#INF - 1.#INF)"));
+    assert!(!negative(B515_1637, "arccos(1.#INF - 1.#INF)"));
+    assert!(negative(B516_1688, "arccos(1.#INF - 1.#INF)"));
+}
+
 /// `\ref`, `\icon` and `\roman` belong to the next embedded value, wherever
 /// in the text they're written.
 #[test]
