@@ -20,7 +20,11 @@ use dreammaker::preprocessor::DefineHistory;
 use dreammaker::{Context, FileId, Severity};
 
 use crate::compiler::{compile_proc, CompiledProc, ProcSource};
+
+#[path = "reload_reparent.rs"]
+mod reparent;
 use crate::{ByondVersion, Instruction, Node};
+pub use reparent::{Reparented, ReparentedType};
 
 /// A proc as auxtools' debug server names it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -416,6 +420,8 @@ pub struct Changes {
     pub redeclared: Vec<Redeclared>,
     /// Changed computed-default init procs for new instances.
     pub init_procs: Vec<InitProc>,
+    /// Parent changes, parents first, applied after new types and before other changes.
+    pub reparented: Vec<Reparented>,
     pub line_moves: Vec<LineMove>,
     /// Runtime state retained by reload and compiler compatibility warnings.
     pub warnings: Vec<String>,
@@ -469,6 +475,7 @@ impl Changes {
             && self.builtin_defaults.is_empty()
             && self.builtin_inherited.is_empty()
             && self.init_procs.is_empty()
+            && self.reparented.is_empty()
             && self.line_moves.is_empty()
             && self.refused.is_empty()
     }
@@ -1559,6 +1566,7 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     }
 
     const_users(old, new, &realigned, &mut changes);
+    reparent::reparented_users(old, new, &realigned, &mut changes);
     changes.collect_warnings();
     changes
 }
@@ -2575,10 +2583,8 @@ fn compare_types(
         };
 
         let parent = |t: TypeRef| t.parent_type().map(|p| p.get().path.clone());
-        if o.is_some_and(|o| parent(o) != parent(n)) {
-            changes
-                .refused
-                .push(format!("{shown}: parent type changed; rebuild required"));
+        if let Some(o) = o.filter(|o| parent(*o) != parent(n)) {
+            reparent::reparent(old, o, n, changes);
         }
 
         let ov = o.map_or(&no_vars, |o| &o.get().vars);

@@ -1453,11 +1453,17 @@ fn a_changed_default_recompiles_type_scope_users() {
 }
 
 #[test]
-fn a_new_parent_type_is_refused_and_nothing_else() {
+fn a_new_parent_type_is_a_reparent_and_nothing_else() {
     let before = "/datum/a\n/datum/b\n/datum/a/c\n\tvar/x = 1\n";
     let after = "/datum/a\n/datum/b\n/datum/a/c\n\tparent_type = /datum/b\n\tvar/x = 1\n";
     let changes = changes("parent-type", before, after);
-    assert!(!changes.refused.is_empty(), "{:?}", changes);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(changes.reparented.len(), 1, "{:?}", changes.reparented);
+    assert!(
+        changes.var_defaults.is_empty() && changes.builtin_defaults.is_empty(),
+        "{:?}",
+        changes
+    );
     // (parent_type is a built-in const, not a global to set)
     assert!(changes.redeclared.is_empty(), "{:?}", changes.redeclared);
 }
@@ -2071,4 +2077,122 @@ fn built_ins_a_sound_keeps_in_its_var_table_are_var_defaults() {
         "{:?}",
         changes.new_types
     );
+}
+
+#[test]
+fn a_parent_change_comes_with_its_subtree() {
+    let before = "/datum/a\n\tvar/x = 1\n/datum/a/proc/f()\n\treturn 1\n/datum/b\n\tvar/x = 2\n/datum/b/proc/f()\n\treturn 2\n/datum/t\n\tparent_type = /datum/a\n\tvar/own = 1\n\tx = 3\n/datum/t/f()\n\treturn ..()\n/datum/t/s\n\town = 2\n/obj/a\n\tname = \"ay\"\n/obj/b\n/obj/t\n\tparent_type = /obj/a\n\ticon_state = \"t\"\n";
+    let after = before
+        .replace("parent_type = /datum/a", "parent_type = /datum/b")
+        .replace("parent_type = /obj/a", "parent_type = /obj/b");
+    let changes = changes("reparent", before, &after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let shown: Vec<(
+        String,
+        String,
+        Vec<(String, Vec<String>, Vec<String>, Vec<String>, ConstValue)>,
+    )> = changes
+        .reparented
+        .iter()
+        .map(|r| {
+            (
+                r.type_path.clone(),
+                r.parent.clone(),
+                r.types
+                    .iter()
+                    .map(|t| {
+                        (
+                            t.path.clone(),
+                            t.declares.clone(),
+                            t.sets.clone(),
+                            t.builtins.clone(),
+                            t.name.clone(),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        vec![
+            (
+                "/datum/t".to_owned(),
+                "/datum/b".to_owned(),
+                vec![
+                    (
+                        "/datum/t".to_owned(),
+                        s(&["own"]),
+                        s(&["x"]),
+                        s(&[]),
+                        ConstValue::String("t".to_owned())
+                    ),
+                    (
+                        "/datum/t/s".to_owned(),
+                        s(&[]),
+                        s(&["own"]),
+                        s(&[]),
+                        ConstValue::String("s".to_owned())
+                    ),
+                ]
+            ),
+            (
+                "/obj/t".to_owned(),
+                "/obj/b".to_owned(),
+                // No ancestor supplies the name; derive it from the path.
+                vec![(
+                    "/obj/t".to_owned(),
+                    s(&[]),
+                    s(&[]),
+                    s(&["icon_state"]),
+                    ConstValue::String("t".to_owned())
+                )]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn parent_changes_a_reload_refuses() {
+    let base = "/datum/a\n\tvar/x = 1\n/datum/a/proc/f()\n\treturn 1\n/datum/b\n/datum/t\n\tparent_type = /datum/a\n\tx = 2\n/datum/u\n\tparent_type = /datum/a\n\tvar/y = 1\n/datum/u/proc/g()\n\treturn 1\n/datum/b/var/y = 2\n/datum/b/proc/g()\n\treturn 2\n/obj/o\n\tparent_type = /obj\n";
+    let cases = [
+        // overrides a var the new ancestors don't declare
+        (
+            "undeclared",
+            base.replace(
+                "/datum/t\n\tparent_type = /datum/a",
+                "/datum/t\n\tparent_type = /datum/b",
+            ),
+            "undefined var 'x'",
+        ),
+        // declares what the new ancestors declare
+        (
+            "duplicate",
+            base.replace(
+                "/datum/u\n\tparent_type = /datum/a",
+                "/datum/u\n\tparent_type = /datum/b",
+            ),
+            "declares var y",
+        ),
+        // an obj can't become a datum
+        (
+            "kind",
+            base.replace(
+                "/obj/o\n\tparent_type = /obj",
+                "/obj/o\n\tparent_type = /datum/b",
+            ),
+            "would be a /datum instead of a /obj",
+        ),
+    ];
+    for (name, after, why) in cases.iter() {
+        let refused = refusal(name, base, after);
+        assert!(
+            refused.contains(*why),
+            "{}: expected {:?} in {:?}",
+            name,
+            why,
+            refused
+        );
+    }
 }
