@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use dreammaker::{FileId, Location};
 
-use super::{const_value, value_location, var_constant, ConstValue, ProcReload, Snapshot};
+use super::{const_value, value_location, var_constant, ConstValue, ProcReload, Refusal, Snapshot};
 use crate::operands::{DMString, GlobalVar, Label, Variable};
 use crate::{Instruction, Node};
 
@@ -319,6 +319,32 @@ fn differences<'a, 'b>(
         return None;
     }
     Some(table)
+}
+
+/// Defer changed initializers of existing globals and statics. New and
+/// newly static vars receive their values immediately.
+fn changed(new: &Snapshot, before: &[Initializer<'_>], after: &[Initializer<'_>]) -> Vec<Refusal> {
+    let was: HashMap<_, _> = before.iter().map(|i| (i.key(), i)).collect();
+    after
+        .iter()
+        .filter(|init| {
+            was.get(&init.key()).is_some_and(|was| {
+                was.constant != init.constant || was.expression != init.expression
+            })
+        })
+        .map(|init| {
+            let shown = match init.scope.strip_prefix("proc:") {
+                // `proc:/proc/f#1`: the number tells same-named statics apart
+                Some(proc) => proc.rsplit_once('#').map_or(proc, |(path, _)| path),
+                None if init.scope.is_empty() => "(global)",
+                None => &init.scope,
+            };
+            Refusal::new(shown, "changed initializer")
+                .named(init.name.clone())
+                .until(super::Until::Reboot)
+                .at(new, init.location)
+        })
+        .collect()
 }
 
 /// Proc statics indexed by type, proc name and definition index.
@@ -780,6 +806,16 @@ fn normal(path: &Path) -> String {
     parts.join("/").to_ascii_lowercase()
 }
 
+/// Proc static names and initializers in declaration order.
+pub(super) fn static_initializers(code: &[Spanned<Statement>]) -> Vec<(&str, Option<&Expression>)> {
+    let mut found = vec![];
+    static_statements(code, None, &mut found);
+    found
+        .into_iter()
+        .map(|(_, var)| (var.name.as_str(), var.value.as_ref()))
+        .collect()
+}
+
 /// Static declarations in compiler traversal order, with source locations.
 fn static_statements<'a>(
     block: &'a [Spanned<Statement>],
@@ -967,9 +1003,9 @@ where
     Ok((nodes, locals))
 }
 
-/// Replacement global init proc when initializers differ between `old` and
-/// `new`. Call after comparing procs. Compilation or ordering failures
-/// produce a warning and omit the replacement.
+/// Build the replacement global init proc and report deferred initializers.
+/// Call after comparing procs. Compilation or ordering failures produce a
+/// warning and require a rebuild instead of a reboot.
 pub(super) fn compare(old: &Snapshot, new: &Snapshot, changes: &mut super::Changes) {
     // Proc statics change with their code. Inspect unchanged procs only
     // if another initializer changed.
@@ -987,6 +1023,7 @@ pub(super) fn compare(old: &Snapshot, new: &Snapshot, changes: &mut super::Chang
     let Some(table) = differences(&before, &after) else {
         return;
     };
+    let deferred = changed(new, &before, &after);
     let table_vars = table.len();
     // Keep the build's initializers after a reboot if replacement fails.
     let without = |why: String| {
@@ -1009,9 +1046,13 @@ pub(super) fn compare(old: &Snapshot, new: &Snapshot, changes: &mut super::Chang
         Ok(code) => code,
         Err(why) => {
             changes.warnings.push(without(why));
+            changes
+                .deferred
+                .extend(deferred.into_iter().map(|d| d.until(super::Until::Rebuild)));
             return;
         }
     };
+    changes.deferred.extend(deferred);
     changes.global_init = Some(GlobalInit {
         code: ProcReload {
             proc: super::ProcKey {

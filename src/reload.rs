@@ -407,7 +407,19 @@ pub struct InitProc {
     pub code: Option<ProcReload>,
 }
 
+/// Required action to apply a deferred change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Until {
+    Reboot,
+    #[default]
+    Rebuild,
+}
+
 /// Unsupported reload change. Any refusal rejects the whole change set.
+/// [`Changes::deferred`] uses the same form for changes that take effect
+/// later.
 ///
 /// Display as `file:line: path: name: why`, omitting unknown or empty fields.
 /// Alternate formatting (`{:#}`) omits the location for callers displaying it
@@ -428,6 +440,9 @@ pub struct Refusal {
     pub file: Option<String>,
     /// One-based line number in `file`.
     pub line: Option<u32>,
+    /// Required action: refusals need a rebuild; deferred changes may need only a reboot.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub until: Until,
 }
 
 impl Refusal {
@@ -439,7 +454,13 @@ impl Refusal {
             why: why.into(),
             file: None,
             line: None,
+            until: Until::Rebuild,
         }
+    }
+
+    fn until(mut self, until: Until) -> Self {
+        self.until = until;
+        self
     }
 
     /// Associate the refusal with var `name`.
@@ -518,18 +539,23 @@ pub struct Changes {
     pub warnings: Vec<String>,
     /// Unsupported changes. Any entry rejects the whole change set.
     pub refused: Vec<Refusal>,
-    /// Changed world and client settings, as (type, var). Warn that they take
-    /// effect after restart (see `settings_as_built`).
+    /// Changes that need a reboot or rebuild. Callers can hold the change set
+    /// to avoid applying it partially. Existing global and static initializers
+    /// need a reboot if `global_init` compiled, otherwise a rebuild. World and
+    /// client settings stored in the `.dmb` always need a rebuild.
+    pub deferred: Vec<Refusal>,
+    /// Changed world and client settings, as (type, var), also in `deferred`
+    /// (see `settings_as_built`).
     pub restart_settings: Vec<(String, String)>,
     /// Replacement global init proc for rebooted worlds. Running worlds keep
-    /// their global and static values, with a warning.
+    /// their global and static values; see `deferred`.
     pub global_init: Option<GlobalInit>,
 }
 
 impl Changes {
-    /// Suppress restart warnings for settings restored to their built values.
-    /// The diff compares against the last reload, so these changes otherwise
-    /// appear to need a restart.
+    /// Forget changed settings restored to their built values. The diff
+    /// compares against the last reload, so these changes otherwise appear
+    /// to need a rebuild.
     pub fn settings_as_built(&mut self, built: &Snapshot, new: &Snapshot) {
         let value = |s: &Snapshot, path: &str, name: &str| {
             s.find_type(path)
@@ -539,8 +565,11 @@ impl Changes {
         let mut kept = vec![];
         for (path, name) in std::mem::take(&mut self.restart_settings) {
             if value(built, &path, &name) == value(new, &path, &name) {
-                let warning = restart_warning(&path, &name);
-                self.warnings.retain(|w| *w != warning);
+                self.deferred.retain(|d| {
+                    !(d.why == SETTING_CHANGED
+                        && d.path == path
+                        && d.name.as_deref() == Some(&name))
+                });
             } else {
                 kept.push((path, name));
             }
@@ -812,6 +841,16 @@ impl Snapshot {
                 }
                 if settings(old_value.code.as_ref()) != settings(new_value.code.as_ref()) {
                     return Err(format!("{key}: `set`s changed"));
+                }
+                // Compare static initializers through the full diff.
+                fn statics(v: &ProcValue) -> Vec<(&str, Option<&dreammaker::ast::Expression>)> {
+                    v.code
+                        .as_deref()
+                        .map(global_init::static_initializers)
+                        .unwrap_or_default()
+                }
+                if old_value.code != new_value.code && statics(old_value) != statics(new_value) {
+                    return Err(format!("{key}: static initializers changed"));
                 }
                 pairs.push((key, (*old_value).clone(), (*new_value).clone()));
             }
@@ -3451,13 +3490,8 @@ fn var_default(
         return;
     }
     // A new var starts with its value; an existing global keeps the one it
-    // has now
+    // has now. `global_init::compare` reports changed initializers.
     if n.is_root() || flags.is_static() {
-        if !is_new {
-            changes.warnings.push(format!(
-                "{shown}: {name}: changed global initializer applies only after a restart"
-            ));
-        }
         return;
     }
     // Type constants use global slots. Update their values and recompile
@@ -3516,10 +3550,15 @@ fn var_default(
     }
 
     // World settings and some client settings are read at startup from the
-    // world record, so changes need a restart.
+    // world record, so changes need a rebuild.
     if builtin && in_world_record(n, name) {
         if !is_new {
-            changes.warnings.push(restart_warning(path, name));
+            changes.deferred.push(
+                Refusal::new(path, SETTING_CHANGED)
+                    .named(name)
+                    .until(Until::Rebuild)
+                    .at(new, new.var_location(n, name)),
+            );
             changes
                 .restart_settings
                 .push((path.to_owned(), name.to_owned()));
@@ -3631,10 +3670,7 @@ fn var_default(
     });
 }
 
-fn restart_warning(path: &str, name: &str) -> String {
-    let shown = if path.is_empty() { "(global)" } else { path };
-    format!("{shown}: {name}: changed setting applies only after a restart")
-}
+const SETTING_CHANGED: &str = "changed setting";
 
 /// Client vars stored in the world record; the others use the type's
 /// built-in value list.
