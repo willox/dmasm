@@ -1155,6 +1155,10 @@ impl Snapshot {
             docs: Default::default(),
             code: Some(block),
             body_range: None,
+            first_line: None,
+            next_lines: Box::new([]),
+            end_lines: Box::new([]),
+            operator_lines: Box::new([]),
         };
         let file = self.debug_file_name(location.file);
         let source = ProcSource {

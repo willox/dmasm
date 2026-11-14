@@ -1091,7 +1091,7 @@ impl<'a> Compiler<'a> {
                     self.emit_ins(Instruction::PushVal(operands::Value::Path(path)));
                     return Ok(EvalKind::Stack);
                 }
-                // (`constant` leaves it to be made)
+                // `constant` requires runtime construction.
                 Some(fold::Constant::New) | None => {}
             }
         }
@@ -1474,6 +1474,10 @@ pub(crate) fn fold_initializer(
         docs: Default::default(),
         code: Some(Box::new([])),
         body_range: None,
+        first_line: None,
+        next_lines: Box::new([]),
+        end_lines: Box::new([]),
+        operator_lines: Box::new([]),
     };
     let source = procs::ProcSource {
         tree,
