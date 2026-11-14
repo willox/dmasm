@@ -146,6 +146,33 @@ fn files_of_an_included_environment_are_named_as_it_names_them() {
 }
 
 #[test]
+fn a_file_included_earlier_moves_no_defaults() {
+    // An earlier include changes file IDs, not default locations.
+    let world = World::new(
+        "renumbered",
+        "/obj/thing\n\tname = \"thing\"\n\n/proc/a()\n\treturn /obj/thing::name\n",
+    );
+    let old = world.parse();
+    std::fs::write(world.dir.join("code/first.dm"), "/proc/b()\n\treturn 2\n").unwrap();
+    std::fs::write(
+        world.dir.join("world.dme"),
+        "#include \"code/first.dm\"\n#include \"code/code.dm\"\n",
+    )
+    .unwrap();
+    let edited: HashSet<PathBuf> = ["world.dme", "code/first.dm"]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    let changes = diff(&old, &world.parse(), Some(&edited));
+    assert!(
+        changes.defaults_moved.is_empty(),
+        "{:?}",
+        changes.defaults_moved
+    );
+    assert!(reloaded(&changes).is_empty(), "{:?}", reloaded(&changes));
+}
+
+#[test]
 fn procs_below_an_edit_move_lines() {
     let changes = changes(
         "lines",

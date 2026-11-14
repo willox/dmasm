@@ -1332,6 +1332,15 @@ impl Snapshot {
             .is_none_or(|l| l.iter().any(|l| l.contains(text)))
     }
 
+    /// Source location as (file path, line, column), stable across parses.
+    fn place(&self, location: dreammaker::Location) -> (String, u32, u16) {
+        (
+            self.file_name(location.file),
+            location.line,
+            location.column,
+        )
+    }
+
     fn file_name(&self, file: FileId) -> String {
         self.ctx
             .file_path(file)
@@ -2581,8 +2590,11 @@ fn compare_types(
                 Some(old_var) if old_var.value.expression != var.value.expression => {
                     var_default(old, new, path, name.as_str(), false, changes);
                 }
-                // The same default, written somewhere else (see `const_users`)
-                Some(old_var) if old_var.value.location != var.value.location => {
+                // Compare moved defaults by path: inserting an include renumbers
+                // subsequent files without moving their source locations.
+                Some(old_var)
+                    if old.place(old_var.value.location) != new.place(var.value.location) =>
+                {
                     if !changes.defaults_moved.iter().any(|c| c == name.as_str()) {
                         changes.defaults_moved.push(name.to_string());
                     }
