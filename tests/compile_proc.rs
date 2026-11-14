@@ -1790,3 +1790,42 @@ fn a_return_type_records_the_header_after_the_first_line() {
     let src = "/proc/f() as num\n\t// comment\n\treturn 1\n";
     assert_eq!(dbg_lines(src), ["DbgLine 3", "DbgLine 1", "DbgLine 3"]);
 }
+
+#[test]
+fn lines_read_on_are_recorded_as_dreammaker_does() {
+    // Lookahead records checked against DreamMaker 515.1637 and 516.1688.
+    let lines = |src: &str| dbg_lines(&format!("/proc/f(a, b)\n{src}"));
+    // past text with an embedded expression: the next line
+    assert_eq!(
+        lines("\tf(1)\n\tvar/s = \"[a]\"\n\treturn s\n"),
+        [
+            "DbgLine 2",
+            "DbgLine 3",
+            "DbgLine 4",
+            "DbgLine 3",
+            "DbgLine 4"
+        ]
+    );
+    assert_eq!(
+        lines("\tif(a)\n\t\treturn \"[a]\"\n\treturn 1\n"),
+        ["DbgLine 2", "DbgLine 4", "DbgLine 3", "DbgLine 4"]
+    );
+    // the value of `for (k, v in L)`: the loop's body
+    assert_eq!(
+        lines("\tfor(var/k, v in a)\n\t\tf(v)\n"),
+        ["DbgLine 2", "DbgLine 3", "DbgLine 2", "DbgLine 3"]
+    );
+    // where a call with named arguments, a condition or text ends
+    assert_eq!(lines("\tf(1,\n\t\tb = 2)\n"), ["DbgLine 2", "DbgLine 3"]);
+    assert_eq!(
+        lines("\tif(f(1,\n\t\t2))\n\t\tf(3)\n"),
+        ["DbgLine 2", "DbgLine 3", "DbgLine 2", "DbgLine 4"]
+    );
+    assert_eq!(lines("\ta = {\"x\n[a]\ny\"}\n"), ["DbgLine 2", "DbgLine 4"]);
+    // an operator on a later line
+    assert_eq!(lines("\ta = a \\\n\t\t+ 1\n"), ["DbgLine 2", "DbgLine 3"]);
+    assert_eq!(
+        lines("\ta = f(1,\n\t\t2) + 3\n"),
+        ["DbgLine 2", "DbgLine 3", "DbgLine 2"]
+    );
+}

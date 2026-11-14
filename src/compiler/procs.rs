@@ -66,6 +66,13 @@ const STATIC_LOCAL: u32 = 1 << 31;
 pub(super) struct ProcCtx<'a> {
     pub tree: &'a ObjectTree,
     pub ty: TypeRef<'a>,
+    /// Lookahead line after each statement (`ProcValue::next_lines`).
+    pub next_lines: &'a [(dreammaker::Location, u32)],
+    /// Lookahead line for the current statement.
+    pub next_line: Option<u32>,
+    /// `ProcValue::end_lines` and `ProcValue::operator_lines`
+    pub end_lines: &'a [(dreammaker::Location, u32)],
+    pub operator_lines: &'a [(dreammaker::Location, u32)],
     /// Every local slot's name, in allocation order.
     pub locals: Vec<String>,
     /// Each local's declared type path, or "".
@@ -238,6 +245,10 @@ pub(super) fn proc_ctx<'a>(source: &ProcSource<'a>, param_types: Vec<String>) ->
     ProcCtx {
         tree: source.tree,
         ty: source.ty,
+        next_lines: &source.value.next_lines,
+        next_line: None,
+        end_lines: &source.value.end_lines,
+        operator_lines: &source.value.operator_lines,
         locals: vec![],
         local_types: vec![],
         param_types,
