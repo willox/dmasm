@@ -369,13 +369,13 @@ pub(super) fn emit(compiler: &mut Compiler<'_>, term: Term) -> Result<EvalKind, 
                     compiler.emit_ins(Instruction::Pick);
                 }
 
-                // pick(a, b, ...) with constant weights: one random draw against
-                // cumulative thresholds out of 65535
-                _ if compiler.proc.is_some()
-                    && args.iter().all(|(w, _)| {
-                        w.as_ref()
-                            .map_or(true, |w| pick_weight(compiler, w).is_some())
-                    }) =>
+                // Constant weights use one random draw against cumulative thresholds
+                // out of 65535. Use the same strategy in debugger expressions so the
+                // same random state selects the same entry.
+                _ if args.iter().all(|(w, _)| {
+                    w.as_ref()
+                        .map_or(true, |w| pick_weight(compiler, w).is_some())
+                }) =>
                 {
                     let weights: Vec<f32> = args
                         .iter()

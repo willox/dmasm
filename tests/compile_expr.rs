@@ -563,3 +563,30 @@ fn a_modified_type_is_refused_in_debugger_code() {
         );
     }
 }
+
+#[test]
+fn pick_draws_as_a_procs_pick_does() {
+    // Match the proc compiler's RNG use for constant weights.
+    let code = instructions("pick(1, 2, x)", &["x"]);
+    assert!(
+        code.iter()
+            .any(|ins| matches!(ins, Instruction::PickSwitch(_))),
+        "{:?}",
+        code
+    );
+    let code = instructions("pick(prob(10); 1, 2)", &[]);
+    assert!(
+        code.iter()
+            .any(|ins| matches!(ins, Instruction::PickSwitch(_))),
+        "{:?}",
+        code
+    );
+    // Nonconstant weights use weighted draws.
+    let code = instructions("pick(x; 1, 2)", &["x"]);
+    assert!(
+        code.iter()
+            .any(|ins| matches!(ins, Instruction::PickProb(_))),
+        "{:?}",
+        code
+    );
+}
