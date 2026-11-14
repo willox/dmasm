@@ -26,6 +26,8 @@ mod reparent;
 use crate::{ByondVersion, Instruction, Node};
 pub use reparent::{Reparented, ReparentedType};
 
+mod resources;
+
 /// A proc as auxtools' debug server names it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -524,6 +526,8 @@ pub struct Snapshot {
     mended: HashSet<FileId>,
     /// Last `.dmf` included by the preprocessor: the world's skin.
     skin: Option<PathBuf>,
+    /// Lazy resource-user index (see `resource_users`).
+    resource_index: std::sync::OnceLock<resources::Index>,
 }
 
 /// Incremental changes from reparsing one file (see `Snapshot::reload_file`).
@@ -798,6 +802,7 @@ impl Snapshot {
         self.scope_names.insert(reload.file, reload.scope_names);
         // This successful reparse preserved the definitions, so the old error hid no code.
         self.mended.insert(reload.file);
+        self.resource_index = Default::default();
     }
 
     /// Run `f` against the original parse, excluding incremental replacements.
@@ -812,6 +817,7 @@ impl Snapshot {
     pub fn clear_patches(&mut self) {
         self.patched.clear();
         self.mended.clear();
+        self.resource_index = Default::default();
     }
 
     /// What `file` defines: vars, proc declarations and definitions
@@ -883,6 +889,7 @@ impl Snapshot {
             folded: Default::default(),
             mended: Default::default(),
             skin: None,
+            resource_index: Default::default(),
         }
     }
 

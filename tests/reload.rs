@@ -2218,3 +2218,63 @@ fn the_skin_is_the_last_interface_file_included() {
         .iter()
         .any(|file| file.extension() == Some("dmf".as_ref())));
 }
+
+#[test]
+fn a_resource_file_names_the_code_and_defaults_that_use_it() {
+    let world = World::new(
+        "resource-users",
+        "obj/lamp\n\
+         \ticon = 'icons/lamp.dmi'\n\
+         obj/lamp/red\n\
+         obj/lamp/blue\n\
+         \ticon = 'other.dmi'\n\
+         datum/holder\n\
+         \tvar/sound_file = 'beep.ogg'\n\
+         \tvar/list/files = list('icons/lamp.dmi')\n\
+         datum/holder/sub\n\
+         /proc/states()\n\
+         \treturn icon_states('icons/lamp.dmi')\n\
+         /proc/play()\n\
+         \tworld << sound('beep.ogg')\n\
+         /proc/unrelated()\n\
+         \treturn 1\n",
+    );
+    let snapshot = world.parse();
+
+    // Names match as DreamMaker resolves them, in any case
+    let lamp = snapshot.resource_users(&["icons\\LAMP.dmi".to_owned()]);
+    assert!(lamp.refused.is_empty(), "{:?}", lamp.refused);
+    assert_eq!(reloaded(&lamp), vec![key("/states", 0)]);
+    assert_eq!(
+        lamp.builtin_defaults.len(),
+        1,
+        "{:?}",
+        lamp.builtin_defaults
+    );
+    assert_eq!(lamp.builtin_defaults[0].var, "icon");
+    assert_eq!(
+        lamp.builtin_defaults[0].value,
+        ConstValue::Resource("icons/lamp.dmi".to_owned())
+    );
+    let mut types = lamp.builtin_defaults[0].types.clone();
+    types.sort();
+    assert_eq!(types, vec!["/obj/lamp", "/obj/lamp/red"]);
+    let mut inits: Vec<&str> = lamp
+        .init_procs
+        .iter()
+        .map(|i| i.type_path.as_str())
+        .collect();
+    inits.sort();
+    assert_eq!(inits, vec!["/datum/holder", "/datum/holder/sub"]);
+    assert!(lamp.init_procs.iter().all(|i| i.code.is_some()));
+
+    let beep = snapshot.resource_users(&["beep.ogg".to_owned()]);
+    assert_eq!(reloaded(&beep), vec![key("/play", 0)]);
+    assert_eq!(beep.var_defaults.len(), 1, "{:?}", beep.var_defaults);
+    assert_eq!(beep.var_defaults[0].var, "sound_file");
+    assert!(beep.builtin_defaults.is_empty() && beep.init_procs.is_empty());
+
+    assert!(snapshot
+        .resource_users(&["missing.dmi".to_owned()])
+        .is_empty());
+}
