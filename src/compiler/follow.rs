@@ -273,7 +273,8 @@ pub(super) fn emit_typed<'a>(
                         compiler.emit_ins(Instruction::PushVal(crate::Value::DMString(DMString(
                             ident.as_bytes().to_vec(),
                         ))));
-                        match args::emit(compiler, args::ArgsContext::List, args.into_vec())? {
+                        // Parenthesized assignments are positional arguments, not named ones.
+                        match args::emit(compiler, args::ArgsContext::Proc, args.into_vec())? {
                             args::ArgsResult::Normal => {
                                 compiler.emit_ins(Instruction::CallName(arg_count))
                             }

@@ -613,3 +613,12 @@ fn a_unary_operator_applies_to_a_safe_chain_that_stops() {
         assert!(landing < applied, "{}: {:?}", code, nodes);
     }
 }
+
+#[test]
+fn an_assignment_in_parentheses_is_a_methods_argument_not_a_name() {
+    // Parenthesized assignments are positional; unparenthesized ones name arguments.
+    let code = instructions("o.f((x = y), 5)", &["o", "x", "y"]);
+    assert!(code.contains(&Instruction::CallName(2)), "{:?}", code);
+    let code = instructions("o.f(x = y)", &["o", "x", "y"]);
+    assert!(code.contains(&Instruction::CallNameArgList), "{:?}", code);
+}
