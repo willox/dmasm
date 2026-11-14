@@ -1973,3 +1973,59 @@ fn a_built_in_a_type_stops_setting_comes_from_its_parent() {
         ]
     );
 }
+
+#[test]
+fn a_setting_back_as_built_waits_for_nothing() {
+    let world = World::new("settings-back", "/world\n\tfps = 10\n");
+    let built = world.parse();
+    world.write("/world\n\tfps = 20\n");
+    let changed = world.parse();
+    let edited: HashSet<PathBuf> = vec![PathBuf::from("code/code.dm")].into_iter().collect();
+    let mut changes = diff(&built, &changed, Some(&edited));
+    changes.settings_as_built(&built, &changed);
+    assert_eq!(
+        changes.warnings,
+        ["/world: fps: changed setting applies only after a restart"]
+    );
+    // Saved back as built: the world has that value already
+    world.write("/world\n\tfps = 10\n");
+    let back = world.parse();
+    let mut changes = diff(&changed, &back, Some(&edited));
+    assert_eq!(
+        changes.restart_settings,
+        [("/world".to_owned(), "fps".to_owned())]
+    );
+    changes.settings_as_built(&built, &back);
+    assert!(changes.warnings.is_empty(), "{:?}", changes.warnings);
+    assert!(changes.restart_settings.is_empty());
+}
+
+#[test]
+fn world_and_client_settings_apply_after_a_restart() {
+    let before = "/world\n\tfps = 10\n\tname = \"a\"\n/client\n\tcontrol_freak = 0\n\tdir = 1\n";
+    let after = "/world\n\tfps = 20\n\tname = \"b\"\n\ticon_size = 64\n/client\n\tcontrol_freak = 1\n\tdir = 4\n";
+    let changes = changes("world-settings", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(
+        changes.builtin_defaults.is_empty(),
+        "{:?}",
+        changes.builtin_defaults
+    );
+    let mut warned: Vec<&str> = changes
+        .warnings
+        .iter()
+        .filter(|w| w.ends_with("changed setting applies only after a restart"))
+        .map(|w| w.as_str())
+        .collect();
+    warned.sort();
+    assert_eq!(
+        warned,
+        [
+            "/client: control_freak: changed setting applies only after a restart",
+            "/client: dir: changed setting applies only after a restart",
+            "/world: fps: changed setting applies only after a restart",
+            "/world: icon_size: changed setting applies only after a restart",
+            "/world: name: changed setting applies only after a restart",
+        ]
+    );
+}

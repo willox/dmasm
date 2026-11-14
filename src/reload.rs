@@ -421,9 +421,33 @@ pub struct Changes {
     pub warnings: Vec<String>,
     /// Rejection reasons. Any entry requires rejecting the entire change set.
     pub refused: Vec<String>,
+    /// Changed world and client settings, as (type, var). Warn that they take
+    /// effect after restart (see `settings_as_built`).
+    pub restart_settings: Vec<(String, String)>,
 }
 
 impl Changes {
+    /// Suppress restart warnings for settings restored to their built values.
+    /// The diff compares against the last reload, so these changes otherwise
+    /// appear to need a restart.
+    pub fn settings_as_built(&mut self, built: &Snapshot, new: &Snapshot) {
+        let value = |s: &Snapshot, path: &str, name: &str| {
+            s.find_type(path)
+                .and_then(|t| t.get_value(name))
+                .map(|v| v.expression.clone())
+        };
+        let mut kept = vec![];
+        for (path, name) in std::mem::take(&mut self.restart_settings) {
+            if value(built, &path, &name) == value(new, &path, &name) {
+                let warning = restart_warning(&path, &name);
+                self.warnings.retain(|w| *w != warning);
+            } else {
+                kept.push((path, name));
+            }
+        }
+        self.restart_settings = kept;
+    }
+
     /// Merge compiled-proc warnings into the change set.
     fn collect_warnings(&mut self) {
         for reload in &self.reloads {
@@ -3177,6 +3201,18 @@ fn var_default(
         return;
     }
 
+    // World settings and some client settings are read at startup from the
+    // world record, so changes need a restart.
+    if builtin && in_world_record(n, name) {
+        if !is_new {
+            changes.warnings.push(restart_warning(path, name));
+            changes
+                .restart_settings
+                .push((path.to_owned(), name.to_owned()));
+        }
+        return;
+    }
+
     // `/type::var` is compiled into the code that says it, which is
     // compiled again (see `const_users`)
     if !is_new && !changes.defaults_changed.iter().any(|c| c == name) {
@@ -3261,6 +3297,35 @@ fn var_default(
         value,
         types,
     });
+}
+
+fn restart_warning(path: &str, name: &str) -> String {
+    let shown = if path.is_empty() { "(global)" } else { path };
+    format!("{shown}: {name}: changed setting applies only after a restart")
+}
+
+/// Client vars stored in the world record; the others use the type's
+/// built-in value list.
+const CLIENT_SETTINGS: &[&str] = &[
+    "authenticate",
+    "command_text",
+    "control_freak",
+    "dir",
+    "lazy_eye",
+    "preload_rsc",
+    "show_map",
+    "show_popup_menus",
+    "show_verb_panel",
+];
+
+/// Whether a built-in var of `t` is kept in the world record: every `/world`
+/// setting, and some of `/client`'s.
+fn in_world_record(t: TypeRef, name: &str) -> bool {
+    match t.get().path.as_str() {
+        "/world" => true,
+        "/client" => CLIENT_SETTINGS.contains(&name),
+        _ => false,
+    }
 }
 
 /// Whether the source sets this built-in directly on the type.
