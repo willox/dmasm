@@ -1542,6 +1542,80 @@ fn a_folded_default_from_another_file_still_names_the_file_again() {
     );
 }
 
+/// Debug records for two assignments, with `/datum/u::x` defined in another file.
+fn records_with_default_from_other_file(expr: &str) -> Vec<String> {
+    let ctx = dreammaker::Context::default();
+    let mut pp = dreammaker::Preprocessor::from_buffer(
+        &ctx,
+        "test.dm".into(),
+        format!("/proc/f(a)\n\ta = {expr}\n\ta = 2\n"),
+    );
+    pp.push_file(
+        "other.dm".into(),
+        std::io::Cursor::new(b"/datum/u\n\tvar/x = -4\n".to_vec()),
+    )
+    .unwrap();
+    let mut parser = dreammaker::Parser::new(&ctx, pp);
+    parser.enable_procs();
+    let tree = parser.parse_object_tree();
+    let value = tree
+        .root()
+        .get()
+        .procs
+        .get("f")
+        .unwrap()
+        .value
+        .last()
+        .unwrap();
+    let source = ProcSource {
+        tree: &tree,
+        ty: tree.root(),
+        name: "f",
+        value,
+        file: "test.dm",
+        debug_info: true,
+        index: None,
+        byond: dmasm::ByondVersion::LATEST,
+        file_names: Some(&|_| "other.dm".to_owned()),
+    };
+    dmasm::format(&compile_proc(&source).unwrap().nodes)
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("Dbg"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Folded-away operands must not change the debug file. Live operands
+/// referencing defaults in another file must restore the proc's file.
+#[test]
+fn a_default_from_another_file_in_an_operand_folded_away_names_nothing() {
+    let files = |expr: &str| {
+        records_with_default_from_other_file(expr)
+            .iter()
+            .filter(|l| l.starts_with("DbgFile"))
+            .count()
+    };
+    for expr in [
+        "(1 ? -1 : /datum/u::x)",
+        "(0 ? /datum/u::x : 2)",
+        "(1 || /datum/u::x)",
+        "(0 && /datum/u::x)",
+        "(/datum/u::x && 0)",
+        "((~(\"A,b,c\" ? -1 : /datum/u::x)) || 3)",
+        "min(1, (1 ? 2 : /datum/u::x))",
+    ] {
+        assert_eq!(files(expr), 1, "{expr}");
+    }
+    for expr in [
+        "/datum/u::x + 1",
+        "(/datum/u::x ? 1 : 2)",
+        "(/datum/u::x || 3)",
+    ] {
+        assert!(files(expr) > 1, "{expr}");
+    }
+}
+
 /// The compiler folds angles and colors as Linux DreamMaker does and warns
 /// where Windows folding differs. At runtime, DreamDaemon uses Linux angle
 /// results on both platforms; color results follow the local platform.

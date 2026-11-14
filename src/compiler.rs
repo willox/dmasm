@@ -748,6 +748,9 @@ struct Compiler<'a> {
     /// Set while compiling an expression with nothing folded (to see what
     /// DreamMaker sees in its source)
     no_fold: bool,
+    /// Resource discovery with `no_fold`: still discard operands ruled out by
+    /// constant `&&`, `||` and `? :` conditions, as DreamMaker does.
+    live_only: bool,
     /// Compatibility warnings (see `CompiledProc::warnings`). Interior
     /// mutability allows constant folding to report warnings through `&self`.
     warnings: std::cell::RefCell<Vec<String>>,
@@ -787,6 +790,7 @@ impl<'a> Compiler<'a> {
             warnings: Default::default(),
             proc_macro_ok: false,
             no_fold: false,
+            live_only: false,
             list_elem_type: None,
         }
     }
@@ -1370,8 +1374,10 @@ impl<'a> Compiler<'a> {
             self.short_circuit_labels.len(),
         );
         self.no_fold = true;
+        self.live_only = true;
         let ok = self.emit_expr(expr.clone()).is_ok();
         self.no_fold = false;
+        self.live_only = false;
         let found = ok && self.other_file;
         self.nodes.truncate(start);
         self.short_circuit_labels.truncate(saved.6);

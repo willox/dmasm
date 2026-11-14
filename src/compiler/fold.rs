@@ -113,6 +113,16 @@ pub(super) fn constant(c: &Compiler, expr: &Expression) -> Option<Constant> {
     value(c, expr).filter(|v| *v != Constant::New)
 }
 
+/// Constant value used to select the live operands of `&&`, `||` and `? :`,
+/// even during resource discovery with other folding disabled (`live_only`).
+pub(super) fn choice(c: &mut Compiler, expr: &Expression) -> Option<Constant> {
+    let no_fold = c.no_fold;
+    c.no_fold = no_fold && !c.live_only;
+    let found = value(c, expr);
+    c.no_fold = no_fold;
+    found
+}
+
 /// The value of a constant expression.
 pub(super) fn value(c: &Compiler, expr: &Expression) -> Option<Constant> {
     if c.no_fold {
