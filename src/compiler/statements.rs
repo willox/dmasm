@@ -80,12 +80,21 @@ pub(super) fn emit_proc_body(
         compiler.emit_label(skip);
     }
 
+    // A return type (`as num`) records the header line again after parameter defaults.
+    let return_type = source
+        .ty
+        .get()
+        .procs
+        .get(source.name)
+        .and_then(|p| p.declaration.as_ref())
+        .is_some_and(|d| d.location == source.value.location && !d.return_type.is_empty());
+    if return_type {
+        compiler.emit_ins(Instruction::DbgLine(source.value.location.line));
+    }
+
     let has_defaults = source.value.parameters.iter().any(|p| p.default.is_some());
-    emit_block_inner(
-        compiler,
-        code,
-        !has_defaults && first_statement == Some(first_line),
-    )
+    let skip_first_line = !has_defaults && !return_type && first_statement == Some(first_line);
+    emit_block_inner(compiler, code, skip_first_line)
 }
 
 fn emit_block(compiler: &mut Compiler, block: &Block) -> Result<(), CompileError> {

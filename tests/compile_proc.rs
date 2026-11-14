@@ -1784,3 +1784,9 @@ fn the_first_line_is_the_first_with_anything_on_it() {
     let before_a_type = "/proc/f()\n\n/datum\n\tvar/v\n";
     assert_eq!(dbg_lines(before_a_type), ["DbgLine 3"]);
 }
+
+#[test]
+fn a_return_type_records_the_header_after_the_first_line() {
+    let src = "/proc/f() as num\n\t// comment\n\treturn 1\n";
+    assert_eq!(dbg_lines(src), ["DbgLine 3", "DbgLine 1", "DbgLine 3"]);
+}
