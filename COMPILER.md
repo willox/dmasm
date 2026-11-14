@@ -117,6 +117,41 @@ Hexadecimal literals longer than eight digits and octal literals exceeding i32
 are rejected. DreamMaker's conversion is unusual (`0x100000000` becomes `2**60`)
 and is not implemented.
 
+## Debug lines
+
+Debug builds emit `DbgFile` and `DbgLine` records to match DreamMaker.
+Breakpoints use these records; a line without one moves to the next recorded
+line.
+
+- Statements record their lines, including uninitialized `var`, `var/const`
+  and `set`. `else`, `;`, empty macro expansions, comments and lines removed
+  by `#if` have no statement records.
+- Before the first statement, record the first nonempty line after the
+  header. This includes empty macro expansions, `;`, an opening body brace
+  and a multiline macro call's name. Empty bodies use the next nonempty
+  line, usually the next proc's header (`ProcValue::first_line`).
+- Parameter defaults record the header's line. A return type (`as num`) records
+  it once more after the defaults.
+
+Debug-line compatibility measured on 2026-11-13 using the corpora above: cmss13 27,291 of 28,330 procs identical, tgstation 64,363 of 66,712,
+goonstation 43,285 of 44,522, and the older tgstations 56,395 of 58,171
+(515.1637), 57,119 of 58,937 (515.1647) and 63,278 of 65,478 (516.1659). Without
+the first-line and return-type rules, the counts were 26,311, 58,470, 42,576,
+51,780, 52,397 and 57,575.
+
+Remaining gaps are source lookahead lines recorded before their statements:
+
+| Case | DreamMaker | dmasm |
+| --- | --- | --- |
+| A statement containing an embedded expression in text, `"[x]"` | Records the following line, then its own again, before its code | Records its own line |
+| A switch case | Begins with the line that follows the case's block (the next `if`, the `else` or the statement after the switch), then the case's own lines | Records the case's own lines |
+| A loop's exit; the value of `for (var/k, v in L)` | Records the line after the loop or the loop body's first line | Records no line there |
+| An expression spanning several lines | Records where named arguments or a text block end | Records the lines of compound terms |
+| A proc defined by a macro (`GLOBAL_LIST_INIT`) | Uses lines beyond the macro's | Uses the macro's line |
+
+For these cases, a breakpoint can stop a statement earlier in DreamMaker's
+code than after reload.
+
 ## Warnings
 
 `CompiledProc::warnings` reports intentional behavior differences and significant
