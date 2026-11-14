@@ -1616,6 +1616,21 @@ fn a_default_from_another_file_in_an_operand_folded_away_names_nothing() {
     }
 }
 
+/// Restore the proc's file and line after a constant condition from another file.
+#[test]
+fn a_constant_condition_from_another_file_names_the_line_again() {
+    assert_eq!(
+        records_with_default_from_other_file("(/datum/u::x ? a : 2)"),
+        [
+            "DbgFile \"test.dm\"",
+            "DbgLine 2",
+            "DbgFile \"test.dm\"",
+            "DbgLine 2",
+            "DbgLine 3"
+        ]
+    );
+}
+
 /// The compiler folds angles and colors as Linux DreamMaker does and warns
 /// where Windows folding differs. At runtime, DreamDaemon uses Linux angle
 /// results on both platforms; color results follow the local platform.

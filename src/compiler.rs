@@ -1145,6 +1145,18 @@ impl<'a> Compiler<'a> {
                 } else {
                     else_
                 };
+                // A default from another file changes the debug file; restore the
+                // proc's file and line before the selected branch.
+                if self.debug_info
+                    && !self.other_file
+                    && format!("{cond:?}").contains("StaticField")
+                    && self.names_other_file(&cond)
+                {
+                    if let Some(line) = self.last_line {
+                        self.other_file = true;
+                        self.emit_ins(Instruction::DbgLine(line));
+                    }
+                }
                 let kind = self.emit_expr(*chosen)?;
                 self.emit_move_to_stack(kind)
             }
