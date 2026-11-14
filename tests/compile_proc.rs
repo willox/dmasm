@@ -1542,6 +1542,95 @@ fn a_folded_default_from_another_file_still_names_the_file_again() {
     );
 }
 
+/// Debug records for two assignments, with `/datum/u::x` defined in another file.
+fn records_with_default_from_other_file(expr: &str) -> Vec<String> {
+    let ctx = dreammaker::Context::default();
+    let mut pp = dreammaker::Preprocessor::from_buffer(
+        &ctx,
+        "test.dm".into(),
+        format!("/proc/f(a)\n\ta = {expr}\n\ta = 2\n"),
+    );
+    pp.push_file(
+        "other.dm".into(),
+        std::io::Cursor::new(b"/datum/u\n\tvar/x = -4\n".to_vec()),
+    )
+    .unwrap();
+    let mut parser = dreammaker::Parser::new(&ctx, pp);
+    parser.enable_procs();
+    let tree = parser.parse_object_tree();
+    let value = tree
+        .root()
+        .get()
+        .procs
+        .get("f")
+        .unwrap()
+        .value
+        .last()
+        .unwrap();
+    let source = ProcSource {
+        tree: &tree,
+        ty: tree.root(),
+        name: "f",
+        value,
+        file: "test.dm",
+        debug_info: true,
+        index: None,
+        byond: dmasm::ByondVersion::LATEST,
+        file_names: Some(&|_| "other.dm".to_owned()),
+    };
+    dmasm::format(&compile_proc(&source).unwrap().nodes)
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("Dbg"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Folded-away operands must not change the debug file. Live operands
+/// referencing defaults in another file must restore the proc's file.
+#[test]
+fn a_default_from_another_file_in_an_operand_folded_away_names_nothing() {
+    let files = |expr: &str| {
+        records_with_default_from_other_file(expr)
+            .iter()
+            .filter(|l| l.starts_with("DbgFile"))
+            .count()
+    };
+    for expr in [
+        "(1 ? -1 : /datum/u::x)",
+        "(0 ? /datum/u::x : 2)",
+        "(1 || /datum/u::x)",
+        "(0 && /datum/u::x)",
+        "(/datum/u::x && 0)",
+        "((~(\"A,b,c\" ? -1 : /datum/u::x)) || 3)",
+        "min(1, (1 ? 2 : /datum/u::x))",
+    ] {
+        assert_eq!(files(expr), 1, "{expr}");
+    }
+    for expr in [
+        "/datum/u::x + 1",
+        "(/datum/u::x ? 1 : 2)",
+        "(/datum/u::x || 3)",
+    ] {
+        assert!(files(expr) > 1, "{expr}");
+    }
+}
+
+/// Restore the proc's file and line after a constant condition from another file.
+#[test]
+fn a_constant_condition_from_another_file_names_the_line_again() {
+    assert_eq!(
+        records_with_default_from_other_file("(/datum/u::x ? a : 2)"),
+        [
+            "DbgFile \"test.dm\"",
+            "DbgLine 2",
+            "DbgFile \"test.dm\"",
+            "DbgLine 2",
+            "DbgLine 3"
+        ]
+    );
+}
+
 /// The compiler folds angles and colors as Linux DreamMaker does and warns
 /// where Windows folding differs. At runtime, DreamDaemon uses Linux angle
 /// results on both platforms; color results follow the local platform.
@@ -1753,4 +1842,79 @@ fn a_proc_of_the_world_s_never_calls_by_name() {
     assert!(!code.contains("CallName"), "{code}");
     assert!(code.contains("dynamic_proc(\"known\")"), "{code}");
     assert!(code.contains("dynamic_proc(\"unknown\")"), "{code}");
+}
+
+/// The DbgLines of `f` compiled from `src`.
+fn dbg_lines(src: &str) -> Vec<String> {
+    compile_with_lines(src)
+        .into_iter()
+        .filter(|l| l.starts_with("DbgLine"))
+        .collect()
+}
+
+#[test]
+fn the_first_line_is_the_first_with_anything_on_it() {
+    // First-line rules checked against DreamMaker 515.1637 and 516.1688.
+    let empty_macro = "#define EMPTY\n/proc/f()\n\tEMPTY\n\tvar/x\n\treturn x\n";
+    assert_eq!(
+        dbg_lines(empty_macro),
+        ["DbgLine 3", "DbgLine 4", "DbgLine 5"]
+    );
+    let semicolon = "/proc/f()\n\t;\n\treturn 1\n";
+    assert_eq!(dbg_lines(semicolon), ["DbgLine 2", "DbgLine 3"]);
+    let doc_comment = "/proc/f()\n\t/// doc\n\treturn 1\n";
+    assert_eq!(dbg_lines(doc_comment), ["DbgLine 3"]);
+    // A multiline macro call starts at its name.
+    let call_macro = "#define CALL(a, b) world.log << list(a, b)\n/proc/f()\n\tCALL(1,\n\t\t2)\n";
+    assert_eq!(dbg_lines(call_macro), ["DbgLine 3", "DbgLine 4"]);
+    // An empty body uses the next nonempty line.
+    let empty = "/proc/f()\n\t// nothing\n\n/proc/g()\n";
+    assert_eq!(dbg_lines(empty), ["DbgLine 4"]);
+    let before_a_type = "/proc/f()\n\n/datum\n\tvar/v\n";
+    assert_eq!(dbg_lines(before_a_type), ["DbgLine 3"]);
+}
+
+#[test]
+fn a_return_type_records_the_header_after_the_first_line() {
+    let src = "/proc/f() as num\n\t// comment\n\treturn 1\n";
+    assert_eq!(dbg_lines(src), ["DbgLine 3", "DbgLine 1", "DbgLine 3"]);
+}
+
+#[test]
+fn lines_read_on_are_recorded_as_dreammaker_does() {
+    // Lookahead records checked against DreamMaker 515.1637 and 516.1688.
+    let lines = |src: &str| dbg_lines(&format!("/proc/f(a, b)\n{src}"));
+    // past text with an embedded expression: the next line
+    assert_eq!(
+        lines("\tf(1)\n\tvar/s = \"[a]\"\n\treturn s\n"),
+        [
+            "DbgLine 2",
+            "DbgLine 3",
+            "DbgLine 4",
+            "DbgLine 3",
+            "DbgLine 4"
+        ]
+    );
+    assert_eq!(
+        lines("\tif(a)\n\t\treturn \"[a]\"\n\treturn 1\n"),
+        ["DbgLine 2", "DbgLine 4", "DbgLine 3", "DbgLine 4"]
+    );
+    // the value of `for (k, v in L)`: the loop's body
+    assert_eq!(
+        lines("\tfor(var/k, v in a)\n\t\tf(v)\n"),
+        ["DbgLine 2", "DbgLine 3", "DbgLine 2", "DbgLine 3"]
+    );
+    // where a call with named arguments, a condition or text ends
+    assert_eq!(lines("\tf(1,\n\t\tb = 2)\n"), ["DbgLine 2", "DbgLine 3"]);
+    assert_eq!(
+        lines("\tif(f(1,\n\t\t2))\n\t\tf(3)\n"),
+        ["DbgLine 2", "DbgLine 3", "DbgLine 2", "DbgLine 4"]
+    );
+    assert_eq!(lines("\ta = {\"x\n[a]\ny\"}\n"), ["DbgLine 2", "DbgLine 4"]);
+    // an operator on a later line
+    assert_eq!(lines("\ta = a \\\n\t\t+ 1\n"), ["DbgLine 2", "DbgLine 3"]);
+    assert_eq!(
+        lines("\ta = f(1,\n\t\t2) + 3\n"),
+        ["DbgLine 2", "DbgLine 3", "DbgLine 2"]
+    );
 }

@@ -83,7 +83,9 @@ pub(super) fn emit_typed<'a>(
                     | Follow::Call(PropertyAccessKind::Dot | PropertyAccessKind::Colon, _, _)
             )
         );
-        if compiler.proc.is_some() && is_safe(&sub_expr) {
+        // For debugger expressions too, a null safe-chain result must still pass
+        // through the trailing `!`, `-` or `~`.
+        if (compiler.proc.is_some() || ends_in_value_op(follow.as_slice())) && is_safe(&sub_expr) {
             kind = commit_field_buffer(compiler, kind, &mut field_buffer)?;
             compiler.emit_move_to_stack(kind)?;
             return emit_safe(compiler, sub_expr, follow.collect(), ty);
@@ -271,7 +273,8 @@ pub(super) fn emit_typed<'a>(
                         compiler.emit_ins(Instruction::PushVal(crate::Value::DMString(DMString(
                             ident.as_bytes().to_vec(),
                         ))));
-                        match args::emit(compiler, args::ArgsContext::List, args.into_vec())? {
+                        // Parenthesized assignments are positional arguments, not named ones.
+                        match args::emit(compiler, args::ArgsContext::Proc, args.into_vec())? {
                             args::ArgsResult::Normal => {
                                 compiler.emit_ins(Instruction::CallName(arg_count))
                             }
@@ -563,6 +566,14 @@ fn is_safe(follow: &Follow) -> bool {
             _,
             _
         ) | Follow::Index(ListAccessKind::Safe, _)
+    )
+}
+
+/// Whether a chain's result has a trailing `!`, `-` or `~`.
+fn ends_in_value_op(rest: &[Follow]) -> bool {
+    matches!(
+        rest.last(),
+        Some(Follow::Unary(UnaryOp::Not | UnaryOp::Neg | UnaryOp::BitNot))
     )
 }
 

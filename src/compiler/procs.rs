@@ -66,6 +66,13 @@ const STATIC_LOCAL: u32 = 1 << 31;
 pub(super) struct ProcCtx<'a> {
     pub tree: &'a ObjectTree,
     pub ty: TypeRef<'a>,
+    /// Lookahead line after each statement (`ProcValue::next_lines`).
+    pub next_lines: &'a [(dreammaker::Location, u32)],
+    /// Lookahead line for the current statement.
+    pub next_line: Option<u32>,
+    /// `ProcValue::end_lines` and `ProcValue::operator_lines`
+    pub end_lines: &'a [(dreammaker::Location, u32)],
+    pub operator_lines: &'a [(dreammaker::Location, u32)],
     /// Every local slot's name, in allocation order.
     pub locals: Vec<String>,
     /// Each local's declared type path, or "".
@@ -233,11 +240,34 @@ pub(crate) fn compile_proc_as(
     })
 }
 
+/// Proc path used by `__PROC__` and static-variable scopes:
+/// `/type/proc/name` for a declaration, `/type/name` for an override.
+pub(crate) fn proc_path(ty: TypeRef, name: &str, first: bool) -> String {
+    let ty_path = if ty.is_root() {
+        ""
+    } else {
+        ty.get().path.as_str()
+    };
+    let declared_here = ty
+        .get()
+        .procs
+        .get(name)
+        .and_then(|p| p.declaration.as_ref());
+    match declared_here {
+        Some(decl) if first => format!("{}/{}/{}", ty_path, decl.kind.name(), name),
+        _ => format!("{}/{}", ty_path, name),
+    }
+}
+
 /// Create the initial name-resolution context for `source`.
 pub(super) fn proc_ctx<'a>(source: &ProcSource<'a>, param_types: Vec<String>) -> ProcCtx<'a> {
     ProcCtx {
         tree: source.tree,
         ty: source.ty,
+        next_lines: &source.value.next_lines,
+        next_line: None,
+        end_lines: &source.value.end_lines,
+        operator_lines: &source.value.operator_lines,
         locals: vec![],
         local_types: vec![],
         param_types,
@@ -255,17 +285,6 @@ pub(super) fn proc_ctx<'a>(source: &ProcSource<'a>, param_types: Vec<String>) ->
         cleanups: vec![],
         local_consts: Default::default(),
         proc_path: {
-            let ty_path = if source.ty.is_root() {
-                ""
-            } else {
-                source.ty.get().path.as_str()
-            };
-            let declared_here = source
-                .ty
-                .get()
-                .procs
-                .get(source.name)
-                .and_then(|p| p.declaration.as_ref());
             let first = source
                 .ty
                 .get()
@@ -275,12 +294,7 @@ pub(super) fn proc_ctx<'a>(source: &ProcSource<'a>, param_types: Vec<String>) ->
                     Some(index) => index == 0,
                     None => std::ptr::eq(&p.value[0], source.value),
                 });
-            match declared_here {
-                Some(decl) if first.unwrap_or(false) => {
-                    format!("{}/{}/{}", ty_path, decl.kind.name(), source.name)
-                }
-                _ => format!("{}/{}", ty_path, source.name),
-            }
+            proc_path(source.ty, source.name, first.unwrap_or(false))
         },
         file: source.file.to_owned(),
         file_id: source.value.location.file,
@@ -801,6 +815,50 @@ pub(super) fn label_targets(ins: &Instruction) -> Vec<String> {
             .filter_map(named)
             .collect(),
         PickProb(p) => p.cases.iter().filter_map(named).collect(),
+        _ => vec![],
+    }
+}
+
+/// Mutable jump targets of an instruction.
+pub(crate) fn labels_mut(ins: &mut Instruction) -> Vec<&mut crate::operands::Label> {
+    use Instruction::*;
+    match ins {
+        Jmp(l)
+        | Jz(l)
+        | Jnz(l)
+        | JmpLoop(l)
+        | JzLoop(l)
+        | JnzLoop(l)
+        | JmpOr(l)
+        | JmpAnd(l)
+        | SetCacheJmpIfNull(l)
+        | SetCachePopJmpIfNull(l)
+        | Spawn(l)
+        | Try(l)
+        | Catch(l)
+        | TryJmp(l)
+        | ForRange(l, _)
+        | ForRangeStep(l, _) => vec![l],
+        Switch(p) => p
+            .cases
+            .iter_mut()
+            .map(|c| &mut c.1)
+            .chain([&mut p.default])
+            .collect(),
+        SwitchRange(p) => p
+            .cases
+            .iter_mut()
+            .map(|c| &mut c.1)
+            .chain(p.range_cases.iter_mut().map(|c| &mut c.2))
+            .chain([&mut p.default])
+            .collect(),
+        PickSwitch(p) => p
+            .cases
+            .iter_mut()
+            .map(|c| &mut c.1)
+            .chain([&mut p.default])
+            .collect(),
+        PickProb(p) => p.cases.iter_mut().collect(),
         _ => vec![],
     }
 }

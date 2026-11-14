@@ -20,7 +20,17 @@ use dreammaker::preprocessor::DefineHistory;
 use dreammaker::{Context, FileId, Severity};
 
 use crate::compiler::{compile_proc, CompiledProc, ProcSource};
+
+#[path = "reload_moved.rs"]
+mod moved;
+#[path = "reload_reparent.rs"]
+mod reparent;
 use crate::{ByondVersion, Instruction, Node};
+pub use reparent::{Reparented, ReparentedType};
+
+mod global_init;
+mod resources;
+pub use global_init::GlobalInit;
 
 /// A proc as auxtools' debug server names it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -298,6 +308,14 @@ pub enum ConstValue {
     Resource(String),
 }
 
+/// Source value of `client/script`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientScript {
+    Text(String),
+    /// A file, as the code names it (`'style.css'`)
+    File(String),
+}
+
 /// A var whose default changed.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -306,6 +324,16 @@ pub struct VarDefault {
     pub value: ConstValue,
     /// The type whose default changed, and every subtype that gets its
     /// default from there.
+    pub types: Vec<String>,
+}
+
+/// Built-in override removed from a type. Copy the running parent's value
+/// to the type and inheriting subtypes to preserve BYOND's built-in defaults.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BuiltinInherited {
+    pub var: String,
+    /// Parents first
     pub types: Vec<String>,
 }
 
@@ -348,6 +376,10 @@ pub struct NewVar {
     /// Computed initializer for a global or static variable; evaluate once
     /// and use null as the placeholder `value`.
     pub init: Option<Box<ProcReload>>,
+    /// Subtypes whose var declaration moved to this ancestor. They and their
+    /// descendants retain their runtime declaration; any other redeclaration
+    /// is a duplicate.
+    pub moved_from: Vec<String>,
 }
 
 /// Variable declaration changes to static/global, const or tmp flags.
@@ -391,6 +423,8 @@ pub struct Changes {
     pub var_defaults: Vec<VarDefault>,
     /// Built-in defaults stored in type records rather than variable tables.
     pub builtin_defaults: Vec<VarDefault>,
+    /// Built-in defaults restored from runtime parents after `builtin_defaults`.
+    pub builtin_inherited: Vec<BuiltinInherited>,
     /// Changed constants; dependent procs are included in `reloads`.
     pub consts: Vec<String>,
     /// Changed defaults embedded by `/type::var`; recompile dependent procs.
@@ -404,14 +438,46 @@ pub struct Changes {
     pub redeclared: Vec<Redeclared>,
     /// Changed computed-default init procs for new instances.
     pub init_procs: Vec<InitProc>,
+    /// Parent changes, parents first, applied after new types and before other changes.
+    pub reparented: Vec<Reparented>,
+    /// Procs whose declarations moved to an ancestor (`/type/name`). Definitions
+    /// whose compiled code changes, such as `__PROC__`, are also in `reloads`.
+    pub moved_procs: Vec<String>,
     pub line_moves: Vec<LineMove>,
     /// Runtime state retained by reload and compiler compatibility warnings.
     pub warnings: Vec<String>,
     /// Rejection reasons. Any entry requires rejecting the entire change set.
     pub refused: Vec<String>,
+    /// Changed world and client settings, as (type, var). Warn that they take
+    /// effect after restart (see `settings_as_built`).
+    pub restart_settings: Vec<(String, String)>,
+    /// Replacement global init proc for rebooted worlds. Running worlds keep
+    /// their global and static values, with a warning.
+    pub global_init: Option<GlobalInit>,
 }
 
 impl Changes {
+    /// Suppress restart warnings for settings restored to their built values.
+    /// The diff compares against the last reload, so these changes otherwise
+    /// appear to need a restart.
+    pub fn settings_as_built(&mut self, built: &Snapshot, new: &Snapshot) {
+        let value = |s: &Snapshot, path: &str, name: &str| {
+            s.find_type(path)
+                .and_then(|t| t.get_value(name))
+                .map(|v| v.expression.clone())
+        };
+        let mut kept = vec![];
+        for (path, name) in std::mem::take(&mut self.restart_settings) {
+            if value(built, &path, &name) == value(new, &path, &name) {
+                let warning = restart_warning(&path, &name);
+                self.warnings.retain(|w| *w != warning);
+            } else {
+                kept.push((path, name));
+            }
+        }
+        self.restart_settings = kept;
+    }
+
     /// Merge compiled-proc warnings into the change set.
     fn collect_warnings(&mut self) {
         for reload in &self.reloads {
@@ -431,7 +497,9 @@ impl Changes {
             && self.redeclared.is_empty()
             && self.var_defaults.is_empty()
             && self.builtin_defaults.is_empty()
+            && self.builtin_inherited.is_empty()
             && self.init_procs.is_empty()
+            && self.reparented.is_empty()
             && self.line_moves.is_empty()
             && self.refused.is_empty()
     }
@@ -478,6 +546,10 @@ pub struct Snapshot {
     folded: std::collections::BTreeSet<dreammaker::Location>,
     /// Files reparsed successfully by `keep`; their original parse errors no longer apply.
     mended: HashSet<FileId>,
+    /// Last `.dmf` included by the preprocessor: the world's skin.
+    skin: Option<PathBuf>,
+    /// Lazy resource-user index (see `resource_users`).
+    resource_index: std::sync::OnceLock<resources::Index>,
 }
 
 /// Incremental changes from reparsing one file (see `Snapshot::reload_file`).
@@ -526,10 +598,15 @@ impl Snapshot {
             parser.enable_procs();
             parser.parse_object_tree()
         };
+        let skin = pp.skins().last().cloned();
         let defines = pp.finalize();
         let mut snapshot = Self::from_tree(ctx, tree);
         snapshot.defines = Some(defines);
         snapshot.root = dme.parent().map(Path::to_owned);
+        snapshot.skin = skin.map(|skin| match &snapshot.root {
+            Some(root) => skin.strip_prefix(root).map(Path::to_owned).unwrap_or(skin),
+            None => skin,
+        });
         if let Some(root) = &snapshot.root {
             let mut scope_names = HashMap::new();
             snapshot.ctx.files().for_each(|path| {
@@ -747,6 +824,7 @@ impl Snapshot {
         self.scope_names.insert(reload.file, reload.scope_names);
         // This successful reparse preserved the definitions, so the old error hid no code.
         self.mended.insert(reload.file);
+        self.resource_index = Default::default();
     }
 
     /// Run `f` against the original parse, excluding incremental replacements.
@@ -761,6 +839,7 @@ impl Snapshot {
     pub fn clear_patches(&mut self) {
         self.patched.clear();
         self.mended.clear();
+        self.resource_index = Default::default();
     }
 
     /// What `file` defines: vars, proc declarations and definitions
@@ -831,6 +910,8 @@ impl Snapshot {
             default_lines: std::sync::Mutex::new(HashMap::new()),
             folded: Default::default(),
             mended: Default::default(),
+            skin: None,
+            resource_index: Default::default(),
         }
     }
 
@@ -925,6 +1006,28 @@ impl Snapshot {
             }
         });
         files
+    }
+
+    /// Last `.dmf` included by the `.dme`, relative to the `.dme` directory.
+    pub fn skin(&self) -> Option<&Path> {
+        self.skin.as_deref()
+    }
+
+    /// Login script from `/client/script`. Return `None` for unset or null,
+    /// or an error unless it is constant text or a resource file.
+    pub fn client_script(&self) -> Result<Option<ClientScript>, String> {
+        let Some(value) = self
+            .find_type("/client")
+            .and_then(|client| default_value(client, "script"))
+        else {
+            return Ok(None);
+        };
+        match value {
+            Some(ConstValue::String(text)) => Ok(Some(ClientScript::Text(text))),
+            Some(ConstValue::Resource(file)) => Ok(Some(ClientScript::File(file))),
+            Some(ConstValue::Null) => Ok(None),
+            _ => Err("/client: script must be constant text or a resource file".to_owned()),
+        }
     }
 
     /// Every proc with code.
@@ -1043,6 +1146,12 @@ impl Snapshot {
         let mut expression = expression.clone();
         if let Expression::Base { term, .. } = &mut expression {
             if let Term::NewImplicit { args } = &term.elem {
+                // (a list of a type is a list)
+                let declared = if declared.trim_start_matches('/').starts_with("list/") {
+                    "list"
+                } else {
+                    declared
+                };
                 let mut parts = declared.split('/').filter(|part| !part.is_empty());
                 let Some(first) = parts.next() else {
                     return Err("implicit new requires a declared variable type".to_owned());
@@ -1111,6 +1220,10 @@ impl Snapshot {
             docs: Default::default(),
             code: Some(block),
             body_range: None,
+            first_line: None,
+            next_lines: Box::new([]),
+            end_lines: Box::new([]),
+            operator_lines: Box::new([]),
         };
         let file = self.debug_file_name(location.file);
         let source = ProcSource {
@@ -1332,6 +1445,15 @@ impl Snapshot {
             .is_none_or(|l| l.iter().any(|l| l.contains(text)))
     }
 
+    /// Source location as (file path, line, column), stable across parses.
+    fn place(&self, location: dreammaker::Location) -> (String, u32, u16) {
+        (
+            self.file_name(location.file),
+            location.line,
+            location.column,
+        )
+    }
+
     fn file_name(&self, file: FileId) -> String {
         self.ctx
             .file_path(file)
@@ -1513,6 +1635,9 @@ pub fn diff(old: &Snapshot, new: &Snapshot, changed_files: Option<&HashSet<PathB
     }
 
     const_users(old, new, &realigned, &mut changes);
+    reparent::reparented_users(old, new, &realigned, &mut changes);
+    moved::moved_users(old, new, &realigned, &mut changes);
+    global_init::compare(old, new, &mut changes);
     changes.collect_warnings();
     changes
 }
@@ -1552,13 +1677,15 @@ fn const_users(old: &Snapshot, new: &Snapshot, realigned: &Realigned, changes: &
         .consts
         .iter()
         .chain(&changes.retyped)
-        .chain(&changes.defaults_changed)
         .map(|c| format!("{c:?}"))
         .collect();
-    // (a moved default only shows in `/type::var`'s debug info)
+    // Only `type::var` embeds a default's value or source location in code.
+    // Looking for any use of `var` would recompile nearly everything for
+    // common names such as `name` or `icon`.
     let moved: Vec<String> = changes
-        .defaults_moved
+        .defaults_changed
         .iter()
+        .chain(&changes.defaults_moved)
         .map(|c| format!("StaticField({c:?})"))
         .collect();
     let reloaded: HashSet<ProcKey> = changes.reloads.iter().map(|r| r.proc.clone()).collect();
@@ -2194,10 +2321,20 @@ fn compare_inits(old: &Snapshot, new: &Snapshot, changes: &mut Changes) {
         match old.find_type(&n.get().path) {
             Some(o) if inits(o, &mut old_memo) == new_inits.as_slice() => continue,
             Some(_) => {}
-            // A new type starts with its parent's init proc
+            // A new type initially copies its nearest existing ancestor's runtime
+            // init proc. That proc may still initialize defaults removed in this
+            // reload, so the new type must be checked too.
             None => {
-                let parent = n.parent_type().map(|p| inits(p, &mut new_memo).to_vec());
-                if new_inits.is_empty() && parent.is_none_or(|p| p.is_empty()) {
+                let mut at = n.parent_type();
+                let mut copied = None;
+                while let Some(t) = at {
+                    if let Some(o) = old.find_type(&t.get().path) {
+                        copied = Some(inits(o, &mut old_memo).to_vec());
+                        break;
+                    }
+                    at = t.parent_type();
+                }
+                if new_inits.is_empty() && copied.is_none_or(|c| c.is_empty()) {
                     continue;
                 }
             }
@@ -2360,6 +2497,9 @@ const BUILTIN_VARS: &[&str] = &[
     "animate_movement",
     "appearance_flags",
     // Listed
+    "icon_w",
+    "icon_z",
+    "bounds",
     "alpha",
     "blend_mode",
     "color",
@@ -2387,6 +2527,14 @@ const BUILTIN_VARS: &[&str] = &[
     "mouse_drop_pointer",
     "mouse_over_pointer",
     "override",
+    // Client values stored in the type's built-in list.
+    "fps",
+    "view",
+    "perspective",
+    "tick_lag",
+    "default_verb_category",
+    "edge_limit",
+    "mouse_pointer_icon",
     // A mob type's, in the mob table
     "key",
     "sight",
@@ -2408,7 +2556,10 @@ fn new_type(n: TypeRef, changes: &mut Changes) {
     let mut refused = false;
     for (name, var) in n.get().vars.iter() {
         let name = name.as_str();
-        if !is_builtin(n, name) || var.value.location.file == FileId::BUILTINS {
+        if !is_builtin(n, name)
+            || var.value.location.file == FileId::BUILTINS
+            || builtin_in_var_table(n, name)
+        {
             continue;
         }
         if name == "parent_type" {
@@ -2503,10 +2654,8 @@ fn compare_types(
         };
 
         let parent = |t: TypeRef| t.parent_type().map(|p| p.get().path.clone());
-        if o.is_some_and(|o| parent(o) != parent(n)) {
-            changes
-                .refused
-                .push(format!("{shown}: parent type changed; rebuild required"));
+        if let Some(o) = o.filter(|o| parent(*o) != parent(n)) {
+            reparent::reparent(old, o, n, changes);
         }
 
         let ov = o.map_or(&no_vars, |o| &o.get().vars);
@@ -2514,13 +2663,23 @@ fn compare_types(
         let declaration =
             |v: &dreammaker::objtree::TypeVar| v.declaration.as_ref().map(|d| d.var_type.clone());
         for (name, var) in nv.iter() {
-            // A new type's built-in vars are fields of its record
-            if o.is_none() && is_builtin(n, name.as_str()) {
+            // Most built-ins are type-record fields. Sound and similar types
+            // store theirs as defaults in the var table.
+            if o.is_none()
+                && is_builtin(n, name.as_str())
+                && !builtin_in_var_table(n, name.as_str())
+            {
                 continue;
             }
             match ov.get(name) {
+                Some(old_var) if moved::var_moved_up(n, name.as_str(), old_var, Some(var)) => {
+                    moved::var_moved(old, new, n, name.as_str(), old_var, Some(var), changes);
+                }
                 None if var.declaration.is_some() => {
                     if new_var(new, n, name.as_str(), var, o.is_none(), changes) {
+                        if let Some(added) = changes.new_vars.last_mut() {
+                            added.moved_from = moved::moved_from(old, n, name.as_str());
+                        }
                         var_default(old, new, path, name.as_str(), true, changes);
                     }
                 }
@@ -2571,8 +2730,11 @@ fn compare_types(
                 Some(old_var) if old_var.value.expression != var.value.expression => {
                     var_default(old, new, path, name.as_str(), false, changes);
                 }
-                // The same default, written somewhere else (see `const_users`)
-                Some(old_var) if old_var.value.location != var.value.location => {
+                // Compare moved defaults by path: inserting an include renumbers
+                // subsequent files without moving their source locations.
+                Some(old_var)
+                    if old.place(old_var.value.location) != new.place(var.value.location) =>
+                {
                     if !changes.defaults_moved.iter().any(|c| c == name.as_str()) {
                         changes.defaults_moved.push(name.to_string());
                     }
@@ -2581,7 +2743,9 @@ fn compare_types(
             }
         }
         for (name, var) in ov.iter().filter(|(name, _)| !nv.contains_key(*name)) {
-            if var.declaration.is_some() {
+            if moved::var_moved_up(n, name.as_str(), var, None) {
+                moved::var_moved(old, new, n, name.as_str(), var, None, changes);
+            } else if var.declaration.is_some() {
                 changes.warnings.push(format!(
                     "{shown}: var {name} was removed from source but retained in the running world"
                 ));
@@ -2655,9 +2819,13 @@ fn compare_types(
                     .map(|d| (d.kind, d.flags))
             };
             if declaration(op.get(name)) != declaration(Some(proc)) {
-                changes.refused.push(format!(
-                    "{path}: proc declaration kind or flags changed; rebuild required"
-                ));
+                if moved::proc_moved_up(n, name.as_str(), op.get(name), proc) {
+                    changes.moved_procs.push(path.clone());
+                } else {
+                    changes.refused.push(format!(
+                        "{path}: proc declaration kind or flags changed; rebuild required"
+                    ));
+                }
             }
         }
         for name in op.keys().filter(|name| !np.contains_key(*name)) {
@@ -2752,6 +2920,7 @@ fn new_var(
         flags: byond_flags(flags, n.is_root()),
         value,
         init,
+        moved_from: vec![],
     });
     true
 }
@@ -3051,7 +3220,10 @@ fn var_default(
         return;
     };
     let flags = declaration.get().var_type.flags;
-    let builtin = declaration.get().location.file == FileId::BUILTINS;
+    // Built-ins stored in a var table, such as sound vars, use ordinary defaults.
+    let in_var_table = builtin_in_var_table(n, name);
+    let builtin = declaration.get().location.file == FileId::BUILTINS
+        && (!in_var_table || !sets_own_builtin(n, name));
     // A global const is set now (no code writes it), and the code it was
     // folded into compiled again
     if n.is_root() && flags.is_const() && !is_new {
@@ -3140,10 +3312,56 @@ fn var_default(
         return;
     }
 
+    // The launcher reloads the whole client script (see `Snapshot::client_script`).
+    if builtin && name == "script" && n.get().path == "/client" {
+        return;
+    }
+
+    // World settings and some client settings are read at startup from the
+    // world record, so changes need a restart.
+    if builtin && in_world_record(n, name) {
+        if !is_new {
+            changes.warnings.push(restart_warning(path, name));
+            changes
+                .restart_settings
+                .push((path.to_owned(), name.to_owned()));
+        }
+        return;
+    }
+
     // `/type::var` is compiled into the code that says it, which is
     // compiled again (see `const_users`)
     if !is_new && !changes.defaults_changed.iter().any(|c| c == name) {
         changes.defaults_changed.push(name.to_owned());
+    }
+
+    // Inherit from the running parent: SpacemanDMM lacks some built-in
+    // defaults, including mob density, layer and see_in_dark.
+    if builtin
+        && !is_new
+        && !sets_own_builtin(n, name)
+        && (in_var_table || BUILTIN_VARS.contains(&name))
+        && !matches!(name, "name" | "text")
+    {
+        // A built-in type's original default is unavailable after an override.
+        // Its parent's value can differ (mob layer 4, movable layer 3).
+        if !in_var_table && reparent::builtin_base(n).as_deref() == Some(n.get().path.as_str()) {
+            changes.refused.push(format!(
+                "{shown}: {name}: cannot restore this built-in type's original default; rebuild required"
+            ));
+            return;
+        }
+        // Existing instances read the var table, as with ordinary vars.
+        if !in_var_table {
+            changes.warnings.push(format!(
+                "{shown}: {name}: built-in default applies only to new instances"
+            ));
+        }
+        changes.builtin_inherited.push(BuiltinInherited {
+            var: name.to_owned(),
+            types: inheriting(new, n, name),
+        });
+        return;
     }
 
     // Existing instances have already run their computed initializers.
@@ -3206,6 +3424,80 @@ fn var_default(
         value,
         types,
     });
+}
+
+fn restart_warning(path: &str, name: &str) -> String {
+    let shown = if path.is_empty() { "(global)" } else { path };
+    format!("{shown}: {name}: changed setting applies only after a restart")
+}
+
+/// Client vars stored in the world record; the others use the type's
+/// built-in value list.
+const CLIENT_SETTINGS: &[&str] = &[
+    "authenticate",
+    "command_text",
+    "control_freak",
+    "dir",
+    "lazy_eye",
+    "preload_rsc",
+    "show_map",
+    "show_popup_menus",
+    "show_verb_panel",
+];
+
+/// Whether a built-in var of `t` is kept in the world record: every `/world`
+/// setting, and some of `/client`'s.
+fn in_world_record(t: TypeRef, name: &str) -> bool {
+    match t.get().path.as_str() {
+        "/world" => true,
+        "/client" => CLIENT_SETTINGS.contains(&name),
+        _ => false,
+    }
+}
+
+/// Built-in types whose built-in vars use the var table rather than
+/// type-record fields.
+const VAR_TABLE_BUILTINS: &[&str] = &["/sound", "/particles", "/exception", "/regex", "/icon"];
+
+/// Whether a built-in var of `t` is kept in its var table.
+fn builtin_in_var_table(t: TypeRef, name: &str) -> bool {
+    t.get_var_declaration(name).is_some_and(|d| {
+        d.get().location.file == FileId::BUILTINS
+            && VAR_TABLE_BUILTINS.contains(&d.ty().get().path.as_str())
+    })
+}
+
+/// Whether the source sets this built-in directly on the type.
+fn sets_own_builtin(t: TypeRef, name: &str) -> bool {
+    t.get()
+        .vars
+        .get(name)
+        .is_some_and(|v| v.value.location.file != FileId::BUILTINS)
+}
+
+/// `n` and subtypes inheriting `name` from it, in parent-first order.
+fn inheriting(new: &Snapshot, n: TypeRef, name: &str) -> Vec<String> {
+    let mut types = vec![];
+    for ty in new.tree.iter_types() {
+        let mut at = ty;
+        let mut depth = 0;
+        loop {
+            if at.index() == n.index() {
+                types.push((depth, ty.get().path.clone()));
+                break;
+            }
+            if at.get().vars.contains_key(name) {
+                break;
+            }
+            depth += 1;
+            match at.parent_type() {
+                Some(parent) => at = parent,
+                None => break,
+            }
+        }
+    }
+    types.sort();
+    types.into_iter().map(|(_, path)| path).collect()
 }
 
 /// Update name/text defaults on `n` and inheriting types. Without an

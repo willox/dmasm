@@ -4,7 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use dmasm::reload::{
-    diff, Changes, ConstValue, InList, NewVar, ParseOptions, ProcKey, ProcSettings, Snapshot,
+    diff, Changes, ClientScript, ConstValue, InList, NewVar, ParseOptions, ProcKey, ProcSettings,
+    Snapshot,
 };
 use dmasm::{Instruction, Node};
 
@@ -143,6 +144,33 @@ fn files_of_an_included_environment_are_named_as_it_names_them() {
             ()
         ))
     );
+}
+
+#[test]
+fn a_file_included_earlier_moves_no_defaults() {
+    // An earlier include changes file IDs, not default locations.
+    let world = World::new(
+        "renumbered",
+        "/obj/thing\n\tname = \"thing\"\n\n/proc/a()\n\treturn /obj/thing::name\n",
+    );
+    let old = world.parse();
+    std::fs::write(world.dir.join("code/first.dm"), "/proc/b()\n\treturn 2\n").unwrap();
+    std::fs::write(
+        world.dir.join("world.dme"),
+        "#include \"code/first.dm\"\n#include \"code/code.dm\"\n",
+    )
+    .unwrap();
+    let edited: HashSet<PathBuf> = ["world.dme", "code/first.dm"]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    let changes = diff(&old, &world.parse(), Some(&edited));
+    assert!(
+        changes.defaults_moved.is_empty(),
+        "{:?}",
+        changes.defaults_moved
+    );
+    assert!(reloaded(&changes).is_empty(), "{:?}", reloaded(&changes));
 }
 
 #[test]
@@ -827,6 +855,7 @@ fn new_vars_and_their_overrides() {
         flags,
         value,
         init: None,
+        moved_from: vec![],
     };
     assert_eq!(
         vars,
@@ -1426,11 +1455,17 @@ fn a_changed_default_recompiles_type_scope_users() {
 }
 
 #[test]
-fn a_new_parent_type_is_refused_and_nothing_else() {
+fn a_new_parent_type_is_a_reparent_and_nothing_else() {
     let before = "/datum/a\n/datum/b\n/datum/a/c\n\tvar/x = 1\n";
     let after = "/datum/a\n/datum/b\n/datum/a/c\n\tparent_type = /datum/b\n\tvar/x = 1\n";
     let changes = changes("parent-type", before, after);
-    assert!(!changes.refused.is_empty(), "{:?}", changes);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(changes.reparented.len(), 1, "{:?}", changes.reparented);
+    assert!(
+        changes.var_defaults.is_empty() && changes.builtin_defaults.is_empty(),
+        "{:?}",
+        changes
+    );
     // (parent_type is a built-in const, not a global to set)
     assert!(changes.redeclared.is_empty(), "{:?}", changes.redeclared);
 }
@@ -1882,4 +1917,845 @@ fn an_error_mended_by_reading_its_file_again_is_gone() {
     ));
     let changes = diff(&old, &world.parse(), None);
     assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+}
+
+#[test]
+fn a_new_type_doesnt_keep_the_init_proc_its_parent_loses() {
+    // The runtime ancestor still has an init proc for `l`. A new subtype
+    // must not inherit it after `l` becomes static, or each instance would
+    // reset the static to list(1).
+    let before = "/datum/a\n\tvar/list/l = list(1)\n/datum/a/b\n";
+    let after = "/datum/a\n\tvar/static/list/l = list(1)\n/datum/a/b\n/datum/a/b/c\n";
+    let reloaded = changes("new-type-init", before, after);
+    assert!(reloaded.refused.is_empty(), "{:?}", reloaded.refused);
+    let mut inits: Vec<(String, bool)> = reloaded
+        .init_procs
+        .iter()
+        .map(|i| (i.type_path.clone(), i.code.is_some()))
+        .collect();
+    inits.sort();
+    assert_eq!(
+        inits,
+        [
+            ("/datum/a".to_owned(), false),
+            ("/datum/a/b".to_owned(), false),
+            ("/datum/a/b/c".to_owned(), false),
+        ]
+    );
+
+    // No init proc is needed when none of the ancestors had one.
+    let fresh = changes(
+        "new-type-no-init",
+        "/datum/a\n\tvar/x = 1\n",
+        "/datum/a\n\tvar/x = 1\n/datum/a/b\n",
+    );
+    assert!(fresh.init_procs.is_empty(), "{:?}", fresh.init_procs);
+}
+
+#[test]
+fn a_built_in_a_type_stops_setting_comes_from_its_parent() {
+    let before = "/mob/m\n\tlayer = 7\n\tsee_in_dark = 3\n/mob/m/sub\n/mob/m/own\n\tlayer = 2\n";
+    let after = "/mob/m\n/mob/m/sub\n/mob/m/own\n\tlayer = 2\n";
+    let changes = changes("builtin-inherited", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(
+        changes.builtin_defaults.is_empty(),
+        "{:?}",
+        changes.builtin_defaults
+    );
+    let mut inherited: Vec<(String, Vec<String>)> = changes
+        .builtin_inherited
+        .iter()
+        .map(|i| (i.var.clone(), i.types.clone()))
+        .collect();
+    inherited.sort();
+    let types = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        inherited,
+        [
+            ("layer".to_owned(), types(&["/mob/m", "/mob/m/sub"])),
+            (
+                "see_in_dark".to_owned(),
+                types(&["/mob/m", "/mob/m/own", "/mob/m/sub"])
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_built_in_a_built_in_type_stops_setting_needs_a_rebuild() {
+    // The running parent lacks the mob's original built-in layer.
+    let own = changes(
+        "builtin-inherited-builtin-type",
+        "/mob\n\tlayer = 9\n/mob/m\n",
+        "/mob\n/mob/m\n",
+    );
+    assert_eq!(
+        own.refused,
+        ["/mob: layer: cannot restore this built-in type's original default; rebuild required"]
+    );
+    assert!(
+        own.builtin_inherited.is_empty(),
+        "{:?}",
+        own.builtin_inherited
+    );
+    // Removing a sound var-table entry restores BYOND's default.
+    let table = changes(
+        "builtin-inherited-var-table",
+        "/sound\n\tpan = 10\n",
+        "/sound\n",
+    );
+    assert!(table.refused.is_empty(), "{:?}", table.refused);
+}
+
+#[test]
+fn a_setting_back_as_built_waits_for_nothing() {
+    let world = World::new("settings-back", "/world\n\tfps = 10\n");
+    let built = world.parse();
+    world.write("/world\n\tfps = 20\n");
+    let changed = world.parse();
+    let edited: HashSet<PathBuf> = vec![PathBuf::from("code/code.dm")].into_iter().collect();
+    let mut changes = diff(&built, &changed, Some(&edited));
+    changes.settings_as_built(&built, &changed);
+    assert_eq!(
+        changes.warnings,
+        ["/world: fps: changed setting applies only after a restart"]
+    );
+    // Saved back as built: the world has that value already
+    world.write("/world\n\tfps = 10\n");
+    let back = world.parse();
+    let mut changes = diff(&changed, &back, Some(&edited));
+    assert_eq!(
+        changes.restart_settings,
+        [("/world".to_owned(), "fps".to_owned())]
+    );
+    changes.settings_as_built(&built, &back);
+    assert!(changes.warnings.is_empty(), "{:?}", changes.warnings);
+    assert!(changes.restart_settings.is_empty());
+}
+
+#[test]
+fn world_and_client_settings_apply_after_a_restart() {
+    let before = "/world\n\tfps = 10\n\tname = \"a\"\n/client\n\tcontrol_freak = 0\n\tdir = 1\n";
+    let after = "/world\n\tfps = 20\n\tname = \"b\"\n\ticon_size = 64\n/client\n\tcontrol_freak = 1\n\tdir = 4\n";
+    let changes = changes("world-settings", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(
+        changes.builtin_defaults.is_empty(),
+        "{:?}",
+        changes.builtin_defaults
+    );
+    let mut warned: Vec<&str> = changes
+        .warnings
+        .iter()
+        .filter(|w| w.ends_with("changed setting applies only after a restart"))
+        .map(|w| w.as_str())
+        .collect();
+    warned.sort();
+    assert_eq!(
+        warned,
+        [
+            "/client: control_freak: changed setting applies only after a restart",
+            "/client: dir: changed setting applies only after a restart",
+            "/world: fps: changed setting applies only after a restart",
+            "/world: icon_size: changed setting applies only after a restart",
+            "/world: name: changed setting applies only after a restart",
+        ]
+    );
+}
+
+#[test]
+fn built_ins_a_sound_keeps_in_its_var_table_are_var_defaults() {
+    let before = "/sound/s\n\tvolume = 50\n/sound/s/sub\n/obj/o\n\tbounds = \"1,1 to 16,16\"\n/client\n\tfps = 20\n";
+    let after = "/sound/s\n\tvolume = 60\n\trepeat = 1\n/sound/s/sub\n/sound/n\n\tchannel = 3\n/obj/o\n\tbounds = \"1,1 to 8,8\"\n/client\n\tfps = 40\n";
+    let changes = changes("sound-defaults", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let mut defaults: Vec<(String, Vec<String>)> = changes
+        .var_defaults
+        .iter()
+        .map(|d| {
+            let mut types = d.types.clone();
+            types.sort();
+            (d.var.clone(), types)
+        })
+        .collect();
+    defaults.sort();
+    let types = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        defaults,
+        [
+            ("channel".to_owned(), types(&["/sound/n"])),
+            ("repeat".to_owned(), types(&["/sound/s", "/sound/s/sub"])),
+            ("volume".to_owned(), types(&["/sound/s", "/sound/s/sub"])),
+        ]
+    );
+    let mut builtins: Vec<&str> = changes
+        .builtin_defaults
+        .iter()
+        .map(|d| d.var.as_str())
+        .collect();
+    builtins.sort();
+    assert_eq!(builtins, ["bounds", "fps"]);
+    assert_eq!(changes.new_types.len(), 1);
+    assert!(
+        changes.new_types[0]
+            .fields
+            .iter()
+            .all(|(f, _)| f != "channel"),
+        "{:?}",
+        changes.new_types
+    );
+}
+
+#[test]
+fn a_parent_change_comes_with_its_subtree() {
+    let before = "/datum/a\n\tvar/x = 1\n/datum/a/proc/f()\n\treturn 1\n/datum/b\n\tvar/x = 2\n/datum/b/proc/f()\n\treturn 2\n/datum/t\n\tparent_type = /datum/a\n\tvar/own = 1\n\tx = 3\n/datum/t/f()\n\treturn ..()\n/datum/t/s\n\town = 2\n/obj/a\n\tname = \"ay\"\n/obj/b\n/obj/t\n\tparent_type = /obj/a\n\ticon_state = \"t\"\n";
+    let after = before
+        .replace("parent_type = /datum/a", "parent_type = /datum/b")
+        .replace("parent_type = /obj/a", "parent_type = /obj/b");
+    let changes = changes("reparent", before, &after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let shown: Vec<(
+        String,
+        String,
+        Vec<(String, Vec<String>, Vec<String>, Vec<String>, ConstValue)>,
+    )> = changes
+        .reparented
+        .iter()
+        .map(|r| {
+            (
+                r.type_path.clone(),
+                r.parent.clone(),
+                r.types
+                    .iter()
+                    .map(|t| {
+                        (
+                            t.path.clone(),
+                            t.declares.clone(),
+                            t.sets.clone(),
+                            t.builtins.clone(),
+                            t.name.clone(),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        vec![
+            (
+                "/datum/t".to_owned(),
+                "/datum/b".to_owned(),
+                vec![
+                    (
+                        "/datum/t".to_owned(),
+                        s(&["own"]),
+                        s(&["x"]),
+                        s(&[]),
+                        ConstValue::String("t".to_owned())
+                    ),
+                    (
+                        "/datum/t/s".to_owned(),
+                        s(&[]),
+                        s(&["own"]),
+                        s(&[]),
+                        ConstValue::String("s".to_owned())
+                    ),
+                ]
+            ),
+            (
+                "/obj/t".to_owned(),
+                "/obj/b".to_owned(),
+                // No ancestor supplies the name; derive it from the path.
+                vec![(
+                    "/obj/t".to_owned(),
+                    s(&[]),
+                    s(&[]),
+                    s(&["icon_state"]),
+                    ConstValue::String("t".to_owned())
+                )]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn parent_changes_a_reload_refuses() {
+    let base = "/datum/a\n\tvar/x = 1\n/datum/a/proc/f()\n\treturn 1\n/datum/b\n/datum/t\n\tparent_type = /datum/a\n\tx = 2\n/datum/u\n\tparent_type = /datum/a\n\tvar/y = 1\n/datum/u/proc/g()\n\treturn 1\n/datum/b/var/y = 2\n/datum/b/proc/g()\n\treturn 2\n/obj/o\n\tparent_type = /obj\n";
+    let cases = [
+        // overrides a var the new ancestors don't declare
+        (
+            "undeclared",
+            base.replace(
+                "/datum/t\n\tparent_type = /datum/a",
+                "/datum/t\n\tparent_type = /datum/b",
+            ),
+            "undefined var 'x'",
+        ),
+        // declares what the new ancestors declare
+        (
+            "duplicate",
+            base.replace(
+                "/datum/u\n\tparent_type = /datum/a",
+                "/datum/u\n\tparent_type = /datum/b",
+            ),
+            "declares var y",
+        ),
+        // an obj can't become a datum
+        (
+            "kind",
+            base.replace(
+                "/obj/o\n\tparent_type = /obj",
+                "/obj/o\n\tparent_type = /datum/b",
+            ),
+            "would be a /datum instead of a /obj",
+        ),
+    ];
+    for (name, after, why) in cases.iter() {
+        let refused = refusal(name, base, after);
+        assert!(
+            refused.contains(*why),
+            "{}: expected {:?} in {:?}",
+            name,
+            why,
+            refused
+        );
+    }
+}
+
+/// The skin is the last `.dmf` included, `#if` respected, from the `.dme`'s directory.
+#[test]
+fn the_skin_is_the_last_interface_file_included() {
+    let world = World::new("skin", "/proc/a()\n\treturn 1\n");
+    assert_eq!(world.parse().skin(), None);
+    std::fs::create_dir_all(world.dir.join("ui")).unwrap();
+    for name in ["a.dmf", "b.dmf", "c.dmf"] {
+        std::fs::write(world.dir.join("ui").join(name), "window \"w\"\n").unwrap();
+    }
+    std::fs::write(
+        world.dir.join("world.dme"),
+        "#include \"ui\\a.dmf\"\n#include \"code/code.dm\"\n#include \"ui/b.dmf\"\n#if 0\n#include \"ui/c.dmf\"\n#endif\n",
+    )
+    .unwrap();
+    let snapshot = world.parse();
+    assert_eq!(snapshot.skin(), Some(std::path::Path::new("ui/b.dmf")));
+    assert!(!snapshot
+        .files()
+        .iter()
+        .any(|file| file.extension() == Some("dmf".as_ref())));
+}
+
+#[test]
+fn a_resource_file_names_the_code_and_defaults_that_use_it() {
+    let world = World::new(
+        "resource-users",
+        "obj/lamp\n\
+         \ticon = 'icons/lamp.dmi'\n\
+         obj/lamp/red\n\
+         obj/lamp/blue\n\
+         \ticon = 'other.dmi'\n\
+         datum/holder\n\
+         \tvar/sound_file = 'beep.ogg'\n\
+         \tvar/list/files = list('icons/lamp.dmi')\n\
+         datum/holder/sub\n\
+         /proc/states()\n\
+         \treturn icon_states('icons/lamp.dmi')\n\
+         /proc/play()\n\
+         \tworld << sound('beep.ogg')\n\
+         /proc/unrelated()\n\
+         \treturn 1\n",
+    );
+    let snapshot = world.parse();
+
+    // Names match as DreamMaker resolves them, in any case
+    let lamp = snapshot.resource_users(&["icons\\LAMP.dmi".to_owned()]);
+    assert!(lamp.refused.is_empty(), "{:?}", lamp.refused);
+    assert_eq!(reloaded(&lamp), vec![key("/states", 0)]);
+    assert_eq!(
+        lamp.builtin_defaults.len(),
+        1,
+        "{:?}",
+        lamp.builtin_defaults
+    );
+    assert_eq!(lamp.builtin_defaults[0].var, "icon");
+    assert_eq!(
+        lamp.builtin_defaults[0].value,
+        ConstValue::Resource("icons/lamp.dmi".to_owned())
+    );
+    let mut types = lamp.builtin_defaults[0].types.clone();
+    types.sort();
+    assert_eq!(types, vec!["/obj/lamp", "/obj/lamp/red"]);
+    let mut inits: Vec<&str> = lamp
+        .init_procs
+        .iter()
+        .map(|i| i.type_path.as_str())
+        .collect();
+    inits.sort();
+    assert_eq!(inits, vec!["/datum/holder", "/datum/holder/sub"]);
+    assert!(lamp.init_procs.iter().all(|i| i.code.is_some()));
+
+    let beep = snapshot.resource_users(&["beep.ogg".to_owned()]);
+    assert_eq!(reloaded(&beep), vec![key("/play", 0)]);
+    assert_eq!(beep.var_defaults.len(), 1, "{:?}", beep.var_defaults);
+    assert_eq!(beep.var_defaults[0].var, "sound_file");
+    assert!(beep.builtin_defaults.is_empty() && beep.init_procs.is_empty());
+
+    assert!(snapshot
+        .resource_users(&["missing.dmi".to_owned()])
+        .is_empty());
+}
+
+#[test]
+fn the_client_script_is_left_to_the_launcher() {
+    for (before, after) in [
+        (
+            "/client/script = \"<style>a {}</style>\"\n",
+            "/client/script = \"<style>b {}</style>\"\n",
+        ),
+        (
+            "/client/script = \"<style>a {}</style>\"\n",
+            "/client/script = 'a.css'\n",
+        ),
+        ("/client/script = 'a.css'\n", "/client\n"),
+    ] {
+        let changes = changes("client-script", before, after);
+        assert!(
+            changes.is_empty() && changes.warnings.is_empty(),
+            "{:?} -> {:?}: {:?}",
+            before,
+            after,
+            changes
+        );
+    }
+
+    let world = World::new(
+        "client-script-value",
+        "/client/script = {\"<style>\n.a {}\n</style>\"}\n",
+    );
+    assert_eq!(
+        world.parse().client_script(),
+        Ok(Some(ClientScript::Text(
+            "<style>\n.a {}\n</style>".to_owned()
+        )))
+    );
+    world.write("/client/script = 'style.css'\n");
+    assert_eq!(
+        world.parse().client_script(),
+        Ok(Some(ClientScript::File("style.css".to_owned())))
+    );
+    world.write("/client/script = null\n");
+    assert_eq!(world.parse().client_script(), Ok(None));
+    world.write("var/x = 1\n/client/script = \"<style>[x] {}</style>\"\n");
+    assert!(world.parse().client_script().is_err());
+}
+
+#[test]
+fn a_declaration_moved_up_to_a_parent_is_taken() {
+    let before = "/datum/hud\n/datum/hud/human\n\tvar/tmp/list/sue = list()\n/datum/hud/robot\n\tvar/list/sue = list(1)\n/datum/open\n/datum/open/river/proc/upd()\n\treturn 1\n";
+    let after = "/datum/hud\n\tvar/list/sue = null\n/datum/hud/human\n/datum/hud/robot\n\tsue = list(1)\n/datum/open/proc/upd()\n\treturn 0\n/datum/open/river/upd()\n\treturn ..() + 1\n";
+    let changes = changes("moved-up", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    // The parent's declaration is new; the subtypes keep theirs
+    assert_eq!(changes.new_vars.len(), 1, "{:?}", changes.new_vars);
+    assert_eq!(changes.new_vars[0].type_path, "/datum/hud");
+    let mut moved_from = changes.new_vars[0].moved_from.clone();
+    moved_from.sort();
+    assert_eq!(moved_from, ["/datum/hud/human", "/datum/hud/robot"]);
+    // The retained tmp var takes the ancestor's new declaration flags.
+    let redeclared: Vec<&str> = changes
+        .redeclared
+        .iter()
+        .map(|r| r.type_path.as_str())
+        .collect();
+    assert_eq!(redeclared, ["/datum/hud/human"]);
+    assert!(
+        changes
+            .warnings
+            .iter()
+            .all(|w| !w.contains("removed from source")),
+        "{:?}",
+        changes.warnings
+    );
+    // The river's proc overrides the new one
+    assert_eq!(changes.new_procs.len(), 1);
+    assert_eq!(changes.new_procs[0].type_path, "/datum/open");
+    assert!(changes
+        .reloads
+        .iter()
+        .any(|r| r.proc.path == "/datum/open/river/upd"));
+
+    // Static slots cannot be retained separately from the ancestor's.
+    let refused = refusal(
+        "moved-up-static",
+        "/datum/a\n/datum/a/b\n\tvar/static/s = 1\n",
+        "/datum/a\n\tvar/static/s = 1\n/datum/a/b\n",
+    );
+    assert!(refused.contains("as a static or const var"), "{}", refused);
+    // A formerly static var can move when the new declaration is nonstatic.
+    let unstatic = changes_of(
+        "moved-up-unstatic",
+        "/datum/a\n/datum/a/b\n\tvar/static/s = 1\n",
+        "/datum/a\n\tvar/s = 1\n/datum/a/b\n",
+    );
+    assert!(unstatic.refused.is_empty(), "{:?}", unstatic.refused);
+    assert_eq!(unstatic.redeclared.len(), 1, "{:?}", unstatic.redeclared);
+    assert_eq!(
+        (
+            unstatic.redeclared[0].type_path.as_str(),
+            unstatic.redeclared[0].flags
+        ),
+        ("/datum/a/b", 0)
+    );
+    // Moving a proc declaration must not change it into a verb.
+    let refused = refusal(
+        "moved-up-verb",
+        "/mob/a\n/mob/a/b/proc/v()\n\treturn 1\n",
+        "/mob/a/verb/v()\n\treturn 0\n/mob/a/b/v()\n\treturn 1\n",
+    );
+    assert!(refused.contains("proc declaration kind"), "{}", refused);
+}
+
+#[test]
+fn a_moved_up_proc_that_names_itself_is_compiled_again() {
+    // `__PROC__` names an override without `/proc`
+    let before = "/datum/a\n/datum/a/b/proc/f()\n\treturn __PROC__\n";
+    let after = "/datum/a/proc/f()\n\treturn 0\n/datum/a/b/f()\n\treturn __PROC__\n";
+    let changes = changes("moved-up-proc-name", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(changes.moved_procs, ["/datum/a/b/f"]);
+    let reload = changes
+        .reloads
+        .iter()
+        .find(|r| r.proc.path == "/datum/a/b/f")
+        .expect("moved proc was not recompiled");
+    assert!(
+        format!("{:?}", reload.nodes).contains("/datum/a/b/f\""),
+        "{:?}",
+        reload.nodes
+    );
+}
+
+/// Assignments in a global init proc, in order, with source lines.
+fn global_init_sets(changes: &Changes) -> Vec<String> {
+    let init = changes.global_init.as_ref().expect("no global init proc");
+    let mut line = 0;
+    let mut sets = vec![];
+    for node in &init.code.nodes {
+        match node {
+            Node::Instruction(Instruction::DbgLine(at), ()) => line = *at,
+            Node::Instruction(Instruction::SetVar(dmasm::Variable::Global(var)), ()) => {
+                sets.push(format!(
+                    "{}:{} @{line}",
+                    var.scope.as_deref().unwrap_or("?"),
+                    String::from_utf8_lossy(&var.name.0)
+                ))
+            }
+            _ => {}
+        }
+    }
+    sets
+}
+
+/// Omitting initializers must preserve the count of var-table assignments.
+#[test]
+fn global_init_without_some_vars() {
+    let before = "var/a = 5\nvar/b = a * 2\n/proc/f()\n\tvar/static/y = rand(1, 2)\n\treturn y\nvar/c = b + 1\n";
+    let changes = changes_of(
+        "global_init_without",
+        before,
+        &before.replace("var/a = 5", "var/a = 7"),
+    );
+    let mut changes = changes;
+    let init = changes.global_init.take().unwrap();
+    assert_eq!(init.table, 1);
+    changes.global_init = Some(init.without(|var| var.name.0 == b"y" || var.name.0 == b"a"));
+    assert_eq!(global_init_sets(&changes), [":b @2", ":c @6"]);
+    assert_eq!(changes.global_init.as_ref().unwrap().table, 0);
+}
+
+/// Count same-named proc statics to resolve runtime slots from their code.
+#[test]
+fn global_init_counts_a_procs_statics_of_a_name() {
+    let before = "/proc/f()\n\tif (prob(50))\n\t\tvar/static/z = rand(1, 2)\n\t\treturn z\n\telse\n\t\tvar/static/z = rand(3, 4)\n\t\treturn z\n\
+                  /proc/g()\n\tvar/static/y = rand(1, 2)\n\tvar/static/w = 1\n\treturn y + w\n";
+    let changes = changes_of(
+        "global_init_counts",
+        before,
+        &before.replace("rand(1, 2)", "rand(5, 6)"),
+    );
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let counts = &changes.global_init.as_ref().unwrap().proc_statics;
+    assert_eq!(
+        format!("{:?}", counts),
+        r#"{"/proc/f": {"z": 2}, "/proc/g": {"y": 1}}"#
+    );
+}
+
+#[test]
+fn changed_initializers_give_a_rebuilds_global_init_proc() {
+    let before = "var/a = 5\nvar/b = a * 2\n/datum/thing\n/datum/s\n\tvar/static/x = list(1)\n\
+                  var/datum/thing/t = new(1)\n/proc/f()\n\tvar/static/y = rand(1, 2)\n\treturn y\n";
+    let changes = changes_of(
+        "global_init_constant",
+        before,
+        &before.replace("var/a = 5", "var/a = 7"),
+    );
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(
+        global_init_sets(&changes),
+        [
+            ":a @1",
+            ":b @2",
+            "/datum/s:x @5",
+            ":t @6",
+            "proc:/proc/f#0:y @8"
+        ]
+    );
+    // (and the running world keeps its value)
+    assert!(changes
+        .warnings
+        .iter()
+        .any(|w| w.ends_with("a: changed global initializer applies only after a restart")));
+
+    let changes = changes_of(
+        "global_init_new",
+        before,
+        &before.replace("new(1)", "new(2)"),
+    );
+    assert_eq!(
+        global_init_sets(&changes),
+        [":b @2", "/datum/s:x @5", ":t @6", "proc:/proc/f#0:y @8"]
+    );
+    let nodes = &changes.global_init.as_ref().unwrap().code.nodes;
+    let made: Vec<_> = nodes
+        .windows(2)
+        .filter(|pair| matches!(pair[1], Node::Instruction(Instruction::New(_), ())))
+        .map(|pair| &pair[0])
+        .collect();
+    assert_eq!(made, [&Node::Instruction(Instruction::PushInt(2), ())]);
+
+    // A new one among the others, a static of a proc, one now constant
+    let changes = changes_of(
+        "global_init_added",
+        before,
+        &before
+            .replace("var/b = a * 2\n", "var/b = a * 2\nvar/c = b + 1\n")
+            .replace("rand(1, 2)", "rand(3, 4)")
+            .replace("list(1)", "3"),
+    );
+    assert_eq!(
+        global_init_sets(&changes),
+        [
+            "/datum/s:x @6",
+            ":b @2",
+            ":c @3",
+            ":t @7",
+            "proc:/proc/f#0:y @9"
+        ]
+    );
+
+    // A computed initializer that was constant is null until it's worked out
+    let changes = changes_of(
+        "global_init_now_computed",
+        before,
+        &before.replace("var/a = 5", "var/a = rand(5)"),
+    );
+    assert_eq!(
+        global_init_sets(&changes),
+        [
+            ":a @1",
+            ":a @1",
+            ":b @2",
+            "/datum/s:x @5",
+            ":t @6",
+            "proc:/proc/f#0:y @8"
+        ]
+    );
+    assert!(matches!(
+        changes.global_init.as_ref().unwrap().code.nodes[2],
+        Node::Instruction(Instruction::GetVar(dmasm::Variable::Null), ())
+    ));
+
+    // Nothing to give when no initializer changed
+    let changes = changes_of(
+        "global_init_unchanged",
+        before,
+        &before.replace("\treturn y\n", "\treturn y + 1\n"),
+    );
+    assert!(changes.global_init.is_none());
+}
+
+/// Failed initializer compilation warns and retains the build's init proc.
+/// Includes within a file retain their declaration order.
+#[test]
+fn global_init_left_out_with_a_warning() {
+    let changes = changes(
+        "global_init_uncompiled",
+        "var/a = 5\nvar/b = a\n",
+        "var/a = 5\nvar/b = locate()\n",
+    );
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(changes.global_init.is_none());
+    assert!(
+        changes.warnings.iter().any(|w| w
+            .starts_with("(global init): (global): b: initializer compilation failed")
+            && w.ends_with("reboot will use the build's global and static initializers")),
+        "{:?}",
+        changes.warnings
+    );
+
+    // A file included partway through another: its declarations come there
+    let world = World::new(
+        "global_init_after_include",
+        "var/a = 5\n#include \"more.dm\"\nvar/b = a + 1\n",
+    );
+    std::fs::write(world.dir.join("code/more.dm"), "var/c = a + 2\n").unwrap();
+    let old = world.parse();
+    world.write("var/a = 6\n#include \"more.dm\"\nvar/b = a + 1\n");
+    let changes = diff(&old, &world.parse(), None);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert_eq!(global_init_sets(&changes), [":a @1", ":c @1", ":b @3"]);
+}
+
+/// Global initializers follow include order rather than file-name order.
+#[test]
+fn global_init_in_the_order_files_are_included() {
+    let world = World::new("global_init_two_files", "var/a = 5\nvar/b = c + 1\n");
+    std::fs::write(world.dir.join("code/zz.dm"), "var/c = rand(1, 2)\n").unwrap();
+    std::fs::write(world.dir.join("code/aa.dm"), "var/d = b + c\n").unwrap();
+    std::fs::write(
+        world.dir.join("world.dme"),
+        "#include \"code/zz.dm\"\n#include \"code/code.dm\"\n#include \"code/aa.dm\"\n",
+    )
+    .unwrap();
+    let old = world.parse();
+    world.write("var/a = 6\nvar/b = c + 1\n");
+    let changes = diff(&old, &world.parse(), None);
+    assert_eq!(
+        global_init_sets(&changes),
+        [":a @1", ":c @1", ":b @2", ":d @1"]
+    );
+    assert_eq!(changes.global_init.as_ref().unwrap().table, 1);
+}
+
+/// Ordering rules checked against DreamMaker: declaration order, subtype
+/// entry points, grouped proc statics, overrides, leading `/var/name`
+/// globals and deferred references to declarations not yet visited.
+#[test]
+fn global_init_in_dreammakers_order() {
+    let cases = [
+        (
+            "var/a0 = list(0)\n/proc/f()\n\tvar/static/pf = list(1)\nvar/a1 = list(1)\n/proc/g()\n\tvar/static/pg = list(1)\nvar/a2 = list(1)\n",
+            "a0 pf pg a1 a2",
+        ),
+        (
+            "/datum/x\n\tvar/static/s = list(5)\nvar/a0 = list(0)\n/datum/y/proc/g()\n\tvar/static/p1 = list(1)\nvar/a1 = list(1)\n",
+            "s p1 a0 a1",
+        ),
+        (
+            "/datum/y\n/obj/o\n/datum/x\n\tvar/static/s0 = list(0)\n\tvar/static/s1 = new /datum/y\n\tvar/static/s2 = new /obj/o\n\tvar/static/s3 = new /datum\n\tvar/static/s4 = new /datum/x\n\tvar/static/s5 = new /datum/x/k\n\tvar/static/s6 = list(/datum/y)\n/datum/x/k\nvar/a0 = new /datum/x\nvar/a1 = new /datum\n",
+            "s0 s1 s6 a0 a1 s2 s3 s4 s5",
+        ),
+        (
+            "/datum/x\n\tvar/static/s0 = list(0)\n/datum/x/proc/f()\n\tvar/static/p0 = new /datum/x\n\tvar/static/p1 = new /datum\n\tvar/static/p2 = list(9)\n/datum/z\n\tvar/static/z0 = list(1)\nvar/a0 = list(0)\n",
+            "s0 p2 z0 a0 p0 p1",
+        ),
+        (
+            "var/a0 = list(0)\nvar/a1 = f()\n/datum/x\n\tvar/static/s1 = f()\n\tvar/static/s2 = new /datum\n\tvar/static/s3 = list(3)\n/proc/g()\n\tvar/static/p1 = f()\n\tvar/static/p2 = new /datum\nvar/a2 = new /datum\n/proc/f()\n\treturn 1\nvar/a3 = list(3)\n",
+            "a0 s3 p2 a2 a3 a1 s1 s2 p1",
+        ),
+        (
+            r#"/proc/first()
+var/g0 = list(0)
+var/regex/g1 = regex("a")
+var/list/g2 = list(2)
+var/datum/g3 = list(3)
+var/datum/later/g4 = list(4)
+var/icon/g5 = icon('a.dmi')
+var/g6 = list(6)
+var/obj/g7 = list(7)
+var/g8 = 'a.dmi'
+var/sound/g9 = list(9)
+/proc/f()
+	var/static/regex/s1 = regex("a")
+	var/static/s2 = regex("a")
+	var/static/datum/s3 = list(3)
+/datum/later
+var/datum/later/h4 = list(4)
+var/datum/h3 = list(3)
+"#,
+            "s2 g0 g2 g6 h4 h3 s1 s3 g1 g3 g4 g5 g7 g9",
+        ),
+        (
+            "var/a = list(1)\n/proc/f()\n\tvar/static/s = list(0)\n/var/b = list(2)\nvar/c = list(3)\n/datum/x\n\tvar/static/xs = list(9)\n/var/global/d = list(4)\nvar/global/e = list(5)\n/var/f2 = list(6)\n",
+            "b d f2 a s c xs e",
+        ),
+        (
+            "/datum/s/proc/first()\n/datum/s\n\tvar/static/c = list(1)\n/datum/s/proc/fire()\n\tvar/static/h = list(2)\n",
+            "h c",
+        ),
+        (
+            "/datum/s\n\tvar/static/c = list(1)\n/datum/s/New()\n\tvar/static/n = list(3)\n/datum/s\n\tvar/static/d = list(4)\n/datum/s/proc/late()\n\tvar/static/l = list(5)\n/datum/s\n\tvar/static/e = list(6)\n",
+            "c n d l e",
+        ),
+        (
+            "/datum/b\n/obj/o\n/datum/a\n\tvar/static/s1 = list(/obj/o)\n\tvar/static/s2 = list(/datum/b)\n\tvar/static/s3 = list(/datum/c)\n\tvar/static/s4 = new /obj/o\n\tvar/static/s5 = new /datum/b\n\tvar/static/list/obj/s6 = list(1)\n\tvar/static/list/datum/b/s7 = list(2)\n\tvar/static/list/datum/c/s8 = list(3)\n\tvar/static/obj/s9 = list(4)\n/datum/c\n",
+            "s2 s5 s7 s1 s3 s4 s6 s8 s9",
+        ),
+    ];
+    for (n, (source, order)) in cases.iter().enumerate() {
+        let world = World::new(&format!("global_init_order_{n}"), source);
+        let nodes = world.parse().global_init_proc().unwrap().code.nodes;
+        let set: Vec<String> = nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Instruction(Instruction::SetVar(dmasm::Variable::Global(var)), ()) => {
+                    Some(String::from_utf8_lossy(&var.name.0).into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            set.join(" "),
+            *order,
+            "unexpected initializer order for source:\n{source}"
+        );
+    }
+}
+
+/// Preserve the build's order and place additions after their preceding
+/// var in dmasm's order.
+#[test]
+fn global_init_in_the_builds_order() {
+    let before = "var/a = list(1)\nvar/b = list(2)\nvar/c = list(3)\n";
+    let changes = changes(
+        "global_init_built_order",
+        before,
+        "var/a = list(1)\nvar/x = list(9)\nvar/b = list(2)\nvar/c = list(3)\n",
+    );
+    let init = changes.global_init.as_ref().expect("no global init proc");
+    let order = |built: &[&str]| {
+        let nodes = init.in_built_order(|var, _| {
+            built
+                .iter()
+                .position(|name| name.as_bytes() == var.name.0.as_slice())
+        });
+        let mut sets = vec![];
+        for node in &nodes {
+            if let Node::Instruction(Instruction::SetVar(dmasm::Variable::Global(var)), ()) = node {
+                sets.push(String::from_utf8_lossy(&var.name.0).into_owned());
+            }
+        }
+        assert!(matches!(
+            nodes.last(),
+            Some(Node::Instruction(Instruction::End, ()))
+        ));
+        sets.join(" ")
+    };
+    assert_eq!(order(&["a", "b", "c"]), "a x b c");
+    // The build's order can differ from source order.
+    assert_eq!(order(&["c", "b", "a"]), "c b a x");
+    assert_eq!(order(&["b", "a", "c"]), "b a x c");
 }

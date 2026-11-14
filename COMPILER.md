@@ -117,6 +117,59 @@ Hexadecimal literals longer than eight digits and octal literals exceeding i32
 are rejected. DreamMaker's conversion is unusual (`0x100000000` becomes `2**60`)
 and is not implemented.
 
+## Debug lines
+
+Debug builds emit `DbgFile` and `DbgLine` records to match DreamMaker.
+Breakpoints use these records; a line without one moves to the next recorded
+line.
+
+- Statements record their lines, including uninitialized `var`, `var/const`
+  and `set`. `else`, `;`, empty macro expansions, comments and lines removed
+  by `#if` have no statement records.
+- Before the first statement, record the first nonempty line after the
+  header. This includes empty macro expansions, `;`, an opening body brace
+  and a multiline macro call's name. Empty bodies use the next nonempty
+  line, usually the next proc's header (`ProcValue::first_line`).
+- Parameter defaults record the header's line. A return type (`as num`) records
+  it once more after the defaults.
+- DreamMaker also records source lookahead before compiling the current
+  code. The parser supplies `ProcValue::next_lines`, `end_lines` and
+  `operator_lines` to reproduce these records:
+  - Initializers starting with interpolated text (`var/s = "[x]"`) record
+    the next nonempty line before the value, then the text's end line.
+    Directives and empty macros count; comments do not. `return "[x]"`
+    records that next line before its own. These records also appear at
+    switch-case entries and loop exits when the statement occurs there.
+  - The value var in `for (var/k, v in L)` records the body's first line,
+    then the loop's line again.
+  - Multiline named-argument calls and `if`/`while` conditions record their
+    closing parenthesis. Interpolated text records its end line. Binary
+    operators, `?` and dot follows on later lines record their lines; the
+    next term then records its own, even if unchanged. Expression statements
+    record such operator lines before the statement line.
+
+Debug-line compatibility measured on 2026-11-13 using the corpora above:
+
+| Codebase | Procs | Same, start | Same, first-line rules | Same, all rules |
+| --- | --- | --- | --- | --- |
+| cmss13 | 28,330 | 26,311 | 27,291 | 27,949 |
+| tgstation | 66,712 | 58,470 | 64,363 | 66,166 |
+| goonstation | 44,522 | 42,576 | 43,285 | 44,341 |
+| tgstation 515.1637 | 58,171 | 51,780 | 56,395 | 57,697 |
+| tgstation 515.1647 | 58,937 | 52,397 | 57,119 | 58,459 |
+| tgstation 516.1659 | 65,478 | 57,575 | 63,278 | 64,953 |
+
+Remaining differences:
+
+| Case | Procs (cmss13, tgstation, goonstation) | DreamMaker | dmasm |
+| --- | --- | --- | --- |
+| A proc defined by a macro (`GLOBAL_LIST_INIT`, goonstation's `HELP_MESSAGE_OVERRIDE`) | 188, 290, 25 | Uses lines past the macro's use | Uses the macro's line |
+| The last proc of an included file | 9, 39, 22 | Names the `.dme`'s `#include` line between its own, or (empty) the next file's first line | Names its own file |
+| Other code over several lines: statements a macro expands to (`LAZYADD`, `DB_VIEW`), conditions of several operators continued with `\`, list entries assigned over several lines, ternaries in text | 184, 217, 130 | Records further lines it has read on to, blank ones in a macro's expansion too | Records the lines above |
+
+These gaps can move breakpoints after reload. When DreamMaker records a
+lookahead line early, its bytecode can stop a statement sooner.
+
 ## Warnings
 
 `CompiledProc::warnings` reports intentional behavior differences and significant

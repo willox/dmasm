@@ -172,6 +172,107 @@ fn tan_folds_as_each_build_does() {
     assert_eq!(ret(B516_1688, "tan(1e10)"), "PushVal -5.671282");
 }
 
+/// Deferred constant colours retain folded alpha 0 for null or text alpha
+/// on 515.1637, rather than runtime rgb()'s omitted alpha.
+#[test]
+fn a_colour_left_to_run_keeps_a_null_alpha_as_0() {
+    let code = ret(B515_1637, "rgb(10, 20, 50, null, COLORSPACE_HSL)");
+    assert!(code.ends_with("PushInt 0\nPushInt 2\nRgbEx"), "{}", code);
+    let code = ret(B515_1637, "rgb(a, 20, 50, null, COLORSPACE_HSL)");
+    assert!(code.ends_with("GetVar null\nPushInt 2\nRgbEx"), "{}", code);
+    assert_eq!(
+        ret(B516_1688, "rgb(10, 20, 50, null, COLORSPACE_HSL)"),
+        "PushVal \"#996f6600\""
+    );
+}
+
+/// Numeric value pushed by `return EXPR` for this BYOND version.
+#[track_caller]
+fn pushed_number(byond: ByondVersion, expr: &str) -> f32 {
+    let ctx = dreammaker::Context::default();
+    byond.read_as(&ctx);
+    let code = format!("/proc/f(a)\n\treturn {expr}\n");
+    let pp = dreammaker::Preprocessor::from_buffer(&ctx, "test.dm".into(), code);
+    let mut parser = dreammaker::Parser::new(&ctx, pp);
+    parser.enable_procs();
+    let tree = parser.parse_object_tree();
+    let value = tree
+        .root()
+        .get()
+        .procs
+        .get("f")
+        .unwrap()
+        .value
+        .last()
+        .unwrap();
+    let source = ProcSource {
+        tree: &tree,
+        ty: tree.root(),
+        name: "f",
+        value,
+        file: "test.dm",
+        debug_info: false,
+        index: None,
+        byond,
+        file_names: None,
+    };
+    let compiled = compile_proc(&source).unwrap();
+    compiled
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            dmasm::Node::Instruction(dmasm::Instruction::PushVal(dmasm::Value::Number(n)), _) => {
+                Some(*n)
+            }
+            dmasm::Node::Instruction(dmasm::Instruction::PushInt(n), _) => Some(*n as f32),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{}: no number pushed", expr))
+}
+
+/// Match DreamMaker's NaN signs, including 516's negative-angle handling
+/// for sin/tan and sign clearing in 516 cos and 515 arccos.
+#[test]
+fn trig_of_an_infinity_or_a_nan_is_dreammakers_nan() {
+    let negative = |byond, expr: &str| {
+        let n = pushed_number(byond, expr);
+        assert!(n.is_nan(), "{}: unexpected folded result {}", expr, n);
+        n.is_sign_negative()
+    };
+    for byond in [B515_1637, B516_1688] {
+        assert!(negative(byond, "tan(1.#INF)"));
+        assert!(negative(byond, "sin(1.#INF)"));
+        assert!(negative(byond, "cos(-1.#INF)"));
+        assert!(negative(byond, "cos(1.#INF)"));
+        assert!(negative(byond, "tan(1.#INF - 1.#INF)"));
+    }
+    assert!(negative(B515_1637, "tan(-1.#INF)"));
+    assert!(!negative(B516_1688, "tan(-1.#INF)"));
+    assert!(negative(B515_1637, "sin(-1.#INF)"));
+    assert!(!negative(B516_1688, "sin(-1.#INF)"));
+    assert!(!negative(B516_1688, "cos(1.#INF - 1.#INF)"));
+    assert!(!negative(B515_1637, "arccos(1.#INF - 1.#INF)"));
+    assert!(negative(B516_1688, "arccos(1.#INF - 1.#INF)"));
+}
+
+/// abs() and clamp() preserve a NaN's sign when folding.
+#[test]
+fn abs_and_clamp_keep_a_nan() {
+    for byond in [B515_1637, B516_1688] {
+        for expr in ["abs(1.#INF - 1.#INF)", "clamp(1.#INF - 1.#INF, 0, 1)"] {
+            let n = pushed_number(byond, expr);
+            assert!(
+                n.is_nan() && n.is_sign_negative(),
+                "{}: unexpected folded result {}",
+                expr,
+                n
+            );
+        }
+        assert_eq!(pushed_number(byond, "clamp(5, 3, 1)"), 3.0);
+        assert_eq!(pushed_number(byond, "abs(-2.5)"), 2.5);
+    }
+}
+
 /// `\ref`, `\icon` and `\roman` belong to the next embedded value, wherever
 /// in the text they're written.
 #[test]

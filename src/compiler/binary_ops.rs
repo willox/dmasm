@@ -200,7 +200,7 @@ pub(super) fn emit(
             if compiler.proc.is_some() {
                 let mut i = 0;
                 while i + 1 < operands.len() {
-                    let Some(c) = super::fold::value(compiler, &operands[i]) else {
+                    let Some(c) = super::fold::choice(compiler, &operands[i]) else {
                         i += 1;
                         continue;
                     };

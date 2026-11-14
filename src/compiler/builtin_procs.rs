@@ -612,8 +612,8 @@ fn emit_rgb(
         return Ok(Some(EvalKind::Stack));
     }
     let [r, g, b, a, sp] = slots;
-    for e in [r, g, b] {
-        push_args(compiler, &[e.unwrap()])?;
+    for e in [&r, &g, &b] {
+        push_args(compiler, &[e.clone().unwrap()])?;
     }
     if sp.is_none() && space.is_none() {
         match a {
@@ -625,7 +625,20 @@ fn emit_rgb(
         }
         return Ok(Some(EvalKind::Stack));
     }
+    // Preserve folded alpha 0 for nonnumeric constants when deferring a colour
+    // to runtime to match 515.1637 rounding. Runtime rgb() would omit that alpha.
+    let folds_to_zero = |compiler: &Compiler<'_>, a: &Expression| {
+        let number =
+            |e: &Option<Expression>| e.as_ref().and_then(|e| super::fold::number(compiler, e));
+        [&r, &g, &b].iter().all(|e| number(e).is_some())
+            && (space.is_some() || number(&sp).is_some())
+            && matches!(
+                super::fold::value(compiler, a),
+                Some(super::fold::Constant::Null | super::fold::Constant::Text(_))
+            )
+    };
     match a {
+        Some(a) if folds_to_zero(compiler, &a) => compiler.emit_number(0.0),
         Some(a) => push_args(compiler, &[a])?,
         None => push_null(compiler),
     }

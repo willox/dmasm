@@ -12,6 +12,15 @@ pub(super) fn emit(
     lhs: Expression,
     rhs: Expression,
 ) -> Result<EvalKind, CompileError> {
+    // Resource discovery visits the condition and its selected operand.
+    if compiler.live_only {
+        if let Some(c) = super::fold::choice(compiler, &condition) {
+            let kind = compiler.emit_expr(condition)?;
+            compiler.emit_move_to_stack(kind)?;
+            let kind = compiler.emit_expr(if c.truthy() { lhs } else { rhs })?;
+            return compiler.emit_move_to_stack(kind);
+        }
+    }
     // Bring condition to stack
     let logic = super::fold::is_logic(&condition);
     let condition = compiler.emit_expr(condition)?;

@@ -113,6 +113,16 @@ pub(super) fn constant(c: &Compiler, expr: &Expression) -> Option<Constant> {
     value(c, expr).filter(|v| *v != Constant::New)
 }
 
+/// Constant value used to select the live operands of `&&`, `||` and `? :`,
+/// even during resource discovery with other folding disabled (`live_only`).
+pub(super) fn choice(c: &mut Compiler, expr: &Expression) -> Option<Constant> {
+    let no_fold = c.no_fold;
+    c.no_fold = no_fold && !c.live_only;
+    let found = value(c, expr);
+    c.no_fold = no_fold;
+    found
+}
+
 /// The value of a constant expression.
 pub(super) fn value(c: &Compiler, expr: &Expression) -> Option<Constant> {
     if c.no_fold {
@@ -262,7 +272,8 @@ fn math1(name: &str, x: f32, byond: crate::ByondVersion) -> Option<Option<f32>> 
         "trunc" => Some(d.trunc()),
         // (of an infinity it's 0)
         "fract" => Some(if d.is_infinite() { 0.0 } else { d.fract() }),
-        "abs" => Some(d.abs()),
+        // Preserve a NaN's sign.
+        "abs" => Some(if d < 0.0 { -d } else { d }),
         "sign" => Some(if d > 0.0 {
             1.0
         } else if d < 0.0 {
@@ -271,12 +282,25 @@ fn math1(name: &str, x: f32, byond: crate::ByondVersion) -> Option<Option<f32>> 
             0.0
         }),
         "sin" | "cos" => Some(super::versions::sin_cos(byond, name == "sin", d)),
-        // (of an infinity or a NaN it's NaN)
+        // Infinity produces the negative x86 NaN. In 516, tan() removes the
+        // angle's sign first, then restores it to the result, so tan(-1.#INF)
+        // is positive NaN. A NaN input remains NaN.
         "tan" => Some(if x.is_finite() {
             super::versions::tan(byond, x) as f64
+        } else if x.is_infinite() {
+            let nan = super::versions::DEFAULT_NAN;
+            if x < 0.0 && byond.at_least(super::versions::BYOND_516) {
+                -nan
+            } else {
+                nan
+            }
         } else {
-            f64::NAN
+            d
         }),
+        // A NaN stays as it is, except that 515 arccos() clears its sign.
+        // Not left to the host's functions: a 32-bit build's give another sign.
+        "arccos" if d.is_nan() && !byond.at_least(super::versions::BYOND_516) => Some(d.abs()),
+        "arcsin" | "arccos" | "arctan" if d.is_nan() => Some(d),
         "arcsin" => (!(d < -1.0 || d > 1.0)).then(|| degrees(d.asin())),
         "arccos" => (!(d < -1.0 || d > 1.0)).then(|| degrees(d.acos())),
         "arctan" => Some(degrees(d.atan())),
@@ -470,7 +494,15 @@ fn base_value(c: &Compiler, term: &Term) -> Option<Constant> {
             };
             // (bounds the wrong way round are swapped)
             let (x, a, b) = (n(&args[0])?, n(&args[1])?, n(&args[2])?);
-            Constant::Number(x.max(a.min(b)).min(a.max(b)))
+            let (low, high) = (a.min(b), a.max(b));
+            // NaN compares neither below nor above the bounds and remains unchanged.
+            Constant::Number(if x < low {
+                low
+            } else if x > high {
+                high
+            } else {
+                x
+            })
         }
         Term::Ident(name) => from_objtree(&super::procs::const_value(c, name.as_str())?)?,
         // (`::name` of a const, as the name alone)

@@ -485,14 +485,16 @@ fn a_constant_nan_test_is_its_result_on_builds_that_fold_it_cleanly() {
 
 #[test]
 fn a_parser_warning_does_not_refuse_an_expression() {
-    // Integer precision warnings must not reject otherwise valid debugger code.
+    // Integer precision warnings must not reject valid debugger expressions.
+    // Constant -2147483648 folds as it does in a proc.
     for (code, value) in [
         ("4294967295", 4294967295.0f32),
-        ("-2147483648", 2147483648.0),
+        ("-2147483648", -2147483648.0),
     ] {
         let code = instructions(code, &[]);
         assert!(
-            code.contains(&Instruction::PushVal(dmasm::Value::Number(value))),
+            code.contains(&Instruction::PushVal(dmasm::Value::Number(value)))
+                || code.contains(&Instruction::PushInt(value as i32)),
             "{:?}",
             code
         );
@@ -562,4 +564,86 @@ fn a_modified_type_is_refused_in_debugger_code() {
             "{code}: {error}"
         );
     }
+}
+
+#[test]
+fn pick_draws_as_a_procs_pick_does() {
+    // Match the proc compiler's RNG use for constant weights.
+    let code = instructions("pick(1, 2, x)", &["x"]);
+    assert!(
+        code.iter()
+            .any(|ins| matches!(ins, Instruction::PickSwitch(_))),
+        "{:?}",
+        code
+    );
+    let code = instructions("pick(prob(10); 1, 2)", &[]);
+    assert!(
+        code.iter()
+            .any(|ins| matches!(ins, Instruction::PickSwitch(_))),
+        "{:?}",
+        code
+    );
+    // Nonconstant weights use weighted draws.
+    let code = instructions("pick(x; 1, 2)", &["x"]);
+    assert!(
+        code.iter()
+            .any(|ins| matches!(ins, Instruction::PickProb(_))),
+        "{:?}",
+        code
+    );
+}
+
+#[test]
+fn a_unary_operator_applies_to_a_safe_chain_that_stops() {
+    // A null safe chain must still apply its trailing unary operator.
+    for (code, op) in [
+        ("!a?.f()", Instruction::Not),
+        ("-a?.f()", Instruction::UnaryNeg),
+        ("!a?.b", Instruction::Not),
+    ] {
+        let nodes = compile_expr(code, &["a"]).expect("expression compilation failed");
+        let target = nodes
+            .iter()
+            .find_map(|node| match node {
+                Node::Instruction(Instruction::SetCacheJmpIfNull(label), _) => Some(label.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{}: no null check in {:?}", code, nodes));
+        let at = |want: &dyn Fn(&Node) -> bool| nodes.iter().position(|node| want(node)).unwrap();
+        let landing = at(&|node| matches!(node, Node::Label(label) if *label == target));
+        let applied = at(&|node| matches!(node, Node::Instruction(ins, _) if *ins == op));
+        assert!(landing < applied, "{}: {:?}", code, nodes);
+    }
+}
+
+#[test]
+fn an_assignment_in_parentheses_is_a_methods_argument_not_a_name() {
+    // Parenthesized assignments are positional; unparenthesized ones name arguments.
+    let code = instructions("o.f((x = y), 5)", &["o", "x", "y"]);
+    assert!(code.contains(&Instruction::CallName(2)), "{:?}", code);
+    let code = instructions("o.f(x = y)", &["o", "x", "y"]);
+    assert!(code.contains(&Instruction::CallNameArgList), "{:?}", code);
+}
+
+#[test]
+fn an_expression_folds_constants_as_a_proc_does() {
+    // Constant folding must match compiled procs: `~-4` folds to 16777215
+    // but evaluates to 3 at runtime.
+    let code = instructions("~-4", &[]);
+    assert!(
+        code.contains(&Instruction::PushInt(16777215))
+            || code.contains(&Instruction::PushVal(dmasm::Value::Number(16777215.0))),
+        "{:?}",
+        code
+    );
+    // A constant `new T` condition selects a branch without constructing T.
+    let code = instructions("new /datum ? 1 : 2", &[]);
+    assert!(
+        !code.iter().any(|ins| matches!(ins, Instruction::New(_))),
+        "{:?}",
+        code
+    );
+    // Variable operands still run at runtime.
+    let code = instructions("~x", &["x"]);
+    assert!(code.contains(&Instruction::Bnot), "{:?}", code);
 }

@@ -14,10 +14,14 @@ pub(super) fn emit_proc_body(
     source: &ProcSource,
     code: &Block,
 ) -> Result<(), CompileError> {
-    // The line DreamMaker gives code that precedes the first statement
-    let first_line = code
-        .first()
-        .map(|stmt| stmt.location.line)
+    // DreamMaker's first debug line is the first nonempty line after the
+    // header, including an empty macro expansion or `;`. An empty body can
+    // use the next proc's header.
+    let first_statement = code.first().map(|stmt| stmt.location.line);
+    let first_line = source
+        .value
+        .first_line
+        .or(first_statement)
         .unwrap_or(source.value.location.line + 1);
 
     compiler.emit_ins(Instruction::DbgLine(first_line));
@@ -76,8 +80,21 @@ pub(super) fn emit_proc_body(
         compiler.emit_label(skip);
     }
 
+    // A return type (`as num`) records the header line again after parameter defaults.
+    let return_type = source
+        .ty
+        .get()
+        .procs
+        .get(source.name)
+        .and_then(|p| p.declaration.as_ref())
+        .is_some_and(|d| d.location == source.value.location && !d.return_type.is_empty());
+    if return_type {
+        compiler.emit_ins(Instruction::DbgLine(source.value.location.line));
+    }
+
     let has_defaults = source.value.parameters.iter().any(|p| p.default.is_some());
-    emit_block_inner(compiler, code, !has_defaults)
+    let skip_first_line = !has_defaults && !return_type && first_statement == Some(first_line);
+    emit_block_inner(compiler, code, skip_first_line)
 }
 
 fn emit_block(compiler: &mut Compiler, block: &Block) -> Result<(), CompileError> {
@@ -192,8 +209,40 @@ fn emit_block_inner(
             skip_next = false;
             continue;
         }
-        if !(skip_first_line && i == 0) {
-            compiler.emit_ins(Instruction::DbgLine(stmt.location.line));
+        let line = stmt.location.line;
+        compiler.read_to = None;
+        let next_line = {
+            let ctx = ctx(compiler);
+            let found = ctx
+                .next_lines
+                .binary_search_by_key(&stmt.location, |(at, _)| *at);
+            ctx.next_line = found.ok().map(|i| ctx.next_lines[i].1);
+            ctx.next_line
+        };
+        // DreamMaker records the lookahead line before `return "[x]"` itself.
+        match &stmt.elem {
+            // A multiline operator's line precedes the statement line
+            // (`f(a,\n\tb) + 1`).
+            Statement::Expr(expr)
+                if compiler.read_on_line(expr).is_some_and(|l| l > line)
+                    && matches!(
+                        expr,
+                        Expression::BinaryOp { .. } | Expression::TernaryOp { .. }
+                    ) => {}
+            Statement::Return(Some(value)) => match after_leading_text(value, next_line) {
+                Some(after) => {
+                    compiler.emit_ins(Instruction::DbgLine(after));
+                    compiler.emit_ins(Instruction::DbgLine(line));
+                    // Suppress the text's end-line record here.
+                    compiler.skip_compound = true;
+                }
+                None if !(skip_first_line && i == 0) => {
+                    compiler.emit_ins(Instruction::DbgLine(line))
+                }
+                None => {}
+            },
+            _ if !(skip_first_line && i == 0) => compiler.emit_ins(Instruction::DbgLine(line)),
+            _ => {}
         }
         if let Statement::Spawn { delay, block: body } = &stmt.elem {
             if body.is_empty() && i + 1 < block.len() {
@@ -226,6 +275,14 @@ fn emit_value(compiler: &mut Compiler, expr: &Expression) -> Result<(), CompileE
     let kind = compiler.emit_expr(expr.clone())?;
     compiler.emit_move_to_stack(kind)?;
     Ok(())
+}
+
+/// Multiline `if` and `while` conditions record their closing parenthesis.
+/// The next term then records its own line, even if unchanged.
+fn condition_end(compiler: &mut Compiler, condition: &Spanned<Expression>) {
+    if let Some(end) = super::line_at(ctx(compiler).end_lines, condition.location) {
+        compiler.read_on(end);
+    }
 }
 
 fn emit_condition_jz(
@@ -396,6 +453,7 @@ fn emit_statement_inner(
                     compiler.emit_ins(Instruction::DbgLine(condition.location.line));
                 }
                 let next = compiler.new_label();
+                condition_end(compiler, condition);
                 emit_condition_jz(compiler, &condition.elem, &next)?;
                 emit_block(compiler, block)?;
                 let last = i + 1 == count && else_arm.is_none();
@@ -421,6 +479,7 @@ fn emit_statement_inner(
             compiler.emit_loop_label(head.clone());
             // A condition that's always true isn't tested
             if super::fold::value(compiler, &condition.elem).map_or(true, |c| !c.truthy()) {
+                condition_end(compiler, condition);
                 emit_condition_jz(compiler, &condition.elem, &end)?;
             }
             emit_loop_body(compiler, block, &head, &end)?;
@@ -635,9 +694,21 @@ fn emit_statement_inner(
             Ok(())
         }
 
-        Statement::Var(var) => emit_var_statement_then(compiler, var, false),
+        Statement::Var(var) => {
+            let next_line = ctx(compiler).next_line;
+            text_read_ahead(compiler, var, next_line);
+            emit_var_statement_then(compiler, var, false)
+        }
         Statement::Vars(vars) => {
-            for var in vars {
+            let next_line = ctx(compiler).next_line;
+            for (i, var) in vars.iter().enumerate() {
+                // The other declarations end at a comma on the same line.
+                let next = if i + 1 == vars.len() {
+                    next_line
+                } else {
+                    Some(line)
+                };
+                text_read_ahead(compiler, var, next);
                 emit_var_statement_then(compiler, var, false)?;
             }
             Ok(())
@@ -893,9 +964,20 @@ fn emit_statement_inner(
                     .declare_typed_local(kv.key.as_str(), var_type.type_path.to_string());
                 compiler.emit_ins(Instruction::PushVal(Value::Null));
                 compiler.emit_ins(Instruction::SetVar(Variable::Local(k)));
+                // The value var is declared after reading into the loop body:
+                // record that line, then the loop's line again.
+                let body_line = kv
+                    .block
+                    .first()
+                    .map(|s| s.location.line)
+                    .or(ctx(compiler).next_line);
+                if let Some(body_line) = body_line {
+                    compiler.emit_ins(Instruction::DbgLine(body_line));
+                }
                 let v = ctx(compiler).declare_typed_local(kv.value.as_str(), String::new());
                 compiler.emit_ins(Instruction::PushVal(Value::Null));
                 compiler.emit_ins(Instruction::SetVar(Variable::Local(v)));
+                compiler.emit_ins(Instruction::DbgLine(line));
                 (Variable::Local(k), Variable::Local(v))
             } else {
                 let k = compiler.emit_find_var(kv.key.clone())?;
@@ -1046,8 +1128,46 @@ fn emit_for_init(compiler: &mut Compiler, init: &Statement, line: u32) -> Result
     }
 }
 
-/// A var statement, after which DreamMaker forgets a chain through fields if
-/// the value was `new` of the var's own type (`var/L[] = new()`).
+/// Compile a var statement. A `new` of the declared type (`var/L[] = new()`)
+/// invalidates field-chain caching.
+///
+/// For an initializer starting with interpolated text (`var/s = "[x]"`),
+/// record the lookahead line before the value. Its first compound term
+/// then records its own line; for text, this is the end line.
+fn text_read_ahead(compiler: &mut Compiler, var: &VarStatement, next_line: Option<u32>) {
+    if var.var_type.flags.is_static() || var.var_type.flags.is_const() {
+        return;
+    }
+    if let Some(after) = var
+        .value
+        .as_ref()
+        .and_then(|v| after_leading_text(v, next_line))
+    {
+        compiler.emit_ins(Instruction::DbgLine(after));
+        compiler.read_to = Some(after);
+        compiler.line_pending = true;
+    }
+}
+
+/// Lookahead line after initial interpolated text, or `next_line` when
+/// the text ends the expression.
+fn after_leading_text(expr: &Expression, next_line: Option<u32>) -> Option<u32> {
+    match expr {
+        Expression::Base { term, follow } => match (&term.elem, follow.first()) {
+            (Term::InterpString(..), Some(f)) => Some(f.location.line),
+            (Term::InterpString(..), None) => next_line,
+            _ => None,
+        },
+        Expression::BinaryOp { lhs, rhs, .. } => {
+            after_leading_text(lhs, Some(super::first_line(rhs)))
+        }
+        Expression::TernaryOp { cond, if_, .. } => {
+            after_leading_text(cond, Some(super::first_line(if_)))
+        }
+        Expression::AssignOp { .. } => None,
+    }
+}
+
 fn emit_var_statement_then(
     compiler: &mut Compiler,
     var: &VarStatement,
@@ -2138,6 +2258,23 @@ fn emit_expr_statement_inner(
             lhs,
             rhs,
         } => emit_input(compiler, lhs, rhs),
+
+        // `animate()` uses named-call argument rules (see `named_call_end`).
+        Expression::Base { term, follow }
+            if follow.is_empty()
+                && matches!(&term.elem, Term::Call(name, _) if name.as_str() == "animate") =>
+        {
+            if let Some(end) = compiler.named_call_end(expr) {
+                compiler.read_on(end);
+            }
+            let Term::Call(name, args) = &term.elem else {
+                unreachable!()
+            };
+            if !super::builtin_procs::emit_statement_builtin(compiler, name.as_str(), args)? {
+                emit_value(compiler, expr)?;
+            }
+            Ok(())
+        }
 
         Expression::Base { term, follow }
             if follow.is_empty()
