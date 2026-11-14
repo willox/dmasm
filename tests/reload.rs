@@ -2196,3 +2196,25 @@ fn parent_changes_a_reload_refuses() {
         );
     }
 }
+
+/// The skin is the last `.dmf` included, `#if` respected, from the `.dme`'s directory.
+#[test]
+fn the_skin_is_the_last_interface_file_included() {
+    let world = World::new("skin", "/proc/a()\n\treturn 1\n");
+    assert_eq!(world.parse().skin(), None);
+    std::fs::create_dir_all(world.dir.join("ui")).unwrap();
+    for name in ["a.dmf", "b.dmf", "c.dmf"] {
+        std::fs::write(world.dir.join("ui").join(name), "window \"w\"\n").unwrap();
+    }
+    std::fs::write(
+        world.dir.join("world.dme"),
+        "#include \"ui\\a.dmf\"\n#include \"code/code.dm\"\n#include \"ui/b.dmf\"\n#if 0\n#include \"ui/c.dmf\"\n#endif\n",
+    )
+    .unwrap();
+    let snapshot = world.parse();
+    assert_eq!(snapshot.skin(), Some(std::path::Path::new("ui/b.dmf")));
+    assert!(!snapshot
+        .files()
+        .iter()
+        .any(|file| file.extension() == Some("dmf".as_ref())));
+}

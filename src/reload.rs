@@ -522,6 +522,8 @@ pub struct Snapshot {
     folded: std::collections::BTreeSet<dreammaker::Location>,
     /// Files reparsed successfully by `keep`; their original parse errors no longer apply.
     mended: HashSet<FileId>,
+    /// Last `.dmf` included by the preprocessor: the world's skin.
+    skin: Option<PathBuf>,
 }
 
 /// Incremental changes from reparsing one file (see `Snapshot::reload_file`).
@@ -570,10 +572,15 @@ impl Snapshot {
             parser.enable_procs();
             parser.parse_object_tree()
         };
+        let skin = pp.skins().last().cloned();
         let defines = pp.finalize();
         let mut snapshot = Self::from_tree(ctx, tree);
         snapshot.defines = Some(defines);
         snapshot.root = dme.parent().map(Path::to_owned);
+        snapshot.skin = skin.map(|skin| match &snapshot.root {
+            Some(root) => skin.strip_prefix(root).map(Path::to_owned).unwrap_or(skin),
+            None => skin,
+        });
         if let Some(root) = &snapshot.root {
             let mut scope_names = HashMap::new();
             snapshot.ctx.files().for_each(|path| {
@@ -875,6 +882,7 @@ impl Snapshot {
             default_lines: std::sync::Mutex::new(HashMap::new()),
             folded: Default::default(),
             mended: Default::default(),
+            skin: None,
         }
     }
 
@@ -969,6 +977,11 @@ impl Snapshot {
             }
         });
         files
+    }
+
+    /// Last `.dmf` included by the `.dme`, relative to the `.dme` directory.
+    pub fn skin(&self) -> Option<&Path> {
+        self.skin.as_deref()
     }
 
     /// Every proc with code.
