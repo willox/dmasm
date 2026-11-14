@@ -1943,3 +1943,33 @@ fn a_new_type_doesnt_keep_the_init_proc_its_parent_loses() {
     );
     assert!(fresh.init_procs.is_empty(), "{:?}", fresh.init_procs);
 }
+
+#[test]
+fn a_built_in_a_type_stops_setting_comes_from_its_parent() {
+    let before = "/mob/m\n\tlayer = 7\n\tsee_in_dark = 3\n/mob/m/sub\n/mob/m/own\n\tlayer = 2\n";
+    let after = "/mob/m\n/mob/m/sub\n/mob/m/own\n\tlayer = 2\n";
+    let changes = changes("builtin-inherited", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(
+        changes.builtin_defaults.is_empty(),
+        "{:?}",
+        changes.builtin_defaults
+    );
+    let mut inherited: Vec<(String, Vec<String>)> = changes
+        .builtin_inherited
+        .iter()
+        .map(|i| (i.var.clone(), i.types.clone()))
+        .collect();
+    inherited.sort();
+    let types = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        inherited,
+        [
+            ("layer".to_owned(), types(&["/mob/m", "/mob/m/sub"])),
+            (
+                "see_in_dark".to_owned(),
+                types(&["/mob/m", "/mob/m/own", "/mob/m/sub"])
+            ),
+        ]
+    );
+}

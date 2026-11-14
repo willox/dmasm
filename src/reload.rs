@@ -309,6 +309,16 @@ pub struct VarDefault {
     pub types: Vec<String>,
 }
 
+/// Built-in override removed from a type. Copy the running parent's value
+/// to the type and inheriting subtypes to preserve BYOND's built-in defaults.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BuiltinInherited {
+    pub var: String,
+    /// Parents first
+    pub types: Vec<String>,
+}
+
 /// A proc whose code is unchanged but has moved to other lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -391,6 +401,8 @@ pub struct Changes {
     pub var_defaults: Vec<VarDefault>,
     /// Built-in defaults stored in type records rather than variable tables.
     pub builtin_defaults: Vec<VarDefault>,
+    /// Built-in defaults restored from runtime parents after `builtin_defaults`.
+    pub builtin_inherited: Vec<BuiltinInherited>,
     /// Changed constants; dependent procs are included in `reloads`.
     pub consts: Vec<String>,
     /// Changed defaults embedded by `/type::var`; recompile dependent procs.
@@ -431,6 +443,7 @@ impl Changes {
             && self.redeclared.is_empty()
             && self.var_defaults.is_empty()
             && self.builtin_defaults.is_empty()
+            && self.builtin_inherited.is_empty()
             && self.init_procs.is_empty()
             && self.line_moves.is_empty()
             && self.refused.is_empty()
@@ -3170,6 +3183,24 @@ fn var_default(
         changes.defaults_changed.push(name.to_owned());
     }
 
+    // Inherit from the running parent: SpacemanDMM lacks some built-in
+    // defaults, including mob density, layer and see_in_dark.
+    if builtin
+        && !is_new
+        && !sets_own_builtin(n, name)
+        && BUILTIN_VARS.contains(&name)
+        && !matches!(name, "name" | "text")
+    {
+        changes.warnings.push(format!(
+            "{shown}: {name}: built-in default applies only to new instances"
+        ));
+        changes.builtin_inherited.push(BuiltinInherited {
+            var: name.to_owned(),
+            types: inheriting(new, n, name),
+        });
+        return;
+    }
+
     // Existing instances have already run their computed initializers.
     let Some(Some(value)) = default_value(n, name) else {
         if !is_new && !builtin {
@@ -3230,6 +3261,39 @@ fn var_default(
         value,
         types,
     });
+}
+
+/// Whether the source sets this built-in directly on the type.
+fn sets_own_builtin(t: TypeRef, name: &str) -> bool {
+    t.get()
+        .vars
+        .get(name)
+        .is_some_and(|v| v.value.location.file != FileId::BUILTINS)
+}
+
+/// `n` and subtypes inheriting `name` from it, in parent-first order.
+fn inheriting(new: &Snapshot, n: TypeRef, name: &str) -> Vec<String> {
+    let mut types = vec![];
+    for ty in new.tree.iter_types() {
+        let mut at = ty;
+        let mut depth = 0;
+        loop {
+            if at.index() == n.index() {
+                types.push((depth, ty.get().path.clone()));
+                break;
+            }
+            if at.get().vars.contains_key(name) {
+                break;
+            }
+            depth += 1;
+            match at.parent_type() {
+                Some(parent) => at = parent,
+                None => break,
+            }
+        }
+    }
+    types.sort();
+    types.into_iter().map(|(_, path)| path).collect()
 }
 
 /// Update name/text defaults on `n` and inheriting types. Without an
