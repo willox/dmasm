@@ -132,25 +132,43 @@ line.
   line, usually the next proc's header (`ProcValue::first_line`).
 - Parameter defaults record the header's line. A return type (`as num`) records
   it once more after the defaults.
+- DreamMaker also records source lookahead before compiling the current
+  code. The parser supplies `ProcValue::next_lines`, `end_lines` and
+  `operator_lines` to reproduce these records:
+  - Initializers starting with interpolated text (`var/s = "[x]"`) record
+    the next nonempty line before the value, then the text's end line.
+    Directives and empty macros count; comments do not. `return "[x]"`
+    records that next line before its own. These records also appear at
+    switch-case entries and loop exits when the statement occurs there.
+  - The value var in `for (var/k, v in L)` records the body's first line,
+    then the loop's line again.
+  - Multiline named-argument calls and `if`/`while` conditions record their
+    closing parenthesis. Interpolated text records its end line. Binary
+    operators, `?` and dot follows on later lines record their lines; the
+    next term then records its own, even if unchanged. Expression statements
+    record such operator lines before the statement line.
 
-Debug-line compatibility measured on 2026-11-13 using the corpora above: cmss13 27,291 of 28,330 procs identical, tgstation 64,363 of 66,712,
-goonstation 43,285 of 44,522, and the older tgstations 56,395 of 58,171
-(515.1637), 57,119 of 58,937 (515.1647) and 63,278 of 65,478 (516.1659). Without
-the first-line and return-type rules, the counts were 26,311, 58,470, 42,576,
-51,780, 52,397 and 57,575.
+Debug-line compatibility measured on 2026-11-13 using the corpora above:
 
-Remaining gaps are source lookahead lines recorded before their statements:
+| Codebase | Procs | Same, start | Same, first-line rules | Same, all rules |
+| --- | --- | --- | --- | --- |
+| cmss13 | 28,330 | 26,311 | 27,291 | 27,949 |
+| tgstation | 66,712 | 58,470 | 64,363 | 66,166 |
+| goonstation | 44,522 | 42,576 | 43,285 | 44,341 |
+| tgstation 515.1637 | 58,171 | 51,780 | 56,395 | 57,697 |
+| tgstation 515.1647 | 58,937 | 52,397 | 57,119 | 58,459 |
+| tgstation 516.1659 | 65,478 | 57,575 | 63,278 | 64,953 |
 
-| Case | DreamMaker | dmasm |
-| --- | --- | --- |
-| A statement containing an embedded expression in text, `"[x]"` | Records the following line, then its own again, before its code | Records its own line |
-| A switch case | Begins with the line that follows the case's block (the next `if`, the `else` or the statement after the switch), then the case's own lines | Records the case's own lines |
-| A loop's exit; the value of `for (var/k, v in L)` | Records the line after the loop or the loop body's first line | Records no line there |
-| An expression spanning several lines | Records where named arguments or a text block end | Records the lines of compound terms |
-| A proc defined by a macro (`GLOBAL_LIST_INIT`) | Uses lines beyond the macro's | Uses the macro's line |
+Remaining differences:
 
-For these cases, a breakpoint can stop a statement earlier in DreamMaker's
-code than after reload.
+| Case | Procs (cmss13, tgstation, goonstation) | DreamMaker | dmasm |
+| --- | --- | --- | --- |
+| A proc defined by a macro (`GLOBAL_LIST_INIT`, goonstation's `HELP_MESSAGE_OVERRIDE`) | 188, 290, 25 | Uses lines past the macro's use | Uses the macro's line |
+| The last proc of an included file | 9, 39, 22 | Names the `.dme`'s `#include` line between its own, or (empty) the next file's first line | Names its own file |
+| Other code over several lines: statements a macro expands to (`LAZYADD`, `DB_VIEW`), conditions of several operators continued with `\`, list entries assigned over several lines, ternaries in text | 184, 217, 130 | Records further lines it has read on to, blank ones in a macro's expansion too | Records the lines above |
+
+These gaps can move breakpoints after reload. When DreamMaker records a
+lookahead line early, its bytecode can stop a statement sooner.
 
 ## Warnings
 
