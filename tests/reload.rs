@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use dmasm::reload::{
     diff, Changes, ClientScript, ConstValue, InList, NewVar, ParseOptions, ProcKey, ProcSettings,
-    Refusal, Snapshot,
+    Refusal, Snapshot, Until,
 };
 use dmasm::{Instruction, Node};
 
@@ -812,14 +812,13 @@ fn var_defaults_go_to_the_subtypes_that_inherit_them() {
 }
 
 #[test]
-fn global_var_values_are_left_with_a_warning() {
+fn global_var_values_are_left_for_a_reboot() {
     let changes = changes("globals", "var/g = 1\n", "var/g = 2\n");
     assert!(changes.refused.is_empty(), "{:?}", changes.refused);
     assert!(changes.var_defaults.is_empty());
-    assert!(
-        changes.warnings.join("").contains("after a restart"),
-        "{:?}",
-        changes.warnings
+    assert_eq!(
+        deferred(&changes),
+        ["(global): g: changed initializer (reboot)"]
     );
 }
 
@@ -1439,6 +1438,12 @@ fn one_file_parsed_again_on_its_own() {
             again.replace("\treturn 4", "\tset waitfor = FALSE\n\treturn 4"),
             "`set`s",
         ),
+        // Static initializers require the full diff.
+        (
+            "static",
+            again.replace("\treturn 4", "\tvar/static/s = 1\n\treturn 4"),
+            "static initializers",
+        ),
     ] {
         world.write(&code);
         match old.reload_file(&world.dir, file) {
@@ -1937,6 +1942,7 @@ fn a_var_declared_twice_on_one_type_is_refused_where_it_is() {
             why: "duplicate definition (/datum declares it too)".to_owned(),
             file: Some("code/code.dm".to_owned()),
             line: Some(4),
+            until: Until::Rebuild,
         }]
     );
 }
@@ -2066,8 +2072,8 @@ fn a_setting_back_as_built_waits_for_nothing() {
     let mut changes = diff(&built, &changed, Some(&edited));
     changes.settings_as_built(&built, &changed);
     assert_eq!(
-        changes.warnings,
-        ["/world: fps: changed setting applies only after a restart"]
+        deferred(&changes),
+        ["/world: fps: changed setting (rebuild)"]
     );
     // Saved back as built: the world has that value already
     world.write("/world\n\tfps = 10\n");
@@ -2078,8 +2084,25 @@ fn a_setting_back_as_built_waits_for_nothing() {
         [("/world".to_owned(), "fps".to_owned())]
     );
     changes.settings_as_built(&built, &back);
-    assert!(changes.warnings.is_empty(), "{:?}", changes.warnings);
+    assert!(changes.deferred.is_empty(), "{:?}", changes.deferred);
     assert!(changes.restart_settings.is_empty());
+}
+
+/// The deferred changes, as `path: name: why (until)`
+fn deferred(changes: &Changes) -> Vec<String> {
+    let mut shown: Vec<String> = changes
+        .deferred
+        .iter()
+        .map(|d| {
+            let until = match d.until {
+                Until::Reboot => "reboot",
+                Until::Rebuild => "rebuild",
+            };
+            format!("{d:#} ({until})")
+        })
+        .collect();
+    shown.sort();
+    shown
 }
 
 #[test]
@@ -2093,22 +2116,30 @@ fn world_and_client_settings_apply_after_a_restart() {
         "{:?}",
         changes.builtin_defaults
     );
-    let mut warned: Vec<&str> = changes
-        .warnings
-        .iter()
-        .filter(|w| w.ends_with("changed setting applies only after a restart"))
-        .map(|w| w.as_str())
-        .collect();
-    warned.sort();
+    // An added setting replaces BYOND's built-in default.
     assert_eq!(
-        warned,
+        deferred(&changes),
         [
-            "/client: control_freak: changed setting applies only after a restart",
-            "/client: dir: changed setting applies only after a restart",
-            "/world: fps: changed setting applies only after a restart",
-            "/world: icon_size: changed setting applies only after a restart",
-            "/world: name: changed setting applies only after a restart",
+            "/client: control_freak: changed setting (rebuild)",
+            "/client: dir: changed setting (rebuild)",
+            "/world: fps: changed setting (rebuild)",
+            "/world: icon_size: changed setting (rebuild)",
+            "/world: name: changed setting (rebuild)",
         ]
+    );
+    let fps = changes
+        .deferred
+        .iter()
+        .find(|d| d.name.as_deref() == Some("fps"))
+        .unwrap();
+    assert_eq!(
+        (fps.file.as_deref(), fps.line),
+        (Some("code/code.dm"), Some(2))
+    );
+    assert!(
+        !changes.warnings.iter().any(|w| w.contains("setting")),
+        "{:?}",
+        changes.warnings
     );
 }
 
@@ -2561,11 +2592,11 @@ fn changed_initializers_give_a_rebuilds_global_init_proc() {
             "proc:/proc/f#0:y @8"
         ]
     );
-    // (and the running world keeps its value)
-    assert!(changes
-        .warnings
-        .iter()
-        .any(|w| w.ends_with("a: changed global initializer applies only after a restart")));
+    // The running world keeps its value; a reboot runs the new initializer
+    assert_eq!(
+        deferred(&changes),
+        ["(global): a: changed initializer (reboot)"]
+    );
 
     let changes = changes_of(
         "global_init_new",
@@ -2652,6 +2683,10 @@ fn global_init_left_out_with_a_warning() {
             && w.ends_with("reboot will use the build's global and static initializers")),
         "{:?}",
         changes.warnings
+    );
+    assert_eq!(
+        deferred(&changes),
+        ["(global): b: changed initializer (rebuild)"]
     );
 
     // A file included partway through another: its declarations come there
@@ -2806,4 +2841,35 @@ fn global_init_in_the_builds_order() {
     // The build's order can differ from source order.
     assert_eq!(order(&["c", "b", "a"]), "c b a x");
     assert_eq!(order(&["b", "a", "c"]), "b a x c");
+}
+
+#[test]
+fn changed_initializers_are_deferred_to_a_reboot() {
+    let before = "var/a = 1\nvar/b = list()\n/datum/s\n\tvar/static/x = 2\n\tvar/y = 3\n\
+                  /proc/f()\n\tvar/static/z = 4\n\treturn z\n";
+    let after = "\nvar/a = 5\nvar/b = list(1)\nvar/c = 6\n/datum/s\n\tvar/static/x = 7\n\
+                 \tvar/static/y = 3\n/proc/f()\n\tvar/static/z = 8\n\treturn z\n";
+    let changes = changes("deferred-initializers", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    assert!(changes.global_init.is_some());
+    assert_eq!(
+        deferred(&changes),
+        [
+            "(global): a: changed initializer (reboot)",
+            "(global): b: changed initializer (reboot)",
+            "/datum/s: x: changed initializer (reboot)",
+            "/proc/f: z: changed initializer (reboot)",
+        ]
+    );
+    let lines: Vec<(String, Option<u32>)> = changes
+        .deferred
+        .iter()
+        .map(|d| (d.name.clone().unwrap(), d.line))
+        .collect();
+    assert!(lines.contains(&("a".to_owned(), Some(2))), "{:?}", lines);
+    assert!(lines.contains(&("z".to_owned(), Some(9))), "{:?}", lines);
+
+    // Moved down with nothing else changed: nothing to defer
+    let changes = changes_of("deferred-moved", before, &format!("\n\n{}", before));
+    assert!(changes.deferred.is_empty(), "{:?}", changes.deferred);
 }
