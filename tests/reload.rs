@@ -1983,6 +1983,32 @@ fn a_built_in_a_type_stops_setting_comes_from_its_parent() {
 }
 
 #[test]
+fn a_built_in_a_built_in_type_stops_setting_needs_a_rebuild() {
+    // The running parent lacks the mob's original built-in layer.
+    let own = changes(
+        "builtin-inherited-builtin-type",
+        "/mob\n\tlayer = 9\n/mob/m\n",
+        "/mob\n/mob/m\n",
+    );
+    assert_eq!(
+        own.refused,
+        ["/mob: layer: cannot restore this built-in type's original default; rebuild required"]
+    );
+    assert!(
+        own.builtin_inherited.is_empty(),
+        "{:?}",
+        own.builtin_inherited
+    );
+    // Removing a sound var-table entry restores BYOND's default.
+    let table = changes(
+        "builtin-inherited-var-table",
+        "/sound\n\tpan = 10\n",
+        "/sound\n",
+    );
+    assert!(table.refused.is_empty(), "{:?}", table.refused);
+}
+
+#[test]
 fn a_setting_back_as_built_waits_for_nothing() {
     let world = World::new("settings-back", "/world\n\tfps = 10\n");
     let built = world.parse();

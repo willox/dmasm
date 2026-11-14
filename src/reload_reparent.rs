@@ -37,7 +37,7 @@ pub struct ReparentedType {
 
 /// Nearest built-in ancestor, including the type itself.
 /// Determines the runtime kind of its instances.
-fn builtin_base(t: TypeRef) -> Option<String> {
+pub(super) fn builtin_base(t: TypeRef) -> Option<String> {
     static BUILTIN_TYPES: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(|| {
         dreammaker::objtree::ObjectTree::with_builtins()
             .iter_types()

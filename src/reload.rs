@@ -3343,6 +3343,14 @@ fn var_default(
         && (in_var_table || BUILTIN_VARS.contains(&name))
         && !matches!(name, "name" | "text")
     {
+        // A built-in type's original default is unavailable after an override.
+        // Its parent's value can differ (mob layer 4, movable layer 3).
+        if !in_var_table && reparent::builtin_base(n).as_deref() == Some(n.get().path.as_str()) {
+            changes.refused.push(format!(
+                "{shown}: {name}: cannot restore this built-in type's original default; rebuild required"
+            ));
+            return;
+        }
         // Existing instances read the var table, as with ordinary vars.
         if !in_var_table {
             changes.warnings.push(format!(
