@@ -2029,3 +2029,46 @@ fn world_and_client_settings_apply_after_a_restart() {
         ]
     );
 }
+
+#[test]
+fn built_ins_a_sound_keeps_in_its_var_table_are_var_defaults() {
+    let before = "/sound/s\n\tvolume = 50\n/sound/s/sub\n/obj/o\n\tbounds = \"1,1 to 16,16\"\n/client\n\tfps = 20\n";
+    let after = "/sound/s\n\tvolume = 60\n\trepeat = 1\n/sound/s/sub\n/sound/n\n\tchannel = 3\n/obj/o\n\tbounds = \"1,1 to 8,8\"\n/client\n\tfps = 40\n";
+    let changes = changes("sound-defaults", before, after);
+    assert!(changes.refused.is_empty(), "{:?}", changes.refused);
+    let mut defaults: Vec<(String, Vec<String>)> = changes
+        .var_defaults
+        .iter()
+        .map(|d| {
+            let mut types = d.types.clone();
+            types.sort();
+            (d.var.clone(), types)
+        })
+        .collect();
+    defaults.sort();
+    let types = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        defaults,
+        [
+            ("channel".to_owned(), types(&["/sound/n"])),
+            ("repeat".to_owned(), types(&["/sound/s", "/sound/s/sub"])),
+            ("volume".to_owned(), types(&["/sound/s", "/sound/s/sub"])),
+        ]
+    );
+    let mut builtins: Vec<&str> = changes
+        .builtin_defaults
+        .iter()
+        .map(|d| d.var.as_str())
+        .collect();
+    builtins.sort();
+    assert_eq!(builtins, ["bounds", "fps"]);
+    assert_eq!(changes.new_types.len(), 1);
+    assert!(
+        changes.new_types[0]
+            .fields
+            .iter()
+            .all(|(f, _)| f != "channel"),
+        "{:?}",
+        changes.new_types
+    );
+}

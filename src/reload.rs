@@ -2418,6 +2418,9 @@ const BUILTIN_VARS: &[&str] = &[
     "animate_movement",
     "appearance_flags",
     // Listed
+    "icon_w",
+    "icon_z",
+    "bounds",
     "alpha",
     "blend_mode",
     "color",
@@ -2445,6 +2448,14 @@ const BUILTIN_VARS: &[&str] = &[
     "mouse_drop_pointer",
     "mouse_over_pointer",
     "override",
+    // Client values stored in the type's built-in list.
+    "fps",
+    "view",
+    "perspective",
+    "tick_lag",
+    "default_verb_category",
+    "edge_limit",
+    "mouse_pointer_icon",
     // A mob type's, in the mob table
     "key",
     "sight",
@@ -2466,7 +2477,10 @@ fn new_type(n: TypeRef, changes: &mut Changes) {
     let mut refused = false;
     for (name, var) in n.get().vars.iter() {
         let name = name.as_str();
-        if !is_builtin(n, name) || var.value.location.file == FileId::BUILTINS {
+        if !is_builtin(n, name)
+            || var.value.location.file == FileId::BUILTINS
+            || builtin_in_var_table(n, name)
+        {
             continue;
         }
         if name == "parent_type" {
@@ -2572,8 +2586,12 @@ fn compare_types(
         let declaration =
             |v: &dreammaker::objtree::TypeVar| v.declaration.as_ref().map(|d| d.var_type.clone());
         for (name, var) in nv.iter() {
-            // A new type's built-in vars are fields of its record
-            if o.is_none() && is_builtin(n, name.as_str()) {
+            // Most built-ins are type-record fields. Sound and similar types
+            // store theirs as defaults in the var table.
+            if o.is_none()
+                && is_builtin(n, name.as_str())
+                && !builtin_in_var_table(n, name.as_str())
+            {
                 continue;
             }
             match ov.get(name) {
@@ -3112,7 +3130,10 @@ fn var_default(
         return;
     };
     let flags = declaration.get().var_type.flags;
-    let builtin = declaration.get().location.file == FileId::BUILTINS;
+    // Built-ins stored in a var table, such as sound vars, use ordinary defaults.
+    let in_var_table = builtin_in_var_table(n, name);
+    let builtin = declaration.get().location.file == FileId::BUILTINS
+        && (!in_var_table || !sets_own_builtin(n, name));
     // A global const is set now (no code writes it), and the code it was
     // folded into compiled again
     if n.is_root() && flags.is_const() && !is_new {
@@ -3224,12 +3245,15 @@ fn var_default(
     if builtin
         && !is_new
         && !sets_own_builtin(n, name)
-        && BUILTIN_VARS.contains(&name)
+        && (in_var_table || BUILTIN_VARS.contains(&name))
         && !matches!(name, "name" | "text")
     {
-        changes.warnings.push(format!(
-            "{shown}: {name}: built-in default applies only to new instances"
-        ));
+        // Existing instances read the var table, as with ordinary vars.
+        if !in_var_table {
+            changes.warnings.push(format!(
+                "{shown}: {name}: built-in default applies only to new instances"
+            ));
+        }
         changes.builtin_inherited.push(BuiltinInherited {
             var: name.to_owned(),
             types: inheriting(new, n, name),
@@ -3326,6 +3350,18 @@ fn in_world_record(t: TypeRef, name: &str) -> bool {
         "/client" => CLIENT_SETTINGS.contains(&name),
         _ => false,
     }
+}
+
+/// Built-in types whose built-in vars use the var table rather than
+/// type-record fields.
+const VAR_TABLE_BUILTINS: &[&str] = &["/sound", "/particles", "/exception", "/regex", "/icon"];
+
+/// Whether a built-in var of `t` is kept in its var table.
+fn builtin_in_var_table(t: TypeRef, name: &str) -> bool {
+    t.get_var_declaration(name).is_some_and(|d| {
+        d.get().location.file == FileId::BUILTINS
+            && VAR_TABLE_BUILTINS.contains(&d.ty().get().path.as_str())
+    })
 }
 
 /// Whether the source sets this built-in directly on the type.
